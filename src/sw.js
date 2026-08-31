@@ -76,16 +76,7 @@ const PRECACHE_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then(async (cache) => {
-      // Precache critical shell files atomically
-      for (const asset of PRECACHE_ASSETS) {
-        try {
-          await cache.add(asset);
-        } catch (e) {
-          console.warn(`[sw] Precache item skipped: ${asset} (${e.message})`);
-        }
-      }
-    })
+    caches.open(SHELL_CACHE).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
 });
 

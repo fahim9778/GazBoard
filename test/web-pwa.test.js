@@ -7,6 +7,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const crypto = require('node:crypto');
+const vm = require('node:vm');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
@@ -155,7 +156,7 @@ async function runTests() {
     check('manifest validation failed', false, e.message);
   }
 
-  /* ---------------- 2. Service Worker & Precache Asset Verification ---------------- */
+  /* ---------------- 2. Service Worker & Atomic Precaching Verification ---------------- */
   try {
     const swPath = path.join(SRC, 'sw.js');
     check('sw.js exists', fs.existsSync(swPath));
@@ -166,6 +167,14 @@ async function runTests() {
       swContent.includes("addEventListener('activate'") &&
       swContent.includes("addEventListener('fetch'") &&
       swContent.includes("addEventListener('message'")
+    );
+
+    check('sw.js uses cache.addAll for atomic precaching',
+      swContent.includes('cache.addAll(PRECACHE_ASSETS)')
+    );
+
+    check('sw.js does not swallow precache errors with individual try-catch blocks',
+      !swContent.includes('Precache item skipped')
     );
 
     const match = /const PRECACHE_ASSETS = (\[[\s\S]*?\]);/.exec(swContent);
@@ -185,6 +194,92 @@ async function runTests() {
       }
       check(`all ${assets.length} precached assets exist in src/`, missingCount === 0);
     }
+
+    // Direct lifecycle execution test in VM sandbox
+    function simulateSwInstall(swScript, mockAddAll) {
+      let installHandler = null;
+      const fakeSelf = {
+        addEventListener: (type, fn) => {
+          if (type === 'install') installHandler = fn;
+        },
+        skipWaiting: () => {},
+        clients: { claim: async () => {} }
+      };
+      fakeSelf.self = fakeSelf;
+
+      let openedCache = null;
+      let cachedAssets = null;
+      const fakeCaches = {
+        open: async (name) => {
+          openedCache = name;
+          return {
+            addAll: async (assets) => {
+              cachedAssets = assets;
+              return mockAddAll(assets);
+            }
+          };
+        }
+      };
+
+      const context = vm.createContext({
+        self: fakeSelf,
+        caches: fakeCaches,
+        console: { log: () => {}, warn: () => {}, error: () => {} },
+        fetch: async () => {},
+        Response: class {},
+        URL: URL,
+        navigator: { onLine: true }
+      });
+
+      vm.runInContext(swScript, context);
+
+      if (!installHandler) {
+        throw new Error('Install event handler not found');
+      }
+
+      let waitPromise = null;
+      const event = {
+        waitUntil: (p) => {
+          waitPromise = p;
+        }
+      };
+
+      installHandler(event);
+      return { waitPromise, getOpenedCache: () => openedCache, getCachedAssets: () => cachedAssets };
+    }
+
+    // 2a. All precache assets succeed
+    const successSim = simulateSwInstall(swContent, async (assets) => undefined);
+    let successError = null;
+    try {
+      await successSim.waitPromise;
+    } catch (e) {
+      successError = e;
+    }
+    check('atomic install succeeds when all precache assets succeed',
+      successError === null &&
+      successSim.getOpenedCache().startsWith('gazboard-shell-v') &&
+      Array.isArray(successSim.getCachedAssets()) &&
+      successSim.getCachedAssets().length > 0
+    );
+
+    // 2b. At least one precache asset fails
+    const failError = new Error('Network error: 404 Not Found for precache asset');
+    const failureSim = simulateSwInstall(swContent, async () => {
+      throw failError;
+    });
+    let failureError = null;
+    try {
+      await failureSim.waitPromise;
+    } catch (e) {
+      failureError = e;
+    }
+    check('atomic install rejects when any precache asset fails', failureError === failError);
+
+    // 2c. Failure causes installation to reject rather than warn/continue
+    check('precache failure rejects install event waitUntil promise and prevents incomplete worker activation',
+      failureError !== null && failureError.message.includes('404 Not Found')
+    );
   } catch (e) {
     check('service worker validation failed', false, e.message);
   }
@@ -432,6 +527,7 @@ async function runTests() {
       check('dist-web/sw.js contains package.json version', distSwContent.includes(`const VERSION = ${JSON.stringify(PKG.version)};`));
       check('dist-web/sw.js defines versioned shell cache', distSwContent.includes('const SHELL_CACHE = `gazboard-shell-v${VERSION}`;'));
       check('dist-web/sw.js defines versioned runtime cache', distSwContent.includes('const RUNTIME_CACHE = `gazboard-runtime-v${VERSION}`;'));
+      check('dist-web/sw.js uses atomic cache.addAll precaching', distSwContent.includes('cache.addAll(PRECACHE_ASSETS)'));
 
       const distAdapterPath = path.join(DIST, 'js', 'platform', 'web-adapter.js');
       const distAdapterContent = await fsp.readFile(distAdapterPath, 'utf8');
