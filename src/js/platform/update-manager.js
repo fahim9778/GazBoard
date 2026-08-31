@@ -127,6 +127,30 @@ export async function applyUpdate() {
       worker.postMessage({ type: 'SKIP_WAITING' });
       return;
     }
+
+    if (reg?.installing) {
+      const installingWorker = reg.installing;
+      await new Promise((resolve) => {
+        installingWorker.addEventListener('statechange', () => {
+          if (installingWorker.state === 'installed') {
+            resolve();
+          }
+        });
+        setTimeout(resolve, 4000);
+      });
+      const targetWorker = reg.waiting || (installingWorker.state === 'installed' ? installingWorker : null);
+      if (targetWorker) {
+        let reloaded = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!reloaded) {
+            reloaded = true;
+            window.location.reload();
+          }
+        });
+        targetWorker.postMessage({ type: 'SKIP_WAITING' });
+        return;
+      }
+    }
   }
 
   // Fallback reload

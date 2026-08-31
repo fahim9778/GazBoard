@@ -50,6 +50,20 @@ const PRECACHE_ASSETS = [
   './vendor/mammoth.browser.min.js',
   './vendor/pdf.min.mjs',
   './vendor/pdf.worker.min.mjs',
+  './vendor/standard_fonts/FoxitDingbats.pfb',
+  './vendor/standard_fonts/FoxitFixed.pfb',
+  './vendor/standard_fonts/FoxitFixedBold.pfb',
+  './vendor/standard_fonts/FoxitFixedBoldItalic.pfb',
+  './vendor/standard_fonts/FoxitFixedItalic.pfb',
+  './vendor/standard_fonts/FoxitSerif.pfb',
+  './vendor/standard_fonts/FoxitSerifBold.pfb',
+  './vendor/standard_fonts/FoxitSerifBoldItalic.pfb',
+  './vendor/standard_fonts/FoxitSerifItalic.pfb',
+  './vendor/standard_fonts/FoxitSymbol.pfb',
+  './vendor/standard_fonts/LiberationSans-Bold.ttf',
+  './vendor/standard_fonts/LiberationSans-BoldItalic.ttf',
+  './vendor/standard_fonts/LiberationSans-Italic.ttf',
+  './vendor/standard_fonts/LiberationSans-Regular.ttf',
   './assets/icon.png',
   './assets/icon-192.png',
   './assets/icon-512.png',
@@ -112,21 +126,28 @@ self.addEventListener('fetch', (event) => {
   // Handle SPA Navigation requests
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
+      (async () => {
+        try {
+          // Attempt network with a 2500ms timeout so slow mobile connections don't hang
+          const netPromise = fetch(req);
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500));
+          const res = await Promise.race([netPromise, timeoutPromise]);
           if (res && res.status === 200) {
             const clone = res.clone();
-            caches.open(SHELL_CACHE).then((c) => c.put(req, clone));
+            caches.open(SHELL_CACHE).then((c) => c.put(req, clone)).catch(() => {});
+            return res;
           }
-          return res;
-        })
-        .catch(async () => {
-          const cached = await caches.match('./index.html') || await caches.match('./') || await caches.match(req);
-          if (cached) return cached;
-          return new Response('GazBoard is offline. Please open when connected or reload.', {
-            headers: { 'Content-Type': 'text/plain' }
-          });
-        })
+        } catch {}
+
+        // Immediate cache fallback for offline / timeout
+        const cached = await caches.match('./index.html', { ignoreSearch: true }) ||
+                       await caches.match('./', { ignoreSearch: true }) ||
+                       await caches.match(req, { ignoreSearch: true });
+        if (cached) return cached;
+        return new Response('GazBoard is offline. Please open when connected or reload.', {
+          headers: { 'Content-Type': 'text/plain' }
+        });
+      })()
     );
     return;
   }

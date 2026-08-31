@@ -54,13 +54,17 @@ export function openFileDialog(opts = {}) {
       finish(input.files);
     });
 
-    // Handle user cancellation
+    input.addEventListener('cancel', () => {
+      finish([]);
+    });
+
+    // Fallback for browsers that do not fire cancel
     window.addEventListener('focus', () => {
       setTimeout(() => {
         if (!resolved && (!input.files || input.files.length === 0)) {
           finish([]);
         }
-      }, 1000);
+      }, 1500);
     }, { once: true });
 
     document.body.appendChild(input);

@@ -191,17 +191,25 @@ export async function saveBoard(payload) {
   const db = await openDatabase();
 
   let id = payload.id;
-  let json = typeof payload.json === 'string' ? payload.json : JSON.stringify(payload);
   let doc = null;
-  try { doc = JSON.parse(json); id = id || doc.id; } catch {}
+  if (typeof payload === 'object' && !payload.json) {
+    doc = payload;
+    id = id || doc.id;
+  } else if (typeof payload.json === 'string') {
+    try { doc = JSON.parse(payload.json); id = id || doc.id; } catch {}
+  } else if (typeof payload === 'string') {
+    try { doc = JSON.parse(payload); id = id || doc.id; } catch {}
+  }
 
   if (!id) id = 'board-' + Date.now();
+  if (doc) doc.id = id;
   const name = doc?.name || payload.name || 'Untitled board';
   const modified = Date.now();
   const objects = Array.isArray(doc?.objects) ? doc.objects.length : 0;
   const thumb = doc?.thumb || payload.thumb || null;
 
-  const record = { id, name, modified, objects, thumb, json, doc };
+  // Storing doc directly eliminates 50% duplicate serialization overhead in IndexedDB
+  const record = { id, name, modified, objects, thumb, doc };
 
   return new Promise((resolve, reject) => {
     try {
@@ -213,7 +221,13 @@ export async function saveBoard(payload) {
       metaStore.put({ key: 'last-board', value: { id, at: modified } });
 
       tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error || new Error('Failed to save board'));
+      tx.onerror = () => {
+        const err = tx.error || new Error('Failed to save board');
+        if (err.name === 'QuotaExceededError') {
+          console.error('[storage] QuotaExceededError while saving board:', err);
+        }
+        reject(err);
+      };
     } catch (e) {
       reject(e);
     }

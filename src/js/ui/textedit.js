@@ -31,6 +31,15 @@ export class TextEditor {
     ta.value = cell ? (obj.cells?.[cell] || '') : (obj.text || '');
     this.el = ta;
     this.layer.appendChild(ta);
+    // On touch/mobile viewports, keep active edit target in comfortable visible area above software keyboard
+    const p = app.surface.cam.toScreen(obj.x + (obj.w || 200) / 2, obj.y + (obj.h || 100) / 2);
+    const vh = window.visualViewport ? window.visualViewport.height : (window.innerHeight || 768);
+    if (p.y > vh * 0.65 && ('ontouchstart' in window || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0))) {
+      app.surface.cam.panBy(0, -(p.y - vh * 0.38));
+      app.surface.clampCamera();
+      app.surface.invalidate();
+    }
+
     this.place();
 
     ta.addEventListener('input', () => { this.place(); app.surface.invalidate(); });

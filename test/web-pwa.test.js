@@ -29,6 +29,8 @@ function setupWebGlobals() {
   const metaMap = new Map();
   const assetMap = new Map();
 
+  global.HTMLElement = class HTMLElement {};
+
   global.window = {
     location: { href: 'http://localhost:8080/', protocol: 'http:', hostname: 'localhost' },
     matchMedia: () => ({ matches: false }),
@@ -36,17 +38,24 @@ function setupWebGlobals() {
     removeEventListener: () => {}
   };
 
+  class MockElement extends global.HTMLElement {
+    constructor(tag) {
+      super();
+      this.tagName = String(tag || 'div').toUpperCase();
+      this.style = {};
+    }
+    setAttribute() {}
+    getAttribute() { return null; }
+    appendChild() {}
+    removeChild() {}
+    remove() {}
+    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 100, top: 0, bottom: 100, left: 0, right: 100 }; }
+    click() {}
+    addEventListener() {}
+  }
+
   global.document = {
-    createElement: (tag) => ({
-      tagName: tag.toUpperCase(),
-      style: {},
-      setAttribute: () => {},
-      getAttribute: () => null,
-      appendChild: () => {},
-      removeChild: () => {},
-      click: () => {},
-      addEventListener: () => {}
-    }),
+    createElement: (tag) => new MockElement(tag),
     body: {
       appendChild: () => {},
       removeChild: () => {}
@@ -340,6 +349,65 @@ async function runTests() {
     check('adapter.info() returns web runtime info', info.platform === 'browser' && info.isWeb === true && info.version === '2.4.0');
   } catch (e) {
     check('web adapter contract parity failed', false, e.message);
+  }
+
+  /* ---------------- 8. Popover Event Listener Leak & Cleanup ---------------- */
+  try {
+    const { openPopover, closePopover } = await import('../src/js/ui/popover.js');
+    const listeners = [];
+    const origAdd = global.document.addEventListener;
+    const origRemove = global.document.removeEventListener;
+
+    global.document.addEventListener = (type, fn, capture) => {
+      listeners.push({ type, fn, capture });
+      if (origAdd) origAdd(type, fn, capture);
+    };
+    global.document.removeEventListener = (type, fn, capture) => {
+      const idx = listeners.findIndex((l) => l.type === type && l.fn === fn);
+      if (idx >= 0) listeners.splice(idx, 1);
+      if (origRemove) origRemove(type, fn, capture);
+    };
+
+    const content = global.document.createElement('div');
+    const anchor = { x: 100, y: 100 };
+    openPopover(anchor, content, { key: 'test-pop' });
+
+    // Simulate tick for setTimeout listener attachment
+    await new Promise((r) => setTimeout(r, 10));
+    check('openPopover adds pointerdown listener', listeners.some((l) => l.type === 'pointerdown'));
+
+    closePopover();
+    check('closePopover cleans up document pointerdown listener (no leak)', !listeners.some((l) => l.type === 'pointerdown'));
+
+    global.document.addEventListener = origAdd;
+    global.document.removeEventListener = origRemove;
+  } catch (e) {
+    check('popover listener cleanup test failed', false, e.message);
+  }
+
+  /* ---------------- 9. Standard Fonts Precache Verification ---------------- */
+  try {
+    const swPath = path.join(SRC, 'sw.js');
+    const swContent = await fsp.readFile(swPath, 'utf8');
+    const requiredFonts = [
+      'FoxitDingbats.pfb', 'FoxitFixed.pfb', 'FoxitFixedBold.pfb',
+      'FoxitFixedBoldItalic.pfb', 'FoxitFixedItalic.pfb', 'FoxitSerif.pfb',
+      'FoxitSerifBold.pfb', 'FoxitSerifBoldItalic.pfb', 'FoxitSerifItalic.pfb',
+      'FoxitSymbol.pfb', 'LiberationSans-Bold.ttf', 'LiberationSans-BoldItalic.ttf',
+      'LiberationSans-Italic.ttf', 'LiberationSans-Regular.ttf'
+    ];
+
+    let allFontsPresent = true;
+    for (const f of requiredFonts) {
+      if (!swContent.includes(f)) {
+        allFontsPresent = false;
+        break;
+      }
+    }
+    check('Service Worker precaches standard fonts for offline PDF rendering', allFontsPresent);
+    check('Service Worker handles ignoreSearch for resilient offline SPA navigation', swContent.includes('ignoreSearch: true'));
+  } catch (e) {
+    check('standard fonts precache test failed', false, e.message);
   }
 
   /* ---------------- Results Summary ---------------- */
