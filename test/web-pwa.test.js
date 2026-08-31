@@ -32,6 +32,145 @@ function setupWebGlobals() {
   const metaMap = new Map();
   const assetMap = new Map();
 
+  class MockIDBRequest {
+    constructor() {
+      this.result = undefined;
+      this.error = null;
+      this.onsuccess = null;
+      this.onerror = null;
+    }
+  }
+
+  class MockIDBTransaction {
+    constructor(db, storeNames, mode) {
+      this.db = db;
+      this.storeNames = Array.isArray(storeNames) ? storeNames : [storeNames];
+      this.mode = mode;
+      this.oncomplete = null;
+      this.onerror = null;
+      this.onabort = null;
+      this._pending = 0;
+    }
+
+    objectStore(name) {
+      return new MockIDBObjectStore(this, name);
+    }
+
+    _queue(fn) {
+      const req = new MockIDBRequest();
+      this._pending++;
+      queueMicrotask(() => {
+        try {
+          fn(req);
+          if (req.onsuccess) req.onsuccess({ target: req });
+        } catch (err) {
+          req.error = err;
+          if (req.onerror) req.onerror({ target: req });
+        } finally {
+          this._pending--;
+          if (this._pending === 0) {
+            queueMicrotask(() => {
+              if (this.oncomplete) this.oncomplete({ target: this });
+            });
+          }
+        }
+      });
+      return req;
+    }
+  }
+
+  class MockIDBObjectStore {
+    constructor(tx, name) {
+      this.tx = tx;
+      this.name = name;
+    }
+
+    get(key) {
+      return this.tx._queue((req) => {
+        const store = this.tx.db._getStore(this.name);
+        req.result = store.get(key);
+      });
+    }
+
+    getKey(key) {
+      return this.tx._queue((req) => {
+        const store = this.tx.db._getStore(this.name);
+        req.result = store.has(key) ? key : undefined;
+      });
+    }
+
+    put(value) {
+      return this.tx._queue((req) => {
+        const store = this.tx.db._getStore(this.name);
+        const key = value.id || value.key;
+        store.set(key, value);
+        req.result = key;
+      });
+    }
+
+    delete(key) {
+      return this.tx._queue((req) => {
+        const store = this.tx.db._getStore(this.name);
+        store.delete(key);
+        req.result = undefined;
+      });
+    }
+
+    getAll() {
+      return this.tx._queue((req) => {
+        const store = this.tx.db._getStore(this.name);
+        req.result = Array.from(store.values());
+      });
+    }
+
+    createIndex() {}
+  }
+
+  class MockIDBDatabase {
+    constructor() {
+      this.objectStoreNames = {
+        _stores: new Set(['boards', 'assets', 'meta']),
+        contains(name) { return this._stores.has(name); }
+      };
+      this.onversionchange = null;
+      this._storesData = {
+        boards: storeMap,
+        assets: assetMap,
+        meta: metaMap
+      };
+    }
+
+    _getStore(name) {
+      if (!this._storesData[name]) this._storesData[name] = new Map();
+      return this._storesData[name];
+    }
+
+    createObjectStore(name) {
+      this.objectStoreNames._stores.add(name);
+      return new MockIDBObjectStore(null, name);
+    }
+
+    transaction(storeNames, mode) {
+      return new MockIDBTransaction(this, storeNames, mode);
+    }
+
+    close() {}
+  }
+
+  const mockDbInstance = new MockIDBDatabase();
+
+  global.indexedDB = {
+    open: (name, version) => {
+      const req = new MockIDBRequest();
+      queueMicrotask(() => {
+        req.result = mockDbInstance;
+        if (req.onupgradeneeded) req.onupgradeneeded({ target: req });
+        if (req.onsuccess) req.onsuccess({ target: req });
+      });
+      return req;
+    }
+  };
+
   global.HTMLElement = class HTMLElement {};
 
   global.window = {
@@ -540,6 +679,93 @@ async function runTests() {
     }
   } catch (e) {
     check('build version derivation verification failed', false, e.message);
+  }
+
+  /* ---------------- 11. Storage & haveAssets() Promise Resolution Verification ---------------- */
+  try {
+    const storage = await import('../src/js/platform/web-storage.js');
+
+    // Bounded execution helper ensuring tests fail fast if a promise hangs
+    function withTimeout(promise, ms = 1000, desc = 'operation') {
+      let timer;
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${ms}ms waiting for ${desc}`)), ms);
+      });
+      return Promise.race([
+        promise.then((res) => { clearTimeout(timer); return res; }, (err) => { clearTimeout(timer); throw err; }),
+        timeoutPromise
+      ]);
+    }
+
+    // 11a. Regression test for reviewer's bug: invalid IDs must not cause haveAssets() to hang indefinitely
+    const singleInvalidRes = await withTimeout(storage.haveAssets(['invalid-asset-id']), 500, 'haveAssets single invalid ID');
+    check('haveAssets resolves promptly for invalid asset ID without hanging', singleInvalidRes && singleInvalidRes['invalid-asset-id'] === false);
+
+    const multiInvalidRes = await withTimeout(storage.haveAssets(['invalid-1', 'invalid-2', '']), 500, 'haveAssets multiple invalid IDs');
+    check('haveAssets resolves promptly for list of multiple invalid IDs',
+      multiInvalidRes &&
+      multiInvalidRes['invalid-1'] === false &&
+      multiInvalidRes['invalid-2'] === false &&
+      multiInvalidRes[''] === false
+    );
+
+    // 11b. Empty and non-array inputs
+    const emptyRes = await withTimeout(storage.haveAssets([]), 500, 'haveAssets empty array');
+    check('haveAssets settles for empty array input', typeof emptyRes === 'object' && Object.keys(emptyRes).length === 0);
+
+    const nullRes = await withTimeout(storage.haveAssets(null), 500, 'haveAssets null');
+    const undefinedRes = await withTimeout(storage.haveAssets(undefined), 500, 'haveAssets undefined');
+    check('haveAssets settles for non-array input (null/undefined)',
+      typeof nullRes === 'object' && Object.keys(nullRes).length === 0 &&
+      typeof undefinedRes === 'object' && Object.keys(undefinedRes).length === 0
+    );
+
+    // 11c. Put a real asset and verify haveAssets detects both existing and missing IDs
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+    const dataUrl = `data:image/png;base64,${pngBase64}`;
+    const putRes = await storage.putAsset(dataUrl);
+    check('storage.putAsset stores an asset and returns an ID', putRes && typeof putRes.id === 'string' && /^[0-9a-f]{64}\.png$/.test(putRes.id));
+
+    const existingId = putRes.id;
+    const missingId = '0000000000000000000000000000000000000000000000000000000000000000.png';
+
+    const existingRes = await withTimeout(storage.haveAssets([existingId]), 500, 'haveAssets existing ID');
+    check('haveAssets resolves true for existing asset ID', existingRes && existingRes[existingId] === true);
+
+    const missingRes = await withTimeout(storage.haveAssets([missingId]), 500, 'haveAssets missing ID');
+    check('haveAssets resolves false for missing valid asset ID', missingRes && missingRes[missingId] === false);
+
+    // 11d. Mixed input with existing, missing, invalid, and empty strings
+    const mixedInput = [existingId, 'invalid-id-123', missingId, '', 'another-bad-id'];
+    const mixedRes = await withTimeout(storage.haveAssets(mixedInput), 500, 'haveAssets mixed input');
+    check('haveAssets resolves correct mapping for mixed valid, missing, and invalid IDs',
+      mixedRes &&
+      mixedRes[existingId] === true &&
+      mixedRes['invalid-id-123'] === false &&
+      mixedRes[missingId] === false &&
+      mixedRes[''] === false &&
+      mixedRes['another-bad-id'] === false
+    );
+
+    // 11e. Duplicate IDs in input list
+    const duplicateRes = await withTimeout(storage.haveAssets([existingId, 'bad-id', existingId]), 500, 'haveAssets duplicates');
+    check('haveAssets resolves correctly when input list contains duplicate IDs',
+      duplicateRes &&
+      duplicateRes[existingId] === true &&
+      duplicateRes['bad-id'] === false
+    );
+
+    // 11f. Adapter delegation parity (window.board.assets.have)
+    const { createWebAdapter } = await import('../src/js/platform/web-adapter.js');
+    const adapter = createWebAdapter();
+    const adapterRes = await withTimeout(adapter.assets.have([existingId, 'bad-id']), 500, 'adapter.assets.have');
+    check('adapter.assets.have delegates to storage and resolves accurately',
+      adapterRes &&
+      adapterRes[existingId] === true &&
+      adapterRes['bad-id'] === false
+    );
+  } catch (e) {
+    check('storage haveAssets verification failed', false, e.message);
   }
 
   /* ---------------- Results Summary ---------------- */

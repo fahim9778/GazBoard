@@ -385,33 +385,35 @@ export async function haveAssets(ids) {
   const out = {};
   if (!list.length) return out;
 
-  const db = await openDatabase();
-  return new Promise((resolve) => {
-    try {
-      const tx = db.transaction('assets', 'readonly');
-      const store = tx.objectStore('assets');
-      let count = 0;
+  try {
+    const db = await openDatabase();
+    const tx = db.transaction('assets', 'readonly');
+    const store = tx.objectStore('assets');
 
-      for (const id of list) {
-        if (!ASSET_NAME.test(String(id || ''))) {
-          out[id] = false;
-          continue;
-        }
-        const req = store.getKey(id);
-        req.onsuccess = () => {
-          out[id] = req.result !== undefined;
-          if (++count === list.length) resolve(out);
-        };
-        req.onerror = () => {
-          out[id] = false;
-          if (++count === list.length) resolve(out);
-        };
+    const checks = list.map((id) => {
+      if (!ASSET_NAME.test(String(id || ''))) {
+        return Promise.resolve([id, false]);
       }
-    } catch {
-      for (const id of list) out[id] = false;
-      resolve(out);
+      return new Promise((resolve) => {
+        try {
+          const req = store.getKey(id);
+          req.onsuccess = () => resolve([id, req.result !== undefined]);
+          req.onerror = () => resolve([id, false]);
+        } catch {
+          resolve([id, false]);
+        }
+      });
+    });
+
+    const results = await Promise.all(checks);
+    for (const [id, exists] of results) {
+      out[id] = exists;
     }
-  });
+    return out;
+  } catch {
+    for (const id of list) out[id] = false;
+    return out;
+  }
 }
 
 /* ---------------- Migrations ---------------- */
