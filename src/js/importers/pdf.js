@@ -2,9 +2,9 @@
 
 import * as pdfjsLib from '../../vendor/pdf.min.mjs';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'app://board/vendor/pdf.worker.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL('../../vendor/pdf.worker.min.mjs', import.meta.url).href;
 
-const BASE = 'app://board/vendor/';
+const BASE = new URL('../../vendor/', import.meta.url).href;
 
 async function renderPageTo(page, scale) {
   const vp = page.getViewport({ scale });

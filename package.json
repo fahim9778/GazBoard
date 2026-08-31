@@ -9,12 +9,17 @@
     "dev": "electron . --dev",
     "smoke": "node scripts/smoke.js",
     "smoke:builtin": "node scripts/smoke.js --builtin",
+    "smoke:headless": "GAZBOARD_DISABLE_LIBREOFFICE=1 electron . --smoke --no-sandbox --headless",
     "test:restart": "sh test/restart-test.sh",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
     "smoke:mac": "node scripts/smoke.js",
+    "build:web": "node scripts/build-web.js",
+    "serve:web": "node scripts/serve-web.js",
+    "dev:web": "node scripts/serve-web.js",
+    "test:web": "node test/web-pwa.test.js",
     "test": "npm run smoke"
   },
   "author": {
