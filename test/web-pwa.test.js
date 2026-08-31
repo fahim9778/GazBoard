@@ -64,15 +64,19 @@ function setupWebGlobals() {
     querySelectorAll: () => []
   };
 
-  global.navigator = {
-    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/128.0.0.0 Mobile Safari/537.36',
-    onLine: true,
-    storage: {
-      persist: async () => true,
-      persisted: async () => true,
-      estimate: async () => ({ quota: 10737418240, usage: 1048576 })
-    }
-  };
+  Object.defineProperty(globalThis, 'navigator', {
+    value: {
+      userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/128.0.0.0 Mobile Safari/537.36',
+      onLine: true,
+      storage: {
+        persist: async () => true,
+        persisted: async () => true,
+        estimate: async () => ({ quota: 10737418240, usage: 1048576 })
+      }
+    },
+    configurable: true,
+    writable: true
+  });
 
   if (!global.crypto || !global.crypto.subtle) {
     try {
