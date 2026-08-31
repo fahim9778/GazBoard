@@ -85,6 +85,14 @@ export function saveFileDialog(opts = {}) {
 export async function readVirtualFile(filePath) {
   if (!filePath) throw new Error('File path not provided');
 
+  if (filePath instanceof ArrayBuffer) return filePath;
+  if (ArrayBuffer.isView(filePath)) {
+    return filePath.buffer.slice(filePath.byteOffset, filePath.byteOffset + filePath.byteLength);
+  }
+  if (filePath instanceof Blob || filePath instanceof File) {
+    return await filePath.arrayBuffer();
+  }
+
   if (_sessionFiles.has(filePath)) {
     const file = _sessionFiles.get(filePath);
     if (file instanceof Blob || file instanceof File) {
@@ -106,13 +114,20 @@ export function writeVirtualFile(filePath, data) {
   return new Promise((resolve) => {
     try {
       const fileName = String(filePath || 'download').split(/[\\/]/).pop() || 'download';
+      const ext = fileName.split('.').pop().toLowerCase();
+      let mime = 'application/octet-stream';
+      if (ext === 'pdf') mime = 'application/pdf';
+      else if (ext === 'png') mime = 'image/png';
+      else if (ext === 'svg') mime = 'image/svg+xml';
+      else if (ext === 'json' || ext === 'gazboard' || ext === 'openboard') mime = 'application/json';
+
       let blob;
       if (data instanceof Blob) {
         blob = data;
       } else if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
-        blob = new Blob([data]);
+        blob = new Blob([data], { type: mime });
       } else if (typeof data === 'string') {
-        blob = new Blob([data], { type: 'text/plain;charset=utf-8' });
+        blob = new Blob([data], { type: mime === 'application/json' ? 'application/json' : 'text/plain;charset=utf-8' });
       } else {
         blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
       }

@@ -6,7 +6,9 @@ const MM_TO_PT = 72 / 25.4;
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    if (typeof src === 'string' && !src.startsWith('data:') && !src.startsWith('blob:')) {
+      img.crossOrigin = 'anonymous';
+    }
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Failed to load page image'));
     img.src = src;
@@ -39,6 +41,21 @@ function imageToJpegBytes(img) {
   });
 }
 
+function parseLengthMm(styleStr, prop, fallbackMm) {
+  if (!styleStr) return fallbackMm;
+  const re = new RegExp(`${prop}:\\s*([\\d.]+)(mm|in|pt|px)?`, 'i');
+  const m = re.exec(styleStr);
+  if (!m) return fallbackMm;
+  const val = parseFloat(m[1]);
+  if (isNaN(val)) return fallbackMm;
+  const unit = (m[2] || 'mm').toLowerCase();
+  if (unit === 'mm') return val;
+  if (unit === 'in') return val * 25.4;
+  if (unit === 'pt') return (val / 72) * 25.4;
+  if (unit === 'px') return (val / 96) * 25.4;
+  return val;
+}
+
 /**
  * Generate a standard PDF 1.4 binary document containing the rendered page bitmaps.
  * @param {Object} payload { html, widthIn, heightIn }
@@ -47,46 +64,86 @@ export async function generatePdfFromHtml(payload) {
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(payload.html || '', 'text/html');
-    const sheetEls = Array.from(doc.querySelectorAll('.sheet, body > div, img'));
 
-    // Extract pages and dimensions
-    const pageItems = [];
-    const defaultWmm = (payload.widthIn || 8.5) * 25.4;
-    const defaultHmm = (payload.heightIn || 11) * 25.4;
+    const defaultPageWmm = (payload.widthIn || 8.5) * 25.4;
+    const defaultPageHmm = (payload.heightIn || 11) * 25.4;
 
-    const imgEls = Array.from(doc.querySelectorAll('img'));
-    if (!imgEls.length) {
+    // Check for CSS @page size if defined in HTML/style
+    let cssPageWmm = defaultPageWmm;
+    let cssPageHmm = defaultPageHmm;
+    if (typeof payload.html === 'string') {
+      const pageMatch = /@page\s*\{\s*size:\s*([\d.]+)(mm|in|pt|px)?\s+([\d.]+)(mm|in|pt|px)?/i.exec(payload.html);
+      if (pageMatch) {
+        cssPageWmm = parseLengthMm(`w:${pageMatch[1]}${pageMatch[2] || 'mm'}`, 'w', defaultPageWmm);
+        cssPageHmm = parseLengthMm(`h:${pageMatch[3]}${pageMatch[4] || 'mm'}`, 'h', defaultPageHmm);
+      }
+    }
+
+    const sheetEls = doc.querySelectorAll ? Array.from(doc.querySelectorAll('.sheet')) : [];
+    const rawItems = [];
+
+    if (sheetEls.length > 0) {
+      for (const sheet of sheetEls) {
+        const sheetStyle = sheet.getAttribute ? (sheet.getAttribute('style') || '') : '';
+        const pageWmm = parseLengthMm(sheetStyle, 'width', cssPageWmm);
+        const pageHmm = parseLengthMm(sheetStyle, 'height', cssPageHmm);
+
+        const imgEl = sheet.querySelector ? sheet.querySelector('img') : (sheet.querySelectorAll ? sheet.querySelectorAll('img')[0] : null);
+        if (!imgEl) continue;
+        const src = imgEl.getAttribute ? imgEl.getAttribute('src') : imgEl.src;
+        if (!src) continue;
+
+        const imgStyle = imgEl.getAttribute ? (imgEl.getAttribute('style') || '') : '';
+        const imgWmm = parseLengthMm(imgStyle, 'width', pageWmm);
+        const imgHmm = parseLengthMm(imgStyle, 'height', pageHmm);
+
+        rawItems.push({ pageWmm, pageHmm, imgWmm, imgHmm, src });
+      }
+    } else if (doc.querySelectorAll) {
+      const imgEls = Array.from(doc.querySelectorAll('img'));
+      for (const imgEl of imgEls) {
+        const src = imgEl.getAttribute ? imgEl.getAttribute('src') : imgEl.src;
+        if (!src) continue;
+
+        const imgStyle = imgEl.getAttribute ? (imgEl.getAttribute('style') || '') : '';
+        const pageWmm = parseLengthMm(imgStyle, 'width', cssPageWmm);
+        const pageHmm = parseLengthMm(imgStyle, 'height', cssPageHmm);
+        const imgWmm = parseLengthMm(imgStyle, 'width', pageWmm);
+        const imgHmm = parseLengthMm(imgStyle, 'height', pageHmm);
+
+        rawItems.push({ pageWmm, pageHmm, imgWmm, imgHmm, src });
+      }
+    }
+
+    if (!rawItems.length) {
       return { ok: false, error: 'No printable content found' };
     }
 
-    for (let i = 0; i < imgEls.length; i++) {
-      const imgEl = imgEls[i];
-      const src = imgEl.getAttribute('src');
-      if (!src) continue;
-
-      let wMm = defaultWmm;
-      let hMm = defaultHmm;
-
-      const style = imgEl.getAttribute('style') || '';
-      const wMatch = /width:\s*([\d.]+)mm/.exec(style);
-      const hMatch = /height:\s*([\d.]+)mm/.exec(style);
-      if (wMatch) wMm = parseFloat(wMatch[1]);
-      if (hMatch) hMm = parseFloat(hMatch[1]);
-
-      const loaded = await loadImage(src);
+    const pageItems = [];
+    for (const item of rawItems) {
+      const loaded = await loadImage(item.src);
       const { width, height, bytes } = await imageToJpegBytes(loaded);
 
+      const pageWPt = item.pageWmm * MM_TO_PT;
+      const pageHPt = item.pageHmm * MM_TO_PT;
+      const imgWPt = Math.min(item.imgWmm * MM_TO_PT, pageWPt);
+      const imgHPt = Math.min(item.imgHmm * MM_TO_PT, pageHPt);
+
+      // Centered on page geometry (HTML top-left flex centering maps to bottom-left PDF coordinates)
+      const xPt = Math.max(0, (pageWPt - imgWPt) / 2);
+      const yPt = Math.max(0, (pageHPt - imgHPt) / 2);
+
       pageItems.push({
-        wPt: wMm * MM_TO_PT,
-        hPt: hMm * MM_TO_PT,
+        pageWPt,
+        pageHPt,
+        imgWPt,
+        imgHPt,
+        xPt,
+        yPt,
         imgWidth: width,
         imgHeight: height,
         jpegBytes: bytes
       });
-    }
-
-    if (!pageItems.length) {
-      return { ok: false, error: 'Failed to extract pages from document' };
     }
 
     // Build standard PDF 1.4 binary structure
@@ -142,10 +199,10 @@ export async function generatePdfFromHtml(payload) {
 
       // Page Object
       offsets.push(currentOffset());
-      addString(`${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.wPt.toFixed(2)} ${p.hPt.toFixed(2)}] /Contents ${contentId} 0 R /Resources << /XObject << /Im1 ${imageId} 0 R >> >> >>\nendobj\n`);
+      addString(`${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${p.pageWPt.toFixed(2)} ${p.pageHPt.toFixed(2)}] /Contents ${contentId} 0 R /Resources << /ProcSet [/PDF /ImageC] /XObject << /Im1 ${imageId} 0 R >> >> >>\nendobj\n`);
 
       // Content Stream Object
-      const streamContent = `q ${p.wPt.toFixed(2)} 0 0 ${p.hPt.toFixed(2)} 0 0 cm /Im1 Do Q\n`;
+      const streamContent = `q ${p.imgWPt.toFixed(2)} 0 0 ${p.imgHPt.toFixed(2)} ${p.xPt.toFixed(2)} ${p.yPt.toFixed(2)} cm /Im1 Do Q\n`;
       const streamLen = new TextEncoder().encode(streamContent).byteLength;
       offsets.push(currentOffset());
       addString(`${contentId} 0 obj\n<< /Length ${streamLen} >>\nstream\n${streamContent}endstream\nendobj\n`);

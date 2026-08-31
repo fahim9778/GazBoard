@@ -451,16 +451,55 @@ async function runTests() {
     // Test with mock DOM parser in Node
     global.DOMParser = class MockDOMParser {
       parseFromString(html) {
-        return {
-          querySelectorAll: (sel) => {
-            if (sel.includes('img')) {
-              return [
-                {
-                  getAttribute: (attr) => attr === 'src' ? dataUrl : 'width:210mm;height:297mm',
-                  src: dataUrl
-                }
-              ];
+        const sheetMatches = [...html.matchAll(/<div class="sheet"([^>]*)>([\s\S]*?)<\/div>/gi)];
+        const sheets = sheetMatches.map((sm) => {
+          const sheetAttrs = sm[1];
+          const inner = sm[2];
+          const imgMatch = /<img[^>]+src="([^">]+)"([^>]*)>/i.exec(inner);
+          const styleMatch = /style="([^"]*)"/i.exec(sheetAttrs);
+          const sheetStyle = styleMatch ? styleMatch[1] : '';
+
+          const imgEl = imgMatch ? {
+            getAttribute: (attr) => {
+              if (attr === 'src') return imgMatch[1];
+              if (attr === 'style') {
+                const s = /style="([^"]*)"/i.exec(imgMatch[2]);
+                return s ? s[1] : '';
+              }
+              return null;
+            },
+            src: imgMatch[1]
+          } : null;
+
+          return {
+            getAttribute: (attr) => attr === 'style' ? sheetStyle : null,
+            querySelector: (sel) => sel === 'img' ? imgEl : null,
+            querySelectorAll: (sel) => sel === 'img' && imgEl ? [imgEl] : []
+          };
+        });
+
+        const imgMatches = [...html.matchAll(/<img[^>]+src="([^">]+)"([^>]*)>/gi)];
+        const allImgs = imgMatches.map((im) => ({
+          getAttribute: (attr) => {
+            if (attr === 'src') return im[1];
+            if (attr === 'style') {
+              const s = /style="([^"]*)"/i.exec(im[2]);
+              return s ? s[1] : '';
             }
+            return null;
+          },
+          src: im[1]
+        }));
+
+        return {
+          querySelector: (sel) => {
+            if (sel === '.sheet') return sheets[0] || null;
+            if (sel === 'img') return allImgs[0] || null;
+            return null;
+          },
+          querySelectorAll: (sel) => {
+            if (sel === '.sheet') return sheets;
+            if (sel.includes('img')) return allImgs;
             return [];
           }
         };
@@ -500,24 +539,131 @@ async function runTests() {
       return origCreateElement(tag);
     };
 
-    const pdfRes = await generatePdfFromHtml({
-      html: `<div class="sheet"><img src="${dataUrl}" style="width:210mm;height:297mm"></div>`,
-      widthIn: 8.27,
-      heightIn: 11.69
+    // 4a. A4 Landscape with Narrow Margin (8mm)
+    const a4LandscapeHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+      @page { size: 297mm 210mm; margin: 0; }
+      .sheet { width: 297mm; height: 210mm; box-sizing: border-box; padding: 8mm; }
+    </style></head><body>
+      <div class="sheet"><img src="${dataUrl}" style="width:281mm;height:174.4mm"></div>
+    </body></html>`;
+
+    const a4Res = await generatePdfFromHtml({
+      html: a4LandscapeHtml,
+      widthIn: 297 / 25.4,
+      heightIn: 210 / 25.4
     });
 
-    check('generatePdfFromHtml succeeds', pdfRes.ok === true);
-    check('generatePdfFromHtml returns ArrayBuffer', pdfRes.data instanceof ArrayBuffer);
+    check('generatePdfFromHtml succeeds for A4 landscape', a4Res.ok === true);
+    check('generatePdfFromHtml returns ArrayBuffer', a4Res.data instanceof ArrayBuffer);
 
-    const pdfBytes = Buffer.from(pdfRes.data);
-    const pdfText = pdfBytes.toString('binary');
-    check('PDF has %PDF-1.4 header', pdfText.startsWith('%PDF-1.4'));
-    check('PDF contains /Type /Catalog', pdfText.includes('/Type /Catalog'));
-    check('PDF contains /Type /Pages', pdfText.includes('/Type /Pages'));
-    check('PDF contains /Type /Page', pdfText.includes('/Type /Page'));
-    check('PDF contains /Type /XObject', pdfText.includes('/Type /XObject'));
-    check('PDF contains /Filter /DCTDecode', pdfText.includes('/Filter /DCTDecode'));
-    check('PDF contains xref table and %%EOF trailer', pdfText.includes('xref') && pdfText.includes('%%EOF'));
+    const a4Bytes = Buffer.from(a4Res.data);
+    const a4Text = a4Bytes.toString('latin1');
+    check('PDF has %PDF-1.4 header', a4Text.startsWith('%PDF-1.4'));
+    check('PDF contains /Type /Catalog', a4Text.includes('/Type /Catalog'));
+    check('PDF contains /Type /Pages', a4Text.includes('/Type /Pages'));
+    check('PDF contains /Type /Page', a4Text.includes('/Type /Page'));
+    check('PDF contains /Type /XObject', a4Text.includes('/Type /XObject'));
+    check('PDF contains /Filter /DCTDecode', a4Text.includes('/Filter /DCTDecode'));
+    check('PDF contains xref table and %%EOF trailer', a4Text.includes('xref') && a4Text.includes('%%EOF'));
+
+    const a4Boxes = [...a4Text.matchAll(/\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/g)]
+      .map((m) => ({ wPt: +m[3] - +m[1], hPt: +m[4] - +m[2], wMm: ((+m[3] - +m[1]) / 72) * 25.4, hMm: ((+m[4] - +m[2]) / 72) * 25.4 }));
+
+    check('A4 landscape PDF MediaBox matches 297mm x 210mm',
+      a4Boxes.length === 1 && Math.abs(a4Boxes[0].wMm - 297) < 0.5 && Math.abs(a4Boxes[0].hMm - 210) < 0.5
+    );
+
+    const a4Stream = /stream\s*\n([\s\S]*?)endstream/.exec(a4Text)?.[1] || '';
+    check('A4 landscape image is placed with 8mm horizontal margin and centered vertically',
+      a4Stream.includes('22.68') && a4Stream.includes('50.4')
+    );
+
+    // 4b. Letter Portrait with Normal Margin (15mm)
+    const letterPortraitHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+      @page { size: 215.9mm 279.4mm; margin: 0; }
+      .sheet { width: 215.9mm; height: 279.4mm; box-sizing: border-box; padding: 15mm; }
+    </style></head><body>
+      <div class="sheet"><img src="${dataUrl}" style="width:185.9mm;height:115.4mm"></div>
+    </body></html>`;
+
+    const letterRes = await generatePdfFromHtml({
+      html: letterPortraitHtml,
+      widthIn: 8.5,
+      heightIn: 11
+    });
+
+    const letterBytes = Buffer.from(letterRes.data);
+    const letterText = letterBytes.toString('latin1');
+    const letterBoxes = [...letterText.matchAll(/\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/g)]
+      .map((m) => ({ wPt: +m[3] - +m[1], hPt: +m[4] - +m[2], wMm: ((+m[3] - +m[1]) / 72) * 25.4, hMm: ((+m[4] - +m[2]) / 72) * 25.4 }));
+
+    check('Letter portrait PDF MediaBox matches 215.9mm x 279.4mm (8.5in x 11in)',
+      letterBoxes.length === 1 && Math.abs(letterBoxes[0].wMm - 215.9) < 0.5 && Math.abs(letterBoxes[0].hMm - 279.4) < 0.5
+    );
+
+    const letterStream = /stream\s*\n([\s\S]*?)endstream/.exec(letterText)?.[1] || '';
+    check('Letter portrait image is placed with 15mm margin offset', letterStream.includes('42.52'));
+
+    // 4c. A5 Tiled Multi-Page Export (2 pages)
+    const tiledHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+      @page { size: 148mm 210mm; margin: 0; }
+      .sheet { width: 148mm; height: 210mm; }
+    </style></head><body>
+      <div class="sheet"><img src="${dataUrl}" style="width:148mm;height:210mm"></div>
+      <div class="sheet"><img src="${dataUrl}" style="width:148mm;height:210mm"></div>
+    </body></html>`;
+
+    const tiledRes = await generatePdfFromHtml({
+      html: tiledHtml,
+      widthIn: 148 / 25.4,
+      heightIn: 210 / 25.4
+    });
+
+    const tiledBytes = Buffer.from(tiledRes.data);
+    const tiledText = tiledBytes.toString('latin1');
+    const tiledBoxes = [...tiledText.matchAll(/\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/g)]
+      .map((m) => ({ wPt: +m[3] - +m[1], hPt: +m[4] - +m[2], wMm: ((+m[3] - +m[1]) / 72) * 25.4, hMm: ((+m[4] - +m[2]) / 72) * 25.4 }));
+
+    check('A5 tiled export generates multiple pages', tiledBoxes.length === 2);
+    check('A5 tiled export pages all have A5 portrait MediaBox (148mm x 210mm)',
+      tiledBoxes.every((b) => Math.abs(b.wMm - 148) < 0.5 && Math.abs(b.hMm - 210) < 0.5)
+    );
+
+    // 4d. Multi-page Pad Export (3 pages)
+    const padHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+      @page { size: 210mm 297mm; margin: 0; }
+      .sheet { width: 210mm; height: 297mm; }
+    </style></head><body>
+      <div class="sheet"><img src="${dataUrl}" style="width:210mm;height:297mm"></div>
+      <div class="sheet"><img src="${dataUrl}" style="width:210mm;height:297mm"></div>
+      <div class="sheet"><img src="${dataUrl}" style="width:210mm;height:297mm"></div>
+    </body></html>`;
+
+    const padRes = await generatePdfFromHtml({
+      html: padHtml,
+      widthIn: 210 / 25.4,
+      heightIn: 297 / 25.4
+    });
+
+    const padBytes = Buffer.from(padRes.data);
+    const padText = padBytes.toString('latin1');
+    const padBoxes = [...padText.matchAll(/\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/g)]
+      .map((m) => ({ wPt: +m[3] - +m[1], hPt: +m[4] - +m[2], wMm: ((+m[3] - +m[1]) / 72) * 25.4, hMm: ((+m[4] - +m[2]) / 72) * 25.4 }));
+
+    check('Multi-page pad export generates 3 pages', padBoxes.length === 3);
+    check('Multi-page pad export pages have correct pad paper dimensions (A4 portrait)',
+      padBoxes.every((b) => Math.abs(b.wMm - 210) < 0.5 && Math.abs(b.hMm - 297) < 0.5)
+    );
+
+    // 4e. Full PDF specification & PDF.js parser compatibility verification
+    const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const parsedPdf = await pdfjsLib.getDocument({ data: new Uint8Array(padRes.data) }).promise;
+    check('Generated PDF parses successfully with PDF.js', parsedPdf.numPages === 3);
+    const page1 = await parsedPdf.getPage(1);
+    const vp = page1.getViewport({ scale: 1 });
+    check('PDF.js viewport matches target page geometry (595.28pt x 841.89pt)',
+      Math.abs(vp.width - 595.28) < 0.5 && Math.abs(vp.height - 841.89) < 0.5
+    );
   } catch (e) {
     check('PDF generation test failed', false, e.message);
   }
