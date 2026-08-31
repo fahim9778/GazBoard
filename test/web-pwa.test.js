@@ -418,6 +418,7 @@ async function runTests() {
   if (fail > 0) {
     process.exit(1);
   }
+  process.exit(0);
 }
 
 runTests().catch((err) => {

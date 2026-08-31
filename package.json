@@ -52,6 +52,7 @@
       "main.js",
       "preload.js",
       "src/**/*",
+      "!src/package.json",
       "package.json",
       "!test/out/**"
     ],
