@@ -26,7 +26,10 @@ async function copyRecursive(src, dest) {
 async function build() {
   console.log('=== Building GazBoard Web/PWA Production Distribution ===');
   const pkg = JSON.parse(await fsp.readFile(path.join(ROOT, 'package.json'), 'utf8'));
-  const version = pkg.version || '2.4.0';
+  const version = pkg.version;
+  if (!version) {
+    throw new Error('Build failed: package.json does not specify a version');
+  }
 
   // 1. Clean output directory
   console.log(`Cleaning output directory: ${OUT}`);
@@ -37,7 +40,40 @@ async function build() {
   console.log('Copying static assets, scripts, vendors and stylesheets...');
   await copyRecursive(SRC, OUT);
 
-  // 3. Generate version.json
+  // 3. Inject package version into generated web-adapter.js and sw.js
+  const versionLiteral = JSON.stringify(version);
+
+  const distAdapterPath = path.join(OUT, 'js', 'platform', 'web-adapter.js');
+  const adapterSource = await fsp.readFile(distAdapterPath, 'utf8');
+  const adapterPlaceholder = '__APP_VERSION__';
+  if (!adapterSource.includes(adapterPlaceholder)) {
+    throw new Error(`Build failed: placeholder ${adapterPlaceholder} not found in ${distAdapterPath}`);
+  }
+  const updatedAdapter = adapterSource.replace(
+    /(const APP_VERSION\s*=\s*)['"]__APP_VERSION__['"];/,
+    `$1${versionLiteral};`
+  );
+  if (!updatedAdapter.includes(`const APP_VERSION = ${versionLiteral};`)) {
+    throw new Error(`Build failed: failed to inject version into ${distAdapterPath}`);
+  }
+  await fsp.writeFile(distAdapterPath, updatedAdapter, 'utf8');
+
+  const distSwPath = path.join(OUT, 'sw.js');
+  const swSource = await fsp.readFile(distSwPath, 'utf8');
+  const swPlaceholder = '__SW_VERSION__';
+  if (!swSource.includes(swPlaceholder)) {
+    throw new Error(`Build failed: placeholder ${swPlaceholder} not found in ${distSwPath}`);
+  }
+  const updatedSw = swSource.replace(
+    /(const VERSION\s*=\s*)['"]__SW_VERSION__['"];/,
+    `$1${versionLiteral};`
+  );
+  if (!updatedSw.includes(`const VERSION = ${versionLiteral};`)) {
+    throw new Error(`Build failed: failed to inject version into ${distSwPath}`);
+  }
+  await fsp.writeFile(distSwPath, updatedSw, 'utf8');
+
+  // 4. Generate version.json
   const buildInfo = {
     name: 'GazBoard',
     version: version,
@@ -48,7 +84,7 @@ async function build() {
 
   await fsp.writeFile(path.join(OUT, 'version.json'), JSON.stringify(buildInfo, null, 2));
 
-  // 4. Verify precache assets in sw.js exist
+  // 5. Verify precache assets in sw.js exist
   const swContent = await fsp.readFile(path.join(OUT, 'sw.js'), 'utf8');
   const match = /const PRECACHE_ASSETS = (\[[\s\S]*?\]);/.exec(swContent);
   if (match) {

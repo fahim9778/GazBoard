@@ -10,6 +10,8 @@ const crypto = require('node:crypto');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
+const DIST = path.join(ROOT, 'dist-web');
+const PKG = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 let pass = 0;
 let fail = 0;
@@ -326,7 +328,10 @@ async function runTests() {
 
   /* ---------------- 7. Web Platform Adapter Contract Parity ---------------- */
   try {
-    const { createWebAdapter } = await import('../src/js/platform/web-adapter.js');
+    const adapterPath = fs.existsSync(path.join(DIST, 'js', 'platform', 'web-adapter.js'))
+      ? '../dist-web/js/platform/web-adapter.js'
+      : '../src/js/platform/web-adapter.js';
+    const { createWebAdapter } = await import(adapterPath);
     const adapter = createWebAdapter();
 
     const requiredMethods = [
@@ -350,7 +355,10 @@ async function runTests() {
     }
 
     const info = await adapter.info();
-    check('adapter.info() returns web runtime info', info.platform === 'browser' && info.isWeb === true && info.version === '2.4.0');
+    const expectedVersion = fs.existsSync(path.join(DIST, 'js', 'platform', 'web-adapter.js'))
+      ? PKG.version
+      : '__APP_VERSION__';
+    check('adapter.info() returns web runtime info', info.platform === 'browser' && info.isWeb === true && info.version === expectedVersion);
   } catch (e) {
     check('web adapter contract parity failed', false, e.message);
   }
@@ -412,6 +420,30 @@ async function runTests() {
     check('Service Worker handles ignoreSearch for resilient offline SPA navigation', swContent.includes('ignoreSearch: true'));
   } catch (e) {
     check('standard fonts precache test failed', false, e.message);
+  }
+
+  /* ---------------- 10. Build Version Derivation & Single Source of Truth ---------------- */
+  try {
+    check('package.json provides valid version string', typeof PKG.version === 'string' && /^\d+\.\d+\.\d+/.test(PKG.version));
+
+    if (fs.existsSync(DIST)) {
+      const distSwPath = path.join(DIST, 'sw.js');
+      const distSwContent = await fsp.readFile(distSwPath, 'utf8');
+      check('dist-web/sw.js contains package.json version', distSwContent.includes(`const VERSION = ${JSON.stringify(PKG.version)};`));
+      check('dist-web/sw.js defines versioned shell cache', distSwContent.includes('const SHELL_CACHE = `gazboard-shell-v${VERSION}`;'));
+      check('dist-web/sw.js defines versioned runtime cache', distSwContent.includes('const RUNTIME_CACHE = `gazboard-runtime-v${VERSION}`;'));
+
+      const distAdapterPath = path.join(DIST, 'js', 'platform', 'web-adapter.js');
+      const distAdapterContent = await fsp.readFile(distAdapterPath, 'utf8');
+      check('dist-web/web-adapter.js contains package.json version', distAdapterContent.includes(`const APP_VERSION = ${JSON.stringify(PKG.version)};`));
+
+      const distVersionPath = path.join(DIST, 'version.json');
+      check('dist-web/version.json exists', fs.existsSync(distVersionPath));
+      const distVersionMeta = JSON.parse(await fsp.readFile(distVersionPath, 'utf8'));
+      check('dist-web/version.json contains package.json version', distVersionMeta.version === PKG.version);
+    }
+  } catch (e) {
+    check('build version derivation verification failed', false, e.message);
   }
 
   /* ---------------- Results Summary ---------------- */

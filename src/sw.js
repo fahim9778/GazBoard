@@ -1,7 +1,7 @@
 // Production Service Worker for GazBoard PWA.
 // Fully offline-first, versioned, atomic updates, zero-loss durability.
 
-const VERSION = '2.4.0';
+const VERSION = '__SW_VERSION__';
 const SHELL_CACHE = `gazboard-shell-v${VERSION}`;
 const RUNTIME_CACHE = `gazboard-runtime-v${VERSION}`;
 

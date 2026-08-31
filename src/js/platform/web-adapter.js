@@ -6,7 +6,7 @@ import * as files from './web-files.js';
 import { generatePdfFromHtml } from './web-pdf.js';
 import * as updater from './update-manager.js';
 
-const APP_VERSION = '2.4.0';
+const APP_VERSION = '__APP_VERSION__';
 updater.setAppVersion(APP_VERSION);
 
 const _menuListeners = new Set();
