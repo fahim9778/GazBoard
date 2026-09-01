@@ -7,14 +7,15 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "smoke": "xvfb-run -a electron . --smoke --no-sandbox",
-    "smoke:builtin": "GAZBOARD_DISABLE_LIBREOFFICE=1 xvfb-run -a electron . --smoke --no-sandbox",
+    "smoke": "node scripts/smoke.js",
+    "smoke:builtin": "node scripts/smoke.js --builtin",
     "test:restart": "sh test/restart-test.sh",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
-    "smoke:mac": "electron . --smoke"
+    "smoke:mac": "node scripts/smoke.js",
+    "test": "npm run smoke"
   },
   "author": {
     "name": "theBoringCodes",
