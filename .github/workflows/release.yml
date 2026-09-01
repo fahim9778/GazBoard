@@ -37,25 +37,30 @@ jobs:
         run: npx electron . --smoke
         # a failed assertion exits non-zero, so a broken build never ships
 
-      - name: Build the installer
-        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Build the installer and the portable build
+        # Both targets have to be named here. Naming any target on the command
+        # line REPLACES build.win.target in package.json rather than adding to
+        # it, so "--win nsis" silently dropped the portable build that
+        # package.json asks for - which is why no release before 2.4.2 has one.
+        run: npx electron-builder --win nsis portable --x64 --publish never
 
       - name: Upload build output as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: GazBoard-windows
-          path: |
-            dist/*.exe
-            dist/*.blockmap
+          path: dist/*.exe
           if-no-files-found: error
 
       - name: Attach to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.exe
-            dist/*.blockmap
+          # No .blockmap. It exists for electron-updater's differential
+          # downloads, and GazBoard has no auto-updater - the update check is a
+          # plain look at the releases API that opens the download page in the
+          # browser. Uploading it only put a file on the release that nothing
+          # reads and that people then ask about.
+          files: dist/*.exe
           name: GazBoard ${{ github.ref_name }}
           generate_release_notes: true
 
@@ -163,7 +168,6 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/*.blockmap
           if-no-files-found: error
 
       - name: Attach to the GitHub Release

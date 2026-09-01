@@ -22,10 +22,49 @@ const UPDATE_API = process.env.GAZBOARD_UPDATE_API
 // Smoke runs use a throwaway profile so tests never see (or clobber) real boards.
 // GAZBOARD_USER_DATA points the whole profile somewhere else and is kept between
 // runs - the restart tests need two launches to share one profile, and it doubles
-// as the hook a portable build would use.
+// as an explicit override for anyone who wants one.
+/**
+ * Where a portable build keeps its boards: a folder beside the .exe.
+ *
+ * electron-builder's portable target unpacks itself into a temp directory and
+ * runs from there, so left alone it would write to the same per-user AppData
+ * folder the installer uses - the stick would carry the program and leave the
+ * work behind, and a portable copy would quietly share (and an uninstall could
+ * delete) an installed copy's boards. PORTABLE_EXECUTABLE_DIR is the one thing
+ * that survives the unpack: it is where the .exe the user double-clicked
+ * actually lives.
+ *
+ * The folder is not merely checked for permission but written to, because a
+ * write-protected stick, a CD, or a network share can all claim to be writable
+ * and then refuse. If it cannot be written, this returns null and the app falls
+ * back to the normal per-user folder rather than refusing to start.
+ *
+ * Exported for the test suite; there is no other reason for it to be public.
+ */
+function portableUserData(env = process.env) {
+  const exeDir = env.PORTABLE_EXECUTABLE_DIR;
+  if (!exeDir) return null;
+  const beside = path.join(exeDir, 'GazBoard-Data');
+  try {
+    fs.mkdirSync(beside, { recursive: true });
+    const probe = path.join(beside, '.write-test');
+    fs.writeFileSync(probe, '');
+    fs.rmSync(probe, { force: true });
+    return beside;
+  } catch {
+    return null;                 // read-only stick, or unpacked into Program Files
+  }
+}
+module.exports.portableUserData = portableUserData;
+
 if (process.env.GAZBOARD_USER_DATA) {
   fs.mkdirSync(process.env.GAZBOARD_USER_DATA, { recursive: true });
   app.setPath('userData', process.env.GAZBOARD_USER_DATA);
+} else if (portableUserData()) {
+  // ahead of --smoke on purpose: it is the only way the suite can watch a real
+  // launch pick the folder beside the .exe, and a smoke run is never portable
+  // unless a test deliberately makes it one
+  app.setPath('userData', portableUserData());
 } else if (process.argv.includes('--smoke')) {
   const tmp = path.join(os.tmpdir(), 'gazboard-smoke');
   fs.rmSync(tmp, { recursive: true, force: true });

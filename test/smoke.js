@@ -259,9 +259,16 @@ async function run(win, app) {
     return {
       label: ${JSON.stringify(label)},
       elementFillsStage: Math.abs(r.width - s.width) < 1.5 && Math.abs(r.height - s.height) < 1.5,
-      bufferMatches: c.width === Math.round(r.width * sf.dpr) && c.height === Math.round(r.height * sf.dpr),
+      // A backing store has to be a whole number of device pixels, but at a
+      // fractional device pixel ratio - Windows at 125% display scaling, say -
+      // the CSS rect it is derived from is fractional too, so browser and test
+      // can round the same size in opposite directions. One device pixel is
+      // rounding; a stale buffer is out by hundreds, and is still caught.
+      bufferMatches: Math.abs(c.width - r.width * sf.dpr) <= 1 && Math.abs(c.height - r.height * sf.dpr) <= 1,
       inlineSize: (c.style.width || '') + (c.style.height || ''),
-      w: Math.round(r.width), h: Math.round(r.height), stageW: Math.round(s.width), dpr: sf.dpr,
+      w: Math.round(r.width), h: Math.round(r.height),
+      stageW: Math.round(s.width), stageH: Math.round(s.height),
+      bufW: c.width, bufH: c.height, dpr: sf.dpr,
       surfaceW: sf.width
     };
   `);
@@ -304,7 +311,7 @@ async function run(win, app) {
 
   const bad = sizes.filter((s) => !s.elementFillsStage || !s.bufferMatches);
   check('canvas fills the window at every size', bad.length === 0,
-    bad.length ? bad.map((b) => `${b.label}: canvas ${b.w}x${b.h} vs stage ${b.stageW}`).join('; ')
+    bad.length ? bad.map((b) => `${b.label}: canvas ${b.w}x${b.h} vs stage ${b.stageW}x${b.stageH}, buffer ${b.bufW}x${b.bufH} at dpr ${b.dpr}`).join('; ')
       : sizes.map((s) => `${s.label} ${s.w}x${s.h}@${s.dpr}`).join(', '));
   check('no inline size is pinned on the canvas', sizes.every((s) => s.inlineSize === ''), sizes[0].inlineSize || '(none)');
   check('the surface tracks the new size', sizes.every((s) => s.surfaceW === s.w));
@@ -1924,6 +1931,13 @@ async function run(win, app) {
     // Saving must never land inside a stroke, must happen once one ends, and
     // must not be starved by someone who draws without ever really stopping.
     a.settings.autosave = true;
+    // The autosave delay scales with how long the last write took, so on a real
+    // disk behind a virus scanner it can stretch to four seconds. Pin the
+    // measured cost to zero so the delay is the fixed 700ms floor and the
+    // windows below mean what they say - the point of the test is WHEN a save
+    // is allowed to happen, not how fast this machine's disk is.
+    const realCost = a._saveCost;
+    a._saveCost = 0;
     let saves = 0;
     const realPersist = a.persist.bind(a);
     a.persist = async (...args) => { saves++; return realPersist(...args); };
@@ -1940,9 +1954,10 @@ async function run(win, app) {
     await new Promise(r => setTimeout(r, 1100));
     const heldOffWhileDrawing = saves === 0;
 
-    // (2) the stroke ends: a save follows
+    // (2) the stroke ends: a save follows. Polled rather than slept on, so a
+    // slow machine reports a late save instead of a missing one.
     it.onUp(pev(180, 140));
-    await new Promise(r => setTimeout(r, 1100));
+    for (let i = 0; i < 60 && saves === 0; i++) await new Promise(r => setTimeout(r, 100));
     const savedOnceTheHandStopped = saves >= 1;
 
     // (3) drawing steadily past the ceiling: the next stroke to END is written
@@ -1957,6 +1972,7 @@ async function run(win, app) {
     const savedImmediatelyAtTheCeiling = saves >= 1;
 
     a.persist = realPersist;
+    a._saveCost = realCost;
     return { reusedBetweenFrames, rebuiltOnChange, heldOffWhileDrawing, savedOnceTheHandStopped,
              stillNothingMidStroke, savedImmediatelyAtTheCeiling };
   `);
@@ -3855,39 +3871,38 @@ async function run(win, app) {
     const sf = a.surface;
     await new Promise((res) => requestAnimationFrame(res));
 
-    // Canvas work is queued for the GPU, so a tight loop of draw() calls can
-    // return long before the frames are actually painted. Reading one pixel
-    // back forces the queue to drain, which is what makes the two numbers
-    // below comparable.
-    const flush = () => sf.ctx.getImageData(0, 0, 1, 1);
-    const N = 30;
-    const time = (fn) => {
-      for (let i = 0; i < 5; i++) { fn(); flush(); }        // warm up
-      const t0 = performance.now();
-      for (let i = 0; i < N; i++) { fn(); flush(); }
-      return (performance.now() - t0) / N;
-    };
-
-    // How many times the whole board actually gets repainted is the claim being
-    // made here, and unlike a stopwatch it reads the same on every machine.
+    /*
+     * Counted, not timed.
+     *
+     * The obvious test here is a stopwatch, and it cannot be made to work.
+     * Canvas drawing is queued for the GPU, so timing draw() in a loop measures
+     * the queueing and not the painting; the usual cure is to read a pixel back
+     * to force the queue to drain, and that cure is worse than the disease.
+     * The board canvas is created without willReadFrequently - correctly, it is
+     * painted far more than it is read - so after a few getImageData calls
+     * Chromium demotes it to software rendering, and every blit afterwards is a
+     * two-megapixel memcpy. The stopwatch stops measuring the laser and starts
+     * measuring the damage it did to the canvas, on real hardware only, which
+     * is the worst possible place for a test to be wrong.
+     *
+     * What the fix actually claims is countable: while a laser trail fades, the
+     * board underneath is painted once and blitted after that, instead of being
+     * rebuilt from all 1200 objects on every frame. Counting the rebuilds says
+     * exactly that, reads the same on every machine, and leaves the canvas
+     * alone.
+     */
     const realDrawScene = sf.drawScene.bind(sf);
     let scenes = 0;
     sf.drawScene = (...a) => { scenes++; return realDrawScene(...a); };
 
-    // what a frame costs when the whole board has to be redrawn
-    sf.laser = [];
-    const cold = time(() => { sf._ink = null; sf.draw(); });
-
-    // and with a trail alive: the board underneath cannot change while the
-    // laser fades, so it should be blitted rather than redrawn
     const c = sf.cam.viewport(sf.width, sf.height);
     sf.laser = [];
     for (let i = 0; i < 20; i++) sf.laser.push({ x: c.x + i * 4, y: c.y + 40, t: performance.now() });
     sf.draw();                                   // first frame builds the freeze
     scenes = 0;
-    const warm = time(() => sf.draw());
-    const scenesPerLaserFrame = scenes;      // frames drawn = N warm-ups + N timed
-    const laserFrames = N + 5;               // the timed run plus its warm-up
+    const laserFrames = 35;
+    for (let i = 0; i < laserFrames; i++) sf.draw();
+    const scenesPerLaserFrame = scenes;
     const froze = !!sf._ink;
     sf.drawScene = realDrawScene;
 
@@ -3900,19 +3915,168 @@ async function run(win, app) {
     const life = Surface.LASER_LIFE;
 
     a.newBoard(true);
-    return { cold, warm, froze, dropped, life, scenesPerLaserFrame, laserFrames, objects: 1200 };
+    return { froze, dropped, life, scenesPerLaserFrame, laserFrames, objects: 1200 };
   `);
 
   check('the board is frozen under a live laser trail instead of redrawn every frame', laserPerf.froze);
   check('a fading laser repaints the board once, not once per frame',
     laserPerf.scenesPerLaserFrame === 0,
-    `${laserPerf.scenesPerLaserFrame} full board repaints across ${laserPerf.laserFrames} laser frames`);
-  check('a laser frame stays inside a 60fps budget on a 1200-object board',
-    laserPerf.warm < 16,
-    `${laserPerf.warm.toFixed(2)}ms per laser frame vs ${laserPerf.cold.toFixed(2)}ms for a full redraw of 1200 strokes`);
+    `${laserPerf.scenesPerLaserFrame} board repaints across ${laserPerf.laserFrames} laser frames - `
+    + `${laserPerf.scenesPerLaserFrame * laserPerf.objects} objects redrawn instead of `
+    + `${laserPerf.laserFrames * laserPerf.objects}`);
   check('the frozen copy is thrown away as soon as the trail is gone', laserPerf.dropped);
   check('the trail fades quickly rather than trailing behind the pointer',
     laserPerf.life <= 600, `${laserPerf.life}ms`);
+
+  /* ---- a portable build keeps its boards beside the .exe ---- */
+  const { portableUserData } = require(path.join(__dirname, '..', 'main.js'));
+  const stick = path.join(OUT, 'fake-usb-stick');
+  const locked = path.join(OUT, 'fake-readonly-stick');
+  await fs.rm(stick, { recursive: true, force: true });
+  await fs.rm(locked, { recursive: true, force: true });
+  await fs.mkdir(stick, { recursive: true });
+  await fs.mkdir(locked, { recursive: true });
+
+  const notPortable = portableUserData({});
+  const onStick = portableUserData({ PORTABLE_EXECUTABLE_DIR: stick });
+  let madeIt = false;
+  try { await fs.access(onStick); madeIt = true; } catch { madeIt = false; }
+
+  // the folder really is usable, not just named
+  await fs.writeFile(path.join(onStick, 'board.json'), '{"ok":true}');
+  const readBack = JSON.parse(await fs.readFile(path.join(onStick, 'board.json'), 'utf8'));
+
+  // A place the data folder cannot be made falls back instead of taking the app
+  // down. Pointing at a plain file is the one way to force that failure the same
+  // way for everybody: a read-only directory is only read-only to a normal user,
+  // and root - which is what CI containers run as - walks straight through it.
+  const notADir = path.join(OUT, 'not-a-directory');
+  await fs.writeFile(notADir, 'this is a file, not a folder');
+  const onBadPath = portableUserData({ PORTABLE_EXECUTABLE_DIR: notADir });
+
+  // and the read-only case itself, wherever the test is not running as root
+  // chmod cannot make a directory unwritable for root, and on Windows it does
+  // not apply to directories at all - in both cases the folder stays writable
+  // and there is nothing to observe. The not-a-directory case above covers the
+  // same fallback everywhere.
+  const asRoot = (typeof process.getuid === 'function' && process.getuid() === 0)
+    || process.platform === 'win32';
+  let onLocked = null, lockedTested = false;
+  if (!asRoot) {
+    await fs.chmod(locked, 0o555);
+    onLocked = portableUserData({ PORTABLE_EXECUTABLE_DIR: locked });
+    await fs.chmod(locked, 0o755);          // so the directory can be cleaned up
+    lockedTested = true;
+  }
+
+  check('an ordinary installed build is not treated as portable', notPortable === null,
+    String(notPortable));
+  check('a portable build keeps its boards in a folder beside the .exe',
+    onStick === path.join(stick, 'GazBoard-Data'), onStick);
+  check('that folder is created, not merely named', madeIt);
+  check('and it is actually writable', readBack.ok === true);
+  check('a stick the data folder cannot be made on falls back instead of failing to start',
+    onBadPath === null, String(onBadPath));
+  check('a write-protected stick falls back too',
+    !lockedTested || onLocked === null,
+    lockedTested ? String(onLocked)
+      : `skipped on ${process.platform} - chmod cannot make this directory unwritable here`);
+  // The helper being right is not the same as the app using it. This launches a
+  // second copy of GazBoard for real, with PORTABLE_EXECUTABLE_DIR set the way
+  // electron-builder sets it, and asks that copy where it actually put its
+  // profile.
+  const realStick = path.join(OUT, 'launched-usb-stick');
+  await fs.rm(realStick, { recursive: true, force: true });
+  await fs.mkdir(realStick, { recursive: true });
+  const probe = path.join(OUT, 'portable-probe.js');
+  await fs.writeFile(probe, `'use strict';
+module.exports.run = async (win, app) => {
+  console.log('USERDATA ' + app.getPath('userData'));
+  app.exit(0);
+};
+`);
+  const launched = await new Promise((resolve) => {
+    const child = require('node:child_process').execFile(
+      process.execPath, ['.', '--smoke', '--no-sandbox'],
+      {
+        cwd: path.join(__dirname, '..'),
+        timeout: 60000,
+        env: { ...process.env, PORTABLE_EXECUTABLE_DIR: realStick, GAZBOARD_TEST: probe,
+               GAZBOARD_USER_DATA: '' }
+      },
+      (err, stdout) => {
+        const m = /^USERDATA (.+)$/m.exec(stdout || '');
+        resolve({ said: m ? m[1].trim() : null, err: err ? String(err).slice(0, 120) : null });
+      });
+    child.on('error', () => resolve({ said: null, err: 'could not launch' }));
+  });
+
+  check('a launched portable build really puts its profile beside the .exe',
+    launched.said === path.join(realStick, 'GazBoard-Data'),
+    launched.said || launched.err || 'no answer');
+  check('and that profile folder exists on the stick afterwards',
+    await fs.access(path.join(realStick, 'GazBoard-Data')).then(() => true, () => false));
+
+  // The point of a portable build is that the work travels with it. Two more
+  // launches on the same stick: one makes a board, the next has to find it.
+  const runOnStick = (script) => new Promise((resolve) => {
+    const f = path.join(OUT, 'stick-step.js');
+    fs.writeFile(f, script).then(() => {
+      require('node:child_process').execFile(
+        process.execPath, ['.', '--smoke', '--no-sandbox'],
+        { cwd: path.join(__dirname, '..'), timeout: 60000,
+          env: { ...process.env, PORTABLE_EXECUTABLE_DIR: realStick, GAZBOARD_TEST: f,
+                 GAZBOARD_USER_DATA: '' } },
+        (err, stdout) => {
+          const m = /^SAID (.+)$/m.exec(stdout || '');
+          resolve(m ? m[1].trim() : (err ? 'ERROR ' + String(err).slice(0, 80) : 'no answer'));
+        });
+    });
+  });
+
+  await runOnStick(`'use strict';
+module.exports.run = async (win, app) => {
+  const js = (c) => win.webContents.executeJavaScript('(async()=>{' + c + '})()', true);
+  await new Promise(r => setTimeout(r, 1400));
+  await js(\`
+    const a = window.app;
+    a.newBoard(true);
+    a.store.rename('Taken to the classroom');
+    a.store.add({ id:'sk1', type:'text', x:40, y:40, w:400, h:60, text:'written on the stick',
+      fontSize:28, color:'#201f1e', align:'left', valign:'top', rotation:0, font:'hand', background:'none' });
+    await a.persist();
+  \`);
+  console.log('SAID saved');
+  app.exit(0);
+};
+`);
+  const cameBack = await runOnStick(`'use strict';
+module.exports.run = async (win, app) => {
+  const js = (c) => win.webContents.executeJavaScript('(async()=>{' + c + '})()', true);
+  await new Promise(r => setTimeout(r, 1600));
+  const out = await js(\`
+    const list = await window.board.boards.list();
+    return JSON.stringify({ name: window.app.store.doc.name,
+      objects: window.app.store.objects.length, boards: list.length });
+  \`);
+  console.log('SAID ' + out);
+  app.exit(0);
+};
+`);
+  let stickState = {};
+  try { stickState = JSON.parse(cameBack); } catch { stickState = { raw: cameBack }; }
+
+  check('a board made by the portable build is still there the next time it runs',
+    stickState.name === 'Taken to the classroom' && stickState.objects === 1 && stickState.boards === 1,
+    cameBack);
+
+  // and none of it leaked into the ordinary per-user folder
+  const leaked = await js(`return (await window.board.info()).userData;`);
+  check('the portable build leaves nothing in the folder an installed copy uses',
+    !leaked.startsWith(realStick), leaked);
+
+  check('nothing is left behind in the folder beside the .exe but the data folder',
+    (await fs.readdir(stick)).join(',') === 'GazBoard-Data', (await fs.readdir(stick)).join(','));
 
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
