@@ -100,6 +100,31 @@ export function readableText(hex) {
 export function hsl(h, s, l) { return `hsl(${h} ${s}% ${l}%)`; }
 
 /** Word-wrap `text` into lines that fit `maxWidth` for the current ctx font. */
+/**
+ * Break a run of text that has nowhere to break.
+ *
+ * Wrapping normally happens at spaces, but a long unbroken run - a URL, a file
+ * name, or someone leaning on the keyboard - has none, so it used to be laid
+ * out as one line however wide the box was and simply ran off the edge of the
+ * sticky note. When a piece will not fit whole, it is cut by character
+ * instead. The cut point is found by halving rather than by walking one letter
+ * at a time, so a long paste stays cheap to lay out.
+ */
+function breakUnbreakable(ctx, piece, maxWidth, lines) {
+  let rest = piece;
+  while (rest.length > 1 && ctx.measureText(rest).width > maxWidth) {
+    let lo = 1, hi = rest.length - 1, cut = 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (ctx.measureText(rest.slice(0, mid)).width <= maxWidth) { cut = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  return rest;
+}
+
 export function wrapText(ctx, text, maxWidth) {
   const lines = [];
   for (const raw of String(text ?? '').split('\n')) {
@@ -109,9 +134,10 @@ export function wrapText(ctx, text, maxWidth) {
       const test = line + word;
       if (ctx.measureText(test).width > maxWidth && line.trim()) {
         lines.push(line.replace(/\s+$/, ''));
-        line = word.replace(/^\s+/, '');
+        line = breakUnbreakable(ctx, word.replace(/^\s+/, ''), maxWidth, lines);
       } else line = test;
     }
+    line = breakUnbreakable(ctx, line, maxWidth, lines);
     lines.push(line.replace(/\s+$/, ''));
   }
   return lines;
@@ -124,7 +150,11 @@ export function fitFontSize(ctx, text, maxW, maxH, family, weight, max = 96, min
     ctx.font = `${weight} ${mid}px ${family}`;
     const lines = wrapText(ctx, text, maxW);
     const h = lines.length * mid * 1.25;
-    if (h <= maxH) { best = mid; lo = mid + 1; } else hi = mid - 1;
+    // Height alone is not enough: a line that cannot be broken can be wider
+    // than the box at any size, and only the width test catches it.
+    let widest = 0;
+    for (const l of lines) widest = Math.max(widest, ctx.measureText(l).width);
+    if (h <= maxH && widest <= maxW) { best = mid; lo = mid + 1; } else hi = mid - 1;
   }
   return best;
 }

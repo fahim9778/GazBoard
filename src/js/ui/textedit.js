@@ -21,6 +21,10 @@ export class TextEditor {
     const app = this.app;
     this.target = obj;
     this.cell = cell;
+    // A note grows to fit what is typed into it. The height it had when
+    // editing started is kept so the growth can be rewound and re-applied as
+    // part of the same undo entry as the text itself.
+    this.startH = obj.h;
 
     const ta = document.createElement('textarea');
     ta.spellcheck = true;
@@ -51,6 +55,11 @@ export class TextEditor {
       const cw = o.w / o.cols, ch = o.h / o.rows;
       box = { x: o.x + c * cw, y: o.y + r * ch, w: cw, h: ch };
     } else box = boundsOf(o);
+
+    if (o.type === 'note' && !this.cell) {
+      const grown = this.noteHeight(o, this.el.value);
+      if (grown > o.h) { o.h = grown; box = boundsOf(o); }
+    }
 
     const pad = o.type === 'note' ? Math.max(10, o.w * 0.08) : o.type === 'shape' ? 10 : 0;
     const wx = box.x + pad, wy = box.y + pad, ww = box.w - pad * 2, wh = box.h - pad * 2;
@@ -108,12 +117,22 @@ export class TextEditor {
     } else if ((target.text || '') !== value) {
       const patch = { text: value };
       if (target.type === 'text' && target.autoSize !== false) Object.assign(patch, this.fitBox(target, value));
+      if (target.type === 'note') {
+        // rewind the live growth so update() records the height it had before
+        // this edit, then ask for the height the finished text needs
+        if (this.startH != null) target.h = this.startH;
+        const grown = this.noteHeight(target, value);
+        if (grown > target.h) patch.h = grown;
+      }
       store.update(target.id, patch, 'edit text');
       // an empty brand-new text box is not worth keeping
       if (!value && target.type === 'text') store.remove([target.id], 'remove empty text');
     } else if (!value && target.type === 'text' && !target.text) {
       store.remove([target.id], 'remove empty text');
+    } else if (target.type === 'note' && this.startH != null) {
+      target.h = this.startH;      // nothing changed, so neither should the note
     }
+    this.startH = null;
 
     this.app.afterTextEdit();
     this.app.surface.invalidate();
@@ -140,10 +159,35 @@ export class TextEditor {
     };
   }
 
+  /**
+   * How tall a note has to be for its text to fit inside it.
+   *
+   * Notes shrink their text first - that is what they have always done - and
+   * only grow when even the smallest size will not fit. The result is never
+   * smaller than the note already is, so a note the user sized by hand keeps
+   * the size they gave it.
+   */
+  noteHeight(o, value) {
+    const pad = Math.max(10, o.w * 0.08);
+    const innerW = Math.max(8, o.w - pad * 2);
+    const face = faceOf(o.font);
+    const weight = o.bold ? '600' : '400';
+    let size = o.fontSize;
+    if (!size) {
+      this.measure.font = `${weight} 16px ${face}`;
+      size = fitFontSize(this.measure, value || ' ', innerW, Math.max(8, o.h - pad * 2), face, weight, 46, 10);
+    }
+    this.measure.font = `${weight} ${size}px ${face}`;
+    const lines = wrapText(this.measure, value || ' ', innerW);
+    return Math.max(o.h, Math.ceil(lines.length * size * 1.28 + pad * 2));
+  }
+
   cancel() {
     if (!this.el) return;
     const target = this.target;
     this.el.remove();
+    if (target && target.type === 'note' && this.startH != null) target.h = this.startH;
+    this.startH = null;
     this.el = null; this.target = null; this.cell = null;
     if (target && target.type === 'text' && !target.text) this.app.store.remove([target.id], 'remove empty text');
     this.app.afterTextEdit();

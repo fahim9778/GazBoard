@@ -362,9 +362,23 @@ export class Interaction {
         break;
       }
       case 'laser': {
+        // One point per frame turns a fast sweep into a chain of long straight
+        // chords that visibly lag the pointer. The coalesced events carry where
+        // the pointer actually went between frames, same as ink does.
         const trail = this.surface.laser;
-        const last = trail[trail.length - 1];
-        if (!last || dist(last, wp) * this.surface.cam.z > 1.5) trail.push({ x: wp.x, y: wp.y, t: performance.now() });
+        const now = performance.now();
+        const push = (q) => {
+          const last = trail[trail.length - 1];
+          if (last && dist(last, q) * this.surface.cam.z <= 1.5) return;
+          trail.push({ x: q.x, y: q.y, t: now });
+        };
+        const evs = e && e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+        if (evs && evs.length) {
+          for (const ce of evs) {
+            const csp = this.surface.screenPoint(ce);
+            push(this.surface.cam.toWorld(csp.x, csp.y));
+          }
+        } else push(wp);
         break;
       }
       case 'marquee': a.cur = wp; break;

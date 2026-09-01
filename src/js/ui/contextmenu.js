@@ -121,6 +121,21 @@ export function updateSelectionBar(app) {
   if ([...types].every((t) => ['note', 'text', 'shape', 'table'].includes(t)) && sel.length === 1)
     bar.appendChild(mk('Edit text (F2)', 'text', () => app.beginTextEdit(sel[0])));
 
+  // a table gets its own row and column controls
+  if (sel.length === 1 && sel[0].type === 'table') {
+    const t = sel[0];
+    bar.appendChild(h('span', { class: 'bar-sep' }));
+    bar.appendChild(mk('Add row', 'rowAdd', () => app.command('table.addRow')));
+    const lessRow = mk('Remove row', 'rowDel', () => app.command('table.removeRow'));
+    if ((t.rows | 0) <= 1) lessRow.disabled = true;
+    bar.appendChild(lessRow);
+    bar.appendChild(mk('Add column', 'colAdd', () => app.command('table.addCol')));
+    const lessCol = mk('Remove column', 'colDel', () => app.command('table.removeCol'));
+    if ((t.cols | 0) <= 1) lessCol.disabled = true;
+    bar.appendChild(lessCol);
+    bar.appendChild(h('span', { class: 'bar-sep' }));
+  }
+
   bar.appendChild(mk('Duplicate (Ctrl+D)', 'duplicate', () => app.command('edit.duplicate')));
   bar.appendChild(mk('Bring to front', 'front', () => app.command('order.front')));
   bar.appendChild(mk(sel.every((o) => o.locked) ? 'Unlock' : 'Lock', sel.every((o) => o.locked) ? 'unlock' : 'lock', () => app.command('edit.lock')));

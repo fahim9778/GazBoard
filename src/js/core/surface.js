@@ -121,7 +121,7 @@ export class Surface {
     return { x: p.x - pad, y: p.y - pad, w: b.w * this.cam.z + pad * 2, h: b.h * this.cam.z + pad * 2 };
   }
 
-  static LASER_LIFE = 850;       // ms a point stays visible
+  static LASER_LIFE = 520;       // ms a point stays visible
 
   /** Drop trail points that have faded out. */
   pruneLaser() {
@@ -243,12 +243,19 @@ export class Surface {
     const w = this.width, h = this.height;
     if (!w || !h) return;
 
-    if (this.wet) {
+    /*
+     * The laser repaints on every single frame while it fades, and nothing
+     * underneath it can change while it does - it is a pointing device, it
+     * writes nothing into the document. Redrawing the whole board 60 times a
+     * second for a trail that is a dozen points long is what made the laser
+     * crawl on a heavy board; it now blits the same frozen copy a stroke uses.
+     */
+    if (this.wet || this.laser.length) {
       const key = `${this.store.rev}|${cam.x}|${cam.y}|${cam.z}|${w}|${h}|${this.dpr}`;
       if (!this._ink || this._ink.key !== key) this._ink = this._freezeScene(key);
       this.screenTransform();
       ctx.drawImage(this._ink.canvas, 0, 0, w, h);
-      this._drawWet(ctx);
+      if (this.wet) this._drawWet(ctx);
     } else {
       this._ink = null;
       this.drawScene(ctx, w, h);

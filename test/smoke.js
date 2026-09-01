@@ -3659,6 +3659,261 @@ async function run(win, app) {
   check('an empty board refuses to export rather than writing a blank PDF',
     (await js(`const a = window.app; a.newBoard(true); const r = await a.exportPdfWithSetup(); return r;`)) === null);
 
+  /* ---- sticky notes keep their text inside, and grow to hold it ---- */
+  const noteFit = await js(`
+    const a = window.app;
+    const { wrapText, fitFontSize } = await import('app://board/js/core/util.js');
+    const { faceOf } = await import('app://board/js/core/render.js');
+    // measure in the face the note is actually set in - a hard-coded family
+    // would measure something different on Windows, macOS and Linux
+    const FACE = faceOf('sans');
+    a.newBoard(true);
+    const g = document.createElement('canvas').getContext('2d');
+    const r = {};
+
+    // 1. a single unbroken word must be broken across lines, not run off the note
+    g.font = '400 24px ' + FACE;
+    const word = 'asdasdapofjpaoiejgfpajgpajgpajpregjapjgjg';
+    const lines = wrapText(g, word, 200);
+    r.brokenLines = lines.length;
+    r.widestBroken = Math.max(...lines.map((l) => g.measureText(l).width));
+    r.brokenKeepsEveryLetter = lines.join('') === word;
+
+    // 2. autofitting must pick a size that fits the WIDTH too, not only the height
+    const size = fitFontSize(g, word, 200, 400, FACE, '400', 46, 10);
+    g.font = '400 ' + size + 'px ' + FACE;
+    r.fitWidest = Math.max(...wrapText(g, word, 200).map((l) => g.measureText(l).width));
+
+    // 3. a note with a pinned font size grows tall enough to hold what is typed
+    const note = { id: 'note-grow', type: 'note', x: 0, y: 0, w: 220, h: 220,
+      text: '', color: '#ffd94a', rotation: 0, fontSize: 22, font: 'sans', align: 'center' };
+    a.store.add(note, 'test note');
+    a.setSelection(['note-grow']);
+    r.hBefore = a.store.get('note-grow').h;
+    a.beginTextEdit(a.store.get('note-grow'));
+    await new Promise((res) => setTimeout(res, 60));
+    const ta = document.querySelector('#editLayer textarea');
+    ta.value = Array.from({ length: 14 }, (_, i) => 'line number ' + i).join(String.fromCharCode(10));
+    ta.dispatchEvent(new Event('input'));
+    await new Promise((res) => setTimeout(res, 40));
+    r.hWhileTyping = a.store.get('note-grow').h;
+    a.textEditor.commit();
+    await new Promise((res) => setTimeout(res, 40));
+    const after = a.store.get('note-grow');
+    r.hAfter = after.h;
+
+    // the text really does fit in the note it ended up with
+    const pad = Math.max(10, after.w * 0.08);
+    g.font = '400 22px ' + FACE;
+    r.textHeight = wrapText(g, after.text, after.w - pad * 2).length * 22 * 1.28 + pad * 2;
+
+    // 4. growth is one undo, and it takes the height back with it
+    a.store.undo();
+    r.hAfterUndo = a.store.get('note-grow').h;
+    a.store.redo();
+    r.hAfterRedo = a.store.get('note-grow').h;
+
+    // 5. a note whose text already fits is left exactly as it was
+    const small = { id: 'note-small', type: 'note', x: 400, y: 0, w: 220, h: 220,
+      text: '', color: '#ffd94a', rotation: 0, font: 'sans', align: 'center' };
+    a.store.add(small, 'small note');
+    a.beginTextEdit(a.store.get('note-small'));
+    await new Promise((res) => setTimeout(res, 60));
+    const ta2 = document.querySelector('#editLayer textarea');
+    ta2.value = 'hi';
+    ta2.dispatchEvent(new Event('input'));
+    await new Promise((res) => setTimeout(res, 40));
+    a.textEditor.commit();
+    await new Promise((res) => setTimeout(res, 40));
+    r.smallH = a.store.get('note-small').h;
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('a word too long for the note is broken across lines instead of running off it',
+    noteFit.brokenLines > 1 && noteFit.widestBroken <= 200.5,
+    `${noteFit.brokenLines} lines, widest ${noteFit.widestBroken.toFixed(1)}px in a 200px note`);
+  check('breaking a long word keeps every letter of it', noteFit.brokenKeepsEveryLetter);
+  check('autofitting a note fits the width, not just the height',
+    noteFit.fitWidest <= 200.5, `${noteFit.fitWidest.toFixed(1)}px in 200px`);
+  check('a sticky note grows to hold text that will not fit in it',
+    noteFit.hAfter > noteFit.hBefore, `${noteFit.hBefore} -> ${noteFit.hAfter}`);
+  check('the note grows while it is being typed into, not only when editing ends',
+    noteFit.hWhileTyping > noteFit.hBefore, `${noteFit.hBefore} -> ${noteFit.hWhileTyping}`);
+  check('the text really does fit inside the note it grew into',
+    noteFit.textHeight <= noteFit.hAfter + 1,
+    `text needs ${Math.round(noteFit.textHeight)}px, note is ${noteFit.hAfter}px`);
+  check('growing a note is one undo, and undo takes the height back',
+    noteFit.hAfterUndo === noteFit.hBefore && noteFit.hAfterRedo === noteFit.hAfter,
+    `${noteFit.hBefore} -> ${noteFit.hAfter} -> undo ${noteFit.hAfterUndo} -> redo ${noteFit.hAfterRedo}`);
+  check('a note whose text already fits is left the size it was',
+    noteFit.smallH === 220, String(noteFit.smallH));
+
+  /* ---- table row and column controls ---- */
+  const tbl = await js(`
+    const { updateSelectionBar } = await import('app://board/js/ui/contextmenu.js');
+    const a = window.app;
+    a.newBoard(true);
+    a.addTable();
+    const t = a.store.objects.filter((o) => o.type === 'table').pop();
+    a.store.update(t.id, { cells: { '0,0': 'A', '2,2': 'corner', '1,1': 'mid' } }, 'seed');
+    a.setSelection([t.id]);
+    updateSelectionBar(a);
+    const bar = document.getElementById('ctxbar');
+    const titles = [...bar.querySelectorAll('button')].map((b) => b.title);
+    const r = { titles, plusSigns: bar.innerHTML.split('M16 12h6').length - 1 };
+
+    const before = a.store.get(t.id);
+    r.rows0 = before.rows; r.cols0 = before.cols; r.h0 = before.h; r.w0 = before.w;
+
+    a.command('table.addRow');
+    a.command('table.addCol');
+    let now = a.store.get(t.id);
+    r.rows1 = now.rows; r.cols1 = now.cols; r.h1 = now.h; r.w1 = now.w;
+    r.cellsKept = JSON.stringify(now.cells) === JSON.stringify(before.cells);
+
+    // the buttons are wired to the same commands
+    updateSelectionBar(a);
+    const addRowBtn = [...document.getElementById('ctxbar').querySelectorAll('button')]
+      .find((b) => b.title === 'Add row');
+    if (addRowBtn) addRowBtn.click();
+    r.rowsAfterClick = a.store.get(t.id).rows;
+
+    a.command('table.removeRow');
+    a.command('table.removeRow');
+    a.command('table.removeRow');
+    a.command('table.removeCol');
+    a.command('table.removeCol');
+    now = a.store.get(t.id);
+    r.rows2 = now.rows; r.cols2 = now.cols;
+    r.cellsAfterShrink = Object.keys(now.cells).sort().join('|');
+
+    // a table never shrinks past its last row or column
+    for (let i = 0; i < 10; i++) { a.command('table.removeRow'); a.command('table.removeCol'); }
+    now = a.store.get(t.id);
+    r.rowsFloor = now.rows; r.colsFloor = now.cols;
+
+    // and the buttons say so
+    a.setSelection([t.id]);
+    updateSelectionBar(a);
+    const btns = [...document.getElementById('ctxbar').querySelectorAll('button')];
+    r.removeDisabled = btns.filter((b) => /^Remove (row|column)$/.test(b.title)).every((b) => b.disabled);
+
+    a.store.undo();
+    r.undoOne = a.store.get(t.id).rows + 'x' + a.store.get(t.id).cols;
+
+    // a note is not a table: it gets no row controls
+    a.newBoard(true);
+    a.store.add({ id: 'nt', type: 'note', x: 0, y: 0, w: 200, h: 200, text: 'x', color: '#ffd94a', rotation: 0 }, 't');
+    a.setSelection(['nt']);
+    updateSelectionBar(a);
+    r.noteTitles = [...document.getElementById('ctxbar').querySelectorAll('button')].map((b) => b.title);
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('a selected table offers row and column controls',
+    ['Add row', 'Remove row', 'Add column', 'Remove column'].every((t) => tbl.titles.includes(t)),
+    tbl.titles.join(', '));
+  check('the add controls carry a visible plus sign', tbl.plusSigns >= 2, `${tbl.plusSigns} plus glyphs`);
+  check('adding a row and a column changes the table',
+    tbl.rows1 === tbl.rows0 + 1 && tbl.cols1 === tbl.cols0 + 1,
+    `${tbl.rows0}x${tbl.cols0} -> ${tbl.rows1}x${tbl.cols1}`);
+  check('a new row makes the table taller instead of squashing the rows already in it',
+    tbl.h1 > tbl.h0 && tbl.w1 > tbl.w0, `${tbl.h0}->${tbl.h1} tall, ${tbl.w0}->${tbl.w1} wide`);
+  check('adding a row keeps the text already typed into the table', tbl.cellsKept);
+  check('the plus button on the bar does the same thing as the command',
+    tbl.rowsAfterClick === tbl.rows1 + 1, String(tbl.rowsAfterClick));
+  check('removing rows and columns takes the text in them away too',
+    tbl.cellsAfterShrink === '0,0|1,1' && tbl.rows2 === 2 && tbl.cols2 === 2,
+    `${tbl.rows2}x${tbl.cols2}, cells ${tbl.cellsAfterShrink}`);
+  check('a table never shrinks past its last row or column',
+    tbl.rowsFloor === 1 && tbl.colsFloor === 1, `${tbl.rowsFloor}x${tbl.colsFloor}`);
+  check('the remove buttons are disabled once there is one row and one column left', tbl.removeDisabled);
+  // the floor loop ends on a column removal, so one undo puts back that column
+  // and nothing else
+  check('each row and column change is its own undo', tbl.undoOne === '1x2', tbl.undoOne);
+  check('a sticky note gets no row or column controls',
+    !tbl.noteTitles.some((t) => /row|column/i.test(t)), tbl.noteTitles.join(', '));
+
+  /* ---- the laser keeps up on a heavy board ---- */
+  const laserPerf = await js(`
+    const a = window.app;
+    a.newBoard(true);
+    // a board with real weight on it, like the one the lag was reported on
+    const objs = [];
+    for (let i = 0; i < 1200; i++) {
+      const pts = [];
+      for (let k = 0; k < 24; k++) pts.push({ x: (i % 40) * 30 + k * 1.5, y: Math.floor(i / 40) * 24 + Math.sin(k) * 6, p: 0.5 });
+      objs.push({ id: 'L' + i, type: 'stroke', tool: 'pen', color: '#333', width: 3, effect: 'none',
+        points: pts, bbox: { x: (i % 40) * 30, y: Math.floor(i / 40) * 24 - 6, w: 40, h: 20 }, rotation: 0 });
+    }
+    a.store.addMany(objs, 'heavy');
+    a.command('fit');
+    const sf = a.surface;
+    await new Promise((res) => requestAnimationFrame(res));
+
+    // Canvas work is queued for the GPU, so a tight loop of draw() calls can
+    // return long before the frames are actually painted. Reading one pixel
+    // back forces the queue to drain, which is what makes the two numbers
+    // below comparable.
+    const flush = () => sf.ctx.getImageData(0, 0, 1, 1);
+    const N = 30;
+    const time = (fn) => {
+      for (let i = 0; i < 5; i++) { fn(); flush(); }        // warm up
+      const t0 = performance.now();
+      for (let i = 0; i < N; i++) { fn(); flush(); }
+      return (performance.now() - t0) / N;
+    };
+
+    // How many times the whole board actually gets repainted is the claim being
+    // made here, and unlike a stopwatch it reads the same on every machine.
+    const realDrawScene = sf.drawScene.bind(sf);
+    let scenes = 0;
+    sf.drawScene = (...a) => { scenes++; return realDrawScene(...a); };
+
+    // what a frame costs when the whole board has to be redrawn
+    sf.laser = [];
+    const cold = time(() => { sf._ink = null; sf.draw(); });
+
+    // and with a trail alive: the board underneath cannot change while the
+    // laser fades, so it should be blitted rather than redrawn
+    const c = sf.cam.viewport(sf.width, sf.height);
+    sf.laser = [];
+    for (let i = 0; i < 20; i++) sf.laser.push({ x: c.x + i * 4, y: c.y + 40, t: performance.now() });
+    sf.draw();                                   // first frame builds the freeze
+    scenes = 0;
+    const warm = time(() => sf.draw());
+    const scenesPerLaserFrame = scenes;      // frames drawn = N warm-ups + N timed
+    const laserFrames = N + 5;               // the timed run plus its warm-up
+    const froze = !!sf._ink;
+    sf.drawScene = realDrawScene;
+
+    // the trail is dropped the moment the laser is gone
+    sf.laser = [];
+    sf.draw();
+    const dropped = !sf._ink;
+
+    const { Surface } = await import('app://board/js/core/surface.js');
+    const life = Surface.LASER_LIFE;
+
+    a.newBoard(true);
+    return { cold, warm, froze, dropped, life, scenesPerLaserFrame, laserFrames, objects: 1200 };
+  `);
+
+  check('the board is frozen under a live laser trail instead of redrawn every frame', laserPerf.froze);
+  check('a fading laser repaints the board once, not once per frame',
+    laserPerf.scenesPerLaserFrame === 0,
+    `${laserPerf.scenesPerLaserFrame} full board repaints across ${laserPerf.laserFrames} laser frames`);
+  check('a laser frame stays inside a 60fps budget on a 1200-object board',
+    laserPerf.warm < 16,
+    `${laserPerf.warm.toFixed(2)}ms per laser frame vs ${laserPerf.cold.toFixed(2)}ms for a full redraw of 1200 strokes`);
+  check('the frozen copy is thrown away as soon as the trail is gone', laserPerf.dropped);
+  check('the trail fades quickly rather than trailing behind the pointer',
+    laserPerf.life <= 600, `${laserPerf.life}ms`);
+
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
   await js(`await window.app.showAbout();`);

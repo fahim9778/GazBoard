@@ -630,6 +630,38 @@ class App {
     this.setTool('select');
   }
 
+  /**
+   * Add or remove a row (axis 0) or a column (axis 1) of the selected table.
+   *
+   * The table grows and shrinks by one row/column's worth of size, so the rows
+   * already in it keep the height they had rather than being squeezed to make
+   * room. Text in a row or column that goes away goes with it.
+   */
+  resizeTable(axis, delta) {
+    const sel = [...this.surface.selection].map((id) => this.store.get(id)).filter(Boolean);
+    if (sel.length !== 1 || sel[0].type !== 'table' || sel[0].locked) return;
+    const t = sel[0];
+    const key = axis ? 'cols' : 'rows';
+    const dim = axis ? 'w' : 'h';
+    const was = Math.max(1, t[key] | 0);
+    const now = was + delta;
+    if (now < 1) { this.toast(axis ? 'A table needs a column' : 'A table needs a row'); return; }
+    if (now > 40) { this.toast('That is as big as a table gets'); return; }
+
+    const patch = { [key]: now, [dim]: Math.round(t[dim] / was * now) };
+    if (delta < 0) {
+      const cells = {};
+      for (const [k, v] of Object.entries(t.cells || {})) {
+        const rc = k.split(',').map(Number);
+        if (rc[axis] < now) cells[k] = v;      // the dropped line takes its text with it
+      }
+      patch.cells = cells;
+    }
+    this.store.update(t.id, patch, delta > 0 ? (axis ? 'add column' : 'add row') : (axis ? 'remove column' : 'remove row'));
+    this.surface.invalidate();
+    this.syncUI();
+  }
+
   applyTemplate(tpl) {
     // a canvas-size template only sets the page; it adds nothing to the board
     if (tpl.page) { this.setPageSize(tpl.page.paper, tpl.page.orientation); return; }
@@ -693,6 +725,11 @@ class App {
             : 'Unlocked', lock ? 'lock' : 'unlock');
         break;
       }
+      case 'table.addRow': this.resizeTable(0, +1); break;
+      case 'table.removeRow': this.resizeTable(0, -1); break;
+      case 'table.addCol': this.resizeTable(1, +1); break;
+      case 'table.removeCol': this.resizeTable(1, -1); break;
+
       case 'order.front': s.reorder([...sf.selection], 'front'); break;
       case 'order.back': s.reorder([...sf.selection], 'back'); break;
       case 'order.forward': s.reorder([...sf.selection], 'forward'); break;
