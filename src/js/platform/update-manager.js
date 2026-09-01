@@ -3,7 +3,7 @@
 
 import { isNewer } from '../core/version.js';
 
-let _currentVersion = '2.4.0';
+let _currentVersion = null;
 let _updateAvailable = false;
 let _waitingWorker = null;
 let _updateListeners = new Set();
@@ -75,7 +75,8 @@ export async function checkForUpdate(opts = {}) {
     if (!meta || !meta.version) return { ok: false, error: 'Invalid version manifest' };
 
     const remoteVer = meta.version;
-    const newer = isNewer(remoteVer, _currentVersion);
+    const currentVer = _currentVersion || '0.0.0';
+    const newer = isNewer(remoteVer, currentVer);
 
     if (newer) {
       _updateAvailable = remoteVer;
@@ -95,7 +96,7 @@ export async function checkForUpdate(opts = {}) {
     return {
       ok: true,
       version: _currentVersion,
-      name: `GazBoard ${_currentVersion}`,
+      name: _currentVersion ? `GazBoard ${_currentVersion}` : 'GazBoard',
       url: window.location.href,
       prerelease: false
     };

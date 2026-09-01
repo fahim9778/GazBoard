@@ -19,7 +19,7 @@
     "build:web": "node scripts/build-web.js",
     "serve:web": "node scripts/serve-web.js",
     "dev:web": "node scripts/serve-web.js",
-    "test:web": "node test/web-pwa.test.js",
+    "test:web": "npm run build:web && node test/web-pwa.test.js",
     "test": "npm run smoke"
   },
   "author": {

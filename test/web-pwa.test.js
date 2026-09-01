@@ -432,10 +432,39 @@ async function runTests() {
     check('version comparator recognizes 2.4.0 not newer than 2.4.0', isNewer('2.4.0', '2.4.0') === false);
     check('version comparator recognizes 2.3.9 not newer than 2.4.0', isNewer('2.3.9', '2.4.0') === false);
 
-    const versionJsonPath = path.join(SRC, 'version.json');
-    check('version.json exists', fs.existsSync(versionJsonPath));
-    const versionMeta = JSON.parse(await fsp.readFile(versionJsonPath, 'utf8'));
-    check('version.json has valid version string', /^\d+\.\d+\.\d+/.test(versionMeta.version));
+    const updateMgr = await import('../src/js/platform/update-manager.js');
+    const originalFetch = global.fetch;
+
+    // Test update check with initialized installed version (same as server)
+    updateMgr.setAppVersion('2.4.1');
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ version: '2.4.1' })
+    });
+    const checkSame = await updateMgr.checkForUpdate();
+    check('update-manager reports current version when on latest', checkSame.ok === true && checkSame.version === '2.4.1' && checkSame.name === 'GazBoard 2.4.1');
+
+    // Test update check with newer version on server
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ version: '2.5.0' })
+    });
+    const checkNewer = await updateMgr.checkForUpdate();
+    check('update-manager reports remote version when newer update exists', checkNewer.ok === true && checkNewer.version === '2.5.0' && checkNewer.name === 'GazBoard 2.5.0');
+
+    // Test update check with uninitialized version (null)
+    updateMgr.setAppVersion(null);
+    global.fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ version: '0.0.0' })
+    });
+    const checkUnset = await updateMgr.checkForUpdate();
+    check('update-manager does not use remote version as fallback for uninitialized current version', checkUnset.ok === true && checkUnset.version === null && checkUnset.name === 'GazBoard');
+
+    global.fetch = originalFetch;
   } catch (e) {
     check('version comparison test failed', false, e.message);
   }
@@ -806,23 +835,26 @@ async function runTests() {
   try {
     check('package.json provides valid version string', typeof PKG.version === 'string' && /^\d+\.\d+\.\d+/.test(PKG.version));
 
-    if (fs.existsSync(DIST)) {
-      const distSwPath = path.join(DIST, 'sw.js');
-      const distSwContent = await fsp.readFile(distSwPath, 'utf8');
-      check('dist-web/sw.js contains package.json version', distSwContent.includes(`const VERSION = ${JSON.stringify(PKG.version)};`));
-      check('dist-web/sw.js defines versioned shell cache', distSwContent.includes('const SHELL_CACHE = `gazboard-shell-v${VERSION}`;'));
-      check('dist-web/sw.js defines versioned runtime cache', distSwContent.includes('const RUNTIME_CACHE = `gazboard-runtime-v${VERSION}`;'));
-      check('dist-web/sw.js uses atomic cache.addAll precaching', distSwContent.includes('cache.addAll(PRECACHE_ASSETS)'));
+    check('dist-web distribution directory exists', fs.existsSync(DIST));
 
-      const distAdapterPath = path.join(DIST, 'js', 'platform', 'web-adapter.js');
-      const distAdapterContent = await fsp.readFile(distAdapterPath, 'utf8');
-      check('dist-web/web-adapter.js contains package.json version', distAdapterContent.includes(`const APP_VERSION = ${JSON.stringify(PKG.version)};`));
+    const distSwPath = path.join(DIST, 'sw.js');
+    check('dist-web/sw.js exists', fs.existsSync(distSwPath));
+    const distSwContent = await fsp.readFile(distSwPath, 'utf8');
+    check('dist-web/sw.js contains package.json version', distSwContent.includes(`const VERSION = ${JSON.stringify(PKG.version)};`));
+    check('dist-web/sw.js defines versioned shell cache', distSwContent.includes('const SHELL_CACHE = `gazboard-shell-v${VERSION}`;'));
+    check('dist-web/sw.js defines versioned runtime cache', distSwContent.includes('const RUNTIME_CACHE = `gazboard-runtime-v${VERSION}`;'));
+    check('dist-web/sw.js uses atomic cache.addAll precaching', distSwContent.includes('cache.addAll(PRECACHE_ASSETS)'));
 
-      const distVersionPath = path.join(DIST, 'version.json');
-      check('dist-web/version.json exists', fs.existsSync(distVersionPath));
-      const distVersionMeta = JSON.parse(await fsp.readFile(distVersionPath, 'utf8'));
-      check('dist-web/version.json contains package.json version', distVersionMeta.version === PKG.version);
-    }
+    const distAdapterPath = path.join(DIST, 'js', 'platform', 'web-adapter.js');
+    check('dist-web/web-adapter.js exists', fs.existsSync(distAdapterPath));
+    const distAdapterContent = await fsp.readFile(distAdapterPath, 'utf8');
+    check('dist-web/web-adapter.js contains package.json version', distAdapterContent.includes(`const APP_VERSION = ${JSON.stringify(PKG.version)};`));
+
+    const distVersionPath = path.join(DIST, 'version.json');
+    check('dist-web/version.json exists', fs.existsSync(distVersionPath));
+    const distVersionMeta = JSON.parse(await fsp.readFile(distVersionPath, 'utf8'));
+    check('dist-web/version.json contains package.json version', distVersionMeta.version === PKG.version);
+    check('dist-web/version.json buildId derives from package.json version', typeof distVersionMeta.buildId === 'string' && distVersionMeta.buildId.startsWith(`${PKG.version}-pwa-`));
   } catch (e) {
     check('build version derivation verification failed', false, e.message);
   }
