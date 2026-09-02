@@ -21,7 +21,20 @@ permissions:
   contents: write        # needed to create the Release and upload files to it
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate Git tag matches package.json version
+        run: |
+          node -e "const pkg = require('./package.json'); if (process.env.GITHUB_REF_TYPE === 'tag' && 'v' + pkg.version !== process.env.GITHUB_REF_NAME) { console.error('Tag mismatch: Git tag ' + process.env.GITHUB_REF_NAME + ' does not match package.json v' + pkg.version); process.exit(1); } console.log('Version consistency verified: ' + pkg.version);"
+
   windows:
+    needs: [validate-version]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,6 +78,7 @@ jobs:
           generate_release_notes: true
 
   linux:
+    needs: [validate-version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +138,7 @@ jobs:
           generate_release_notes: true
 
   macos:
+    needs: [validate-version]
     # GitHub's macOS runners are Apple Silicon, and they can cross-build the
     # Intel slice too, so one job produces both downloads. Free on public repos.
     runs-on: macos-latest
@@ -179,3 +194,23 @@ jobs:
             dist/*.zip
           name: GazBoard ${{ github.ref_name }}
           generate_release_notes: true
+
+  web:
+    needs: [validate-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web distribution
+        run: npm run build:web
+
+      - name: Run web test suite
+        run: npm run test:web
+

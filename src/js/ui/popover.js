@@ -3,7 +3,14 @@
 let current = null;
 
 export function closePopover() {
-  if (current) { current.el.remove(); current.onClose?.(); current = null; }
+  if (current) {
+    if (current.cleanup) {
+      try { current.cleanup(); } catch {}
+    }
+    current.el.remove();
+    current.onClose?.();
+    current = null;
+  }
 }
 
 export function isOpen(key) { return current?.key === key; }
@@ -23,6 +30,11 @@ export function openPopover(anchor, content, opts = {}) {
   el.appendChild(content);
   document.body.appendChild(el);
 
+  const vw = window.visualViewport ? window.visualViewport.width : (window.innerWidth || 1024);
+  const vh = window.visualViewport ? window.visualViewport.height : (window.innerHeight || 768);
+  const vx = window.visualViewport ? (window.visualViewport.offsetLeft || 0) : 0;
+  const vy = window.visualViewport ? (window.visualViewport.offsetTop || 0) : 0;
+
   const r = el.getBoundingClientRect();
   let left, top;
   if (anchor instanceof HTMLElement) {
@@ -30,24 +42,35 @@ export function openPopover(anchor, content, opts = {}) {
     const align = opts.align || 'center';
     left = align === 'start' ? a.left : align === 'end' ? a.right - r.width : a.left + a.width / 2 - r.width / 2;
     top = opts.placement === 'bottom' ? a.bottom + 8 : a.top - r.height - 8;
-    if (top < 8) top = a.bottom + 8;
+    if (top < vy + 8) top = a.bottom + 8;
   } else {
     left = anchor.x; top = anchor.y;
-    if (top + r.height > innerHeight - 8) top = Math.max(8, anchor.y - r.height);
+    if (top + r.height > vy + vh - 8) top = Math.max(vy + 8, anchor.y - r.height);
   }
-  el.style.left = Math.max(8, Math.min(left, innerWidth - r.width - 8)) + 'px';
-  el.style.top = Math.max(8, Math.min(top, innerHeight - r.height - 8)) + 'px';
+  el.style.left = Math.max(vx + 8, Math.min(left, vx + vw - r.width - 8)) + 'px';
+  el.style.top = Math.max(vy + 8, Math.min(top, vy + vh - r.height - 8)) + 'px';
 
-  current = { el, key, onClose: opts.onClose };
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    document.removeEventListener('pointerdown', off, true);
+  };
 
   const off = (e) => {
     if (!current) return;
     if (current.el.contains(e.target)) return;
     if (anchor instanceof HTMLElement && anchor.contains(e.target)) return;
+    cleanup();
     closePopover();
-    document.removeEventListener('pointerdown', off, true);
   };
-  setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
+
+  current = { el, key, onClose: opts.onClose, cleanup };
+  setTimeout(() => {
+    if (current && current.cleanup === cleanup) {
+      document.addEventListener('pointerdown', off, true);
+    }
+  }, 0);
   return el;
 }
 

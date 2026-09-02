@@ -31,6 +31,22 @@ export class TextEditor {
     ta.value = cell ? (obj.cells?.[cell] || '') : (obj.text || '');
     this.el = ta;
     this.layer.appendChild(ta);
+    // On touch/mobile viewports, keep active edit target in comfortable visible area above software keyboard
+    const p = app.surface.cam.toScreen(obj.x + (obj.w || 200) / 2, obj.y + (obj.h || 100) / 2);
+    const vh = window.visualViewport ? window.visualViewport.height : (window.innerHeight || 768);
+    // A pen-and-touch Windows laptop reports touch points and fires ontouchstart
+    // exactly as a phone does, so testing for touch AT ALL made the board scroll
+    // out from under anyone editing a note low in the window on a touchscreen PC.
+    // What this actually wants to know is whether the pointer is a fingertip, and
+    // that is what (pointer: coarse) reports: a phone or tablet matches, a laptop
+    // with a mouse or a pen does not, touchscreen or otherwise.
+    const touchFirst = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (p.y > vh * 0.65 && touchFirst) {
+      app.surface.cam.panBy(0, -(p.y - vh * 0.38));
+      app.surface.clampCamera();
+      app.surface.invalidate();
+    }
+
     this.place();
 
     ta.addEventListener('input', () => { this.place(); app.surface.invalidate(); });

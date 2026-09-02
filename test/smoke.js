@@ -4078,6 +4078,53 @@ module.exports.run = async (win, app) => {
   check('nothing is left behind in the folder beside the .exe but the data folder',
     (await fs.readdir(stick)).join(',') === 'GazBoard-Data', (await fs.readdir(stick)).join(','));
 
+  /* ---- editing a note must not scroll the board on a desktop ---- */
+  const keyboardPan = await js(`
+    const a = window.app;
+    const realMM = window.matchMedia;
+
+    // Pose as three machines in turn. maxTouchPoints and ontouchstart say a
+    // device CAN take touch; (pointer: coarse) says a fingertip is what is
+    // actually driving it. A Windows laptop with a touchscreen and a mouse
+    // answers yes to the first and no to the second, which is the whole point.
+    const poseAs = (touchPoints, pointer) => {
+      Object.defineProperty(navigator, 'maxTouchPoints', { value: touchPoints, configurable: true });
+      window.matchMedia = (q) => String(q).includes('coarse')
+        ? { matches: pointer === 'coarse', media: q, addListener() {}, removeListener() {} }
+        : realMM.call(window, q);
+    };
+
+    // A note low in the window is where a software keyboard would cover it.
+    const scrollOnEdit = async () => {
+      a.newBoard(true);
+      const v = a.surface.cam.viewport(a.surface.width, a.surface.height);
+      a.store.add({ id: 'kb1', type: 'note', x: v.x + 100, y: v.y + v.h * 0.85,
+        w: 200, h: 120, text: 'hi', color: '#ffd94a', rotation: 0, font: 'hand', align: 'center' }, 'test');
+      const before = a.surface.cam.y;
+      a.beginTextEdit(a.store.get('kb1'));
+      await new Promise((r) => setTimeout(r, 150));
+      const moved = Math.round(Math.abs(a.surface.cam.y - before));
+      a.textEditor.commit();
+      return moved;
+    };
+
+    poseAs(0, 'fine');    const desktop = await scrollOnEdit();
+    poseAs(10, 'fine');   const touchLaptop = await scrollOnEdit();
+    poseAs(5, 'coarse');  const phone = await scrollOnEdit();
+
+    window.matchMedia = realMM;
+    Object.defineProperty(navigator, 'maxTouchPoints', { value: 0, configurable: true });
+    a.newBoard(true);
+    return { desktop, touchLaptop, phone };
+  `);
+
+  check('editing a note does not scroll the board on a plain desktop',
+    keyboardPan.desktop === 0, `${keyboardPan.desktop}px`);
+  check('nor on a touchscreen laptop being driven with a mouse or a pen',
+    keyboardPan.touchLaptop === 0, `${keyboardPan.touchLaptop}px`);
+  check('but a phone still lifts the note clear of the software keyboard',
+    keyboardPan.phone > 100, `${keyboardPan.phone}px`);
+
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
   await js(`await window.app.showAbout();`);

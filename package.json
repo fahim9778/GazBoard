@@ -9,12 +9,17 @@
     "dev": "electron . --dev",
     "smoke": "node scripts/smoke.js",
     "smoke:builtin": "node scripts/smoke.js --builtin",
+    "smoke:headless": "node scripts/smoke.js --builtin --headless",
     "test:restart": "sh test/restart-test.sh",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
     "dist:linux": "electron-builder --linux",
     "smoke:mac": "node scripts/smoke.js",
+    "build:web": "node scripts/build-web.js",
+    "serve:web": "node scripts/serve-web.js",
+    "dev:web": "node scripts/serve-web.js",
+    "test:web": "npm run build:web && node test/web-pwa.test.js",
     "test": "npm run smoke"
   },
   "author": {
@@ -47,6 +52,7 @@
       "main.js",
       "preload.js",
       "src/**/*",
+      "!src/package.json",
       "package.json",
       "!test/out/**"
     ],

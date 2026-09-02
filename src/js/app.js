@@ -1,5 +1,6 @@
 // GazBoard - application shell and command surface.
 
+import './platform/platform.js';
 import { Store, withAttached, worldBounds, boundsOf } from './core/store.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
@@ -1443,11 +1444,13 @@ class App {
         `Developer &nbsp;<b style="color:var(--text)">MD. Fakhruddin Gazzali</b><br>` +
         `Contact &nbsp;<a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
         `Created with <span style="color:#e81123">&hearts;</span> with Claude Cowork` }));
+    const platformDetails = i.electron
+      ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>Electron ${i.electron} · Chromium ${i.chrome}`
+      : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;
     card.appendChild(h('div', {
       style: 'margin-top:12px;font-size:11.5px;color:var(--text-2);line-height:1.7',
-      html:
-        `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>` +
-        `Electron ${i.electron} · Chromium ${i.chrome}` }));
+      html: platformDetails
+    }));
     // Next to the version number is where anyone looks for this.
     const check = h('button', { class: 'btn' }, 'Check for updates');
     check.addEventListener('click', async () => {

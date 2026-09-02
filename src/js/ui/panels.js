@@ -187,12 +187,17 @@ export function createPanels(app) {
 
       const info = h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' });
       window.board.info().then((i) => {
+        const platformLines = i.electron
+          ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
+            `Office conversion: <b>${i.libreoffice ? 'LibreOffice detected' : 'built-in converter'}</b><br>` +
+            `Boards folder: <code style="font-size:11px">${i.userData}</code>`
+          : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>` +
+            `Boards storage: <code style="font-size:11px">${i.userData}</code>`;
+
         info.innerHTML = `<b style="color:var(--text)">GazBoard ${i.version}</b> · by <b style="color:var(--accent)">theBoringCodes</b><br>` +
           `MD. Fakhruddin Gazzali · <a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
           `Created with <span style="color:#e81123">&hearts;</span> with Claude Cowork<br>` +
-          `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
-          `Office conversion: <b>${i.libreoffice ? 'LibreOffice detected' : 'built-in converter'}</b><br>` +
-          `Boards folder: <code style="font-size:11px">${i.userData}</code>`;
+          platformLines;
       });
 
       return h('div', {},
@@ -257,11 +262,18 @@ export function createPanels(app) {
     // in a settings screen.
     window.board.info().then((i) => {
       if (!document.getElementById('boardList')) return;
-      const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
-        h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, saved on this computer at:`),
-        h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData + '/boards'),
-        h('button', { class: 'btn', style: 'width:100%', onclick: () => window.board.showItem(i.userData + '/boards') }, 'Open that folder'));
-      host.appendChild(foot);
+      if (i.electron) {
+        const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
+          h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, saved on this computer at:`),
+          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData + '/boards'),
+          h('button', { class: 'btn', style: 'width:100%', onclick: () => window.board.showItem(i.userData + '/boards') }, 'Open that folder'));
+        host.appendChild(foot);
+      } else {
+        const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
+          h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, stored in browser persistence:`),
+          h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData));
+        host.appendChild(foot);
+      }
     });
     for (const b of list) {
       const row = h('button', { class: 'board-row' },
