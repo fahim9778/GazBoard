@@ -12,7 +12,7 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 
 <div align="center">
 
-⏬ [**Download the latest stable version**](https://github.com/fahim9778/GazBoard/releases/latest)
+## ⏬ [**Download the latest stable version**](https://github.com/fahim9778/GazBoard/releases/latest)
 
 🌐 [**Live Demo**](https://gazboard-web-alpha.vercel.app/) (PWA alpha build)
 
@@ -28,12 +28,16 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 | Platform | File | How |
 |---|---|---|
 | **Windows 10 / 11** | `GazBoard-Setup-*.exe` | Run it. No admin rights needed. |
+| **Windows — portable** | `GazBoard-*-portable.exe` | Just run it. Nothing is installed. |
 | **macOS — Apple Silicon** | `GazBoard-*-arm64.dmg` | Open it, drag to Applications. See the note below. |
 | **macOS — Intel** | `GazBoard-*.dmg` | Open it, drag to Applications. See the note below. |
 | **Ubuntu / Debian** | `gazboard_*_amd64.deb` | `sudo apt install ./gazboard_*.deb` |
 | **Other Linux** | `GazBoard-*.AppImage` | `chmod +x` it and run it |
 
 Not sure which Mac you have? Apple menu →  About This Mac. **Apple M1/M2/M3/M4** means Apple Silicon; anything saying **Intel** takes the other file.
+
+The **portable** build installs nothing and keeps everything — boards, pictures, settings — in a `GazBoard-Data` folder next to the `portable.exe`. Put those on a USB stick and your work travels with it; run it on a school or office PC and nothing is left behind. If the .exe sits somewhere it cannot write, it falls back to the normal
+per-user folder rather than refusing to start.
 
 ### None of the downloads are code-signed, so each system might complain once, for the first-time only
 
@@ -313,7 +317,7 @@ npm run smoke:builtin    # forces the built-in Office converter
 npm run test:restart     # kills the app mid-session and checks the board comes back
 ```
 
-193 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
+as of 02-Sep-2026, 368 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
 pan-while-drawing and edge auto-pan, shape recognition, notes/text/shapes/tables, undo/redo,
 transforms, hit testing, the pen tray, click-away deselect, the zoom readout, the handwriting
 font, the pen-nib cursor, the About plate, the handwriting default and its settings migration,
