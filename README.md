@@ -401,4 +401,4 @@ export and settings are all here.
 
 MIT licensed. Not affiliated with or endorsed by Microsoft.
 
-*by theBoringCodes — Co-created with ♥ with Claude Cowork*
+*by theBoringCodes (of [@fahim9778](https://github.com/fahim9778))  — Co-created with ♥ with Claude Cowork*
