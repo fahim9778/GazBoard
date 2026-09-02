@@ -1,0 +1,7 @@
+{
+  "name": "gazboard",
+  "compatibility_date": "2026-09-02",
+  "assets": {
+    "directory": "./dist-web"
+  }
+}
