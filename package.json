@@ -9,7 +9,7 @@
     "dev": "electron . --dev",
     "smoke": "node scripts/smoke.js",
     "smoke:builtin": "node scripts/smoke.js --builtin",
-    "smoke:headless": "GAZBOARD_DISABLE_LIBREOFFICE=1 electron . --smoke --no-sandbox --headless",
+    "smoke:headless": "node scripts/smoke.js --builtin --headless",
     "test:restart": "sh test/restart-test.sh",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
