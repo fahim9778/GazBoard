@@ -6,13 +6,15 @@
 
 </div>
 
-A free-form digital whiteboard for Windows, Linux and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **there is no Microsoft sign-in and no cloud.** 
+A free-form digital whiteboard for Windows, Linux, and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **no Microsoft sign-in and no cloud. **** 
 
-Everything runs locally. On top of the original feature set it can **import Word, PowerPoint and PDF files** onto the canvas as pages you draw over.
+Everything runs locally. On top of the original feature set, it can **import Word, PowerPoint and PDF files** onto the canvas as pages you draw over.
 
 <div align="center">
 
-[**Download the latest version**](https://github.com/fahim9778/GazBoard/releases/latest)
+⏬ [**Download the latest stable version**](https://github.com/fahim9778/GazBoard/releases/latest)
+
+🌐 [**Live Demo**](https://gazboard-web-alpha.vercel.app/) (PWA alpha build)
 
 </div>
 
@@ -53,6 +55,20 @@ xattr -dr com.apple.quarantine /Applications/GazBoard.app
 **Linux** does not complain at all. If the AppImage says it requires FUSE:
 `sudo apt install libfuse2`, or unpack it with `./GazBoard-*.AppImage --appimage-extract` and run
 `squashfs-root/gazboard`.
+
+### In a browser, without installing anything (PWA)
+
+There is now a alpha web build as well: **<https://gazboard-web-alpha.vercel.app/>**
+
+It is the same board — the same pens, the same import, the same export — running in the browser instead of as an installed app. It works offline once loaded, and
+it can be installed to your home screen or desktop from the browser's own menu.
+
+Two things to know before you rely on it:
+
+- **It is an alpha.** The desktop app is the version to use for anything that matters.
+- **Your boards live in that browser, on that device.** They are stored in the browser's own storage, not in a file and not in any cloud, so they do not follow you to another machine, and clearing your browsing data clears them. Export anything you want to keep.
+
+The web build was contributed by [Aditya Banik](https://github.com/voidplacer) and is hosted on his Vercel account.
 
 ---
 
