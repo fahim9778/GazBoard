@@ -14,7 +14,7 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 
 ## ⏬ [**Download the latest stable version**](https://github.com/fahim9778/GazBoard/releases/latest)
 
-🌐 [**Live Demo**](https://gazboard-web-alpha.vercel.app/) (PWA alpha build)
+🌐 [**try it in your browser**](https://gazboard.fahim9778.workers.dev/) — no install
 
 </div>
 
@@ -36,8 +36,21 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 
 Not sure which Mac you have? Apple menu →  About This Mac. **Apple M1/M2/M3/M4** means Apple Silicon; anything saying **Intel** takes the other file.
 
-The **portable** build installs nothing and keeps everything — boards, pictures, settings — in a `GazBoard-Data` folder next to the `portable.exe`. Put those on a USB stick and your work travels with it; run it on a school or office PC and nothing is left behind. If the .exe sits somewhere it cannot write, it falls back to the normal
-per-user folder rather than refusing to start.
+The **portable** build installs nothing and keeps everything — boards, pictures, settings — in a `GazBoard-Data` folder next to the `portable.exe`. Put those on a USB stick and your work travels with it; run it on a school or office PC and nothing is left behind. If the .exe sits somewhere it cannot write, it falls back to the normal per-user folder rather than refusing to start.
+
+### In a browser, without installing anything
+
+There is now a web build as well: **<https://gazboard.fahim9778.workers.dev/>**
+
+It is the same board — the same pens, the same import, the same export — running in the browser instead of as an installed app. It works offline once loaded, and
+it can be installed to your home screen or desktop from the browser's own menu.
+
+Two things to know before you rely on it:
+
+- **It is newer than the desktop app and less tested.** The desktop version is the one to use for anything that matters.
+- **Your boards live in that browser, on that device.** They are stored in the browser's own storage, not in a file and not in any cloud, so they do not follow you to another machine, and clearing your browsing data clears them. ***_Export anything you want to keep._***
+
+The web build was contributed by [Aditya Banik](https://github.com/voidplacer).
 
 ### None of the downloads are code-signed, so each system might complain once, for the first-time only
 
@@ -46,11 +59,7 @@ Every warning below is about the missing signature, not about the app.
 
 **Windows** shows a blue **“Windows protected your PC”** box — click **More info → Run anyway**.
 
-**macOS** refuses the first launch, and its wording is alarming: either *“the developer cannot be
-verified”* or ***“GazBoard is damaged and can’t be opened. You should move it to the Trash.”***
-Nothing is damaged. Open **System Settings → Privacy & Security**, scroll down, click
-**Open Anyway**, and confirm. macOS remembers, so this is once per install. If it still refuses,
-clear the download flag your browser attached:
+**macOS** refuses the first launch, and its wording is alarming: either *“the developer cannot be verified”* or ***“GazBoard is damaged and can’t be opened. You should move it to the Trash.”*** Nothing is damaged. Open **System Settings → Privacy & Security**, scroll down, click **Open Anyway**, and confirm. macOS remembers, so this is once per install. If it still refuses, clear the download flag your browser attached:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/GazBoard.app
@@ -59,20 +68,6 @@ xattr -dr com.apple.quarantine /Applications/GazBoard.app
 **Linux** does not complain at all. If the AppImage says it requires FUSE:
 `sudo apt install libfuse2`, or unpack it with `./GazBoard-*.AppImage --appimage-extract` and run
 `squashfs-root/gazboard`.
-
-### In a browser, without installing anything (PWA)
-
-There is now a alpha web build as well: **<https://gazboard-web-alpha.vercel.app/>**
-
-It is the same board — the same pens, the same import, the same export — running in the browser instead of as an installed app. It works offline once loaded, and
-it can be installed to your home screen or desktop from the browser's own menu.
-
-Two things to know before you rely on it:
-
-- **It is an alpha.** The desktop app is the version to use for anything that matters.
-- **Your boards live in that browser, on that device.** They are stored in the browser's own storage, not in a file and not in any cloud, so they do not follow you to another machine, and clearing your browsing data clears them. Export anything you want to keep.
-
-The web build was contributed by [Aditya Banik](https://github.com/voidplacer) and is hosted on his Vercel account.
 
 ---
 
@@ -96,7 +91,7 @@ npm run dist:linux   # AppImage + .deb
 Installers land in `dist/`. Build on the target OS (or use a CI matrix) — electron-builder
 does not cross-compile Windows installers from Linux without extra tooling.
 
-On Linux the AppImage needs FUSE 2 to run. Most desktops already have it; on newer Ubuntu
+On Linux, the AppImage needs FUSE 2 to run. Most desktops already have it; on newer Ubuntu
 it is `sudo apt install libfuse2`. Otherwise `./GazBoard-*.AppImage --appimage-extract`
 unpacks it and `squashfs-root/gazboard` runs directly. The `.deb` has no such requirement.
 
