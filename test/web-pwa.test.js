@@ -946,6 +946,107 @@ async function runTests() {
     check('storage haveAssets verification failed', false, e.message);
   }
 
+  /* ---------------- 12. SHA-256 Fallback & Content-Addressed Collision Regression ---------------- */
+  try {
+    const storage = await import('../src/js/platform/web-storage.js');
+    const origCryptoDesc = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+
+    function makePngDataUrl(buf) {
+      return `data:image/png;base64,${Buffer.from(buf).toString('base64')}`;
+    }
+
+    try {
+      // Temporarily disable Web Crypto (crypto.subtle) to explicitly force pure-JS fallback path
+      Object.defineProperty(globalThis, 'crypto', { value: undefined, configurable: true, writable: true });
+
+      // Test 1: NIST SHA-256 Vectors (FIPS 180-4) via putAsset
+      const nistVectors = [
+        { name: 'empty string', text: '', expected: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' },
+        { name: 'abc', text: 'abc', expected: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad' },
+        { name: 'fox without period', text: 'The quick brown fox jumps over the lazy dog', expected: 'd7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592' },
+        { name: 'fox with period', text: 'The quick brown fox jumps over the lazy dog.', expected: 'ef537f25c895bfa782526529a9b63d97aa631564d5d789c2b765448c8635fb6c' }
+      ];
+
+      for (const nv of nistVectors) {
+        const dataUrl = `data:image/png;base64,${Buffer.from(nv.text).toString('base64')}`;
+        const res = await storage.putAsset(dataUrl);
+        const expectedId = `${nv.expected}.png`;
+        check(`SHA-256 fallback matches NIST vector for ${nv.name}`, res && res.id === expectedId, `id: ${res?.id}`);
+      }
+
+      // Test 2: Differential Testing against Node.js crypto across multiple boundary lengths
+      const testLengths = [0, 1, 2, 7, 54, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 129, 255, 256, 1024, 2048];
+      let diffPassed = true;
+      let diffFailureDetail = '';
+
+      for (const len of testLengths) {
+        const buf = Buffer.alloc(len);
+        for (let i = 0; i < len; i++) {
+          buf[i] = (i * 37 + (i % 7) * 13) & 0xff;
+        }
+        const expectedHash = crypto.createHash('sha256').update(buf).digest('hex');
+        const dataUrl = makePngDataUrl(buf);
+        const res = await storage.putAsset(dataUrl);
+        if (!res || res.id !== `${expectedHash}.png`) {
+          diffPassed = false;
+          diffFailureDetail = `Length ${len}: got ${res?.id}, expected ${expectedHash}.png`;
+          break;
+        }
+      }
+      check('SHA-256 fallback matches Node crypto across boundary lengths (0..2048 bytes)', diffPassed, diffFailureDetail);
+
+      // Test 3: Disable Web Crypto verification
+      check('SHA-256 fallback executes successfully when Web Crypto subtle is unavailable', typeof global.crypto === 'undefined');
+
+      // Test 4: Reproduce reviewer 48-byte differential collision pattern
+      const bufA = Buffer.alloc(48);
+      const bufB = Buffer.alloc(48);
+      for (let i = 0; i < 48; i++) {
+        bufA[i] = (i * 5) & 0xff;
+        bufB[i] = (i * 5) & 0xff;
+      }
+      bufB[0] ^= 0x5a;
+      bufB[24] ^= 0x5a;
+
+      const hashA = crypto.createHash('sha256').update(bufA).digest('hex');
+      const hashB = crypto.createHash('sha256').update(bufB).digest('hex');
+      const resA = await storage.putAsset(makePngDataUrl(bufA));
+      const resB = await storage.putAsset(makePngDataUrl(bufB));
+
+      check('Reviewer 48-byte differential inputs are non-identical', !bufA.equals(bufB));
+      check('SHA-256 fallback generates distinct hashes for 48-byte differential inputs (no % 24 collision)',
+        resA && resB && resA.id !== resB.id && resA.id === `${hashA}.png` && resB.id === `${hashB}.png`,
+        `resA: ${resA?.id?.slice(0, 16)}..., resB: ${resB?.id?.slice(0, 16)}...`
+      );
+
+      // Test 5: Asset-level regression: distinct assets coexist in IndexedDB without silent replacement
+      const getA = await storage.getAsset(resA.id);
+      const getB = await storage.getAsset(resB.id);
+      const expectedUrlA = makePngDataUrl(bufA);
+      const expectedUrlB = makePngDataUrl(bufB);
+
+      check('Distinct assets coexist independently in store without deduplication collision',
+        getA === expectedUrlA && getB === expectedUrlB && getA !== getB
+      );
+
+    } finally {
+      if (origCryptoDesc) {
+        Object.defineProperty(globalThis, 'crypto', origCryptoDesc);
+      }
+    }
+
+    // Verify Web Crypto fast path produces identical hash to fallback path
+    const testSample = Buffer.from('GazBoard Web Crypto Fast Path Parity Verification');
+    const fastExpectedHash = crypto.createHash('sha256').update(testSample).digest('hex');
+    const fastRes = await storage.putAsset(makePngDataUrl(testSample));
+    check('Web Crypto fast path and fallback generate identical standard SHA-256 IDs',
+      fastRes && fastRes.id === `${fastExpectedHash}.png`
+    );
+
+  } catch (e) {
+    check('SHA-256 fallback regression tests failed', false, e.message);
+  }
+
   /* ---------------- Results Summary ---------------- */
   console.log(`\n========================================`);
   console.log(`  Web/PWA Test Suite: ${pass} passed, ${fail} failed`);
