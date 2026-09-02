@@ -107,7 +107,7 @@ self.addEventListener('fetch', (event) => {
   // Never cache version check manifest or update API
   if (url.pathname.endsWith('/version.json') || url.searchParams.has('t')) {
     event.respondWith(
-      fetch(req).catch(() => new Response(JSON.stringify({ ok: false, error: 'Offline' }), {
+      fetch(req, { signal: AbortSignal.timeout(5000) }).catch(() => new Response(JSON.stringify({ ok: false, error: 'Offline' }), {
         headers: { 'Content-Type': 'application/json' }
       }))
     );

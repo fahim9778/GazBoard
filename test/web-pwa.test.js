@@ -419,6 +419,122 @@ async function runTests() {
     check('precache failure rejects install event waitUntil promise and prevents incomplete worker activation',
       failureError !== null && failureError.message.includes('404 Not Found')
     );
+
+    // 2d. Service Worker version.json fetch timeout & captive portal regression test
+    check('sw.js specifies AbortSignal.timeout(5000) for version.json network fetch',
+      swContent.includes('fetch(req, { signal: AbortSignal.timeout(5000) })')
+    );
+
+    async function simulateSwFetch(swScript, reqUrl, mockFetchImpl) {
+      let fetchHandler = null;
+      const fakeSelf = {
+        addEventListener: (type, fn) => {
+          if (type === 'fetch') fetchHandler = fn;
+        },
+        skipWaiting: () => {},
+        clients: { claim: async () => {} }
+      };
+      fakeSelf.self = fakeSelf;
+
+      let interceptedOpts = null;
+      let timeoutMs = null;
+      const trackedAbortSignal = {
+        timeout: (ms) => {
+          timeoutMs = ms;
+          return AbortSignal.timeout(ms);
+        }
+      };
+
+      class MockResponse {
+        constructor(body, init = {}) {
+          this.body = body;
+          this.headers = new Map(Object.entries(init.headers || {}));
+          this.status = init.status || 200;
+        }
+        async json() {
+          return typeof this.body === 'string' ? JSON.parse(this.body) : this.body;
+        }
+      }
+
+      let respondWithPromise = null;
+      const fakeEvent = {
+        request: {
+          method: 'GET',
+          url: reqUrl,
+          mode: 'cors'
+        },
+        respondWith: (p) => {
+          respondWithPromise = p;
+        }
+      };
+
+      const context = vm.createContext({
+        self: fakeSelf,
+        caches: { open: async () => ({ addAll: async () => {} }) },
+        console: { log: () => {}, warn: () => {}, error: () => {} },
+        fetch: async (req, opts) => {
+          interceptedOpts = opts;
+          return mockFetchImpl(req, opts);
+        },
+        Response: MockResponse,
+        AbortSignal: trackedAbortSignal,
+        URL: URL,
+        navigator: { onLine: true }
+      });
+
+      vm.runInContext(swScript, context);
+
+      if (!fetchHandler) {
+        throw new Error('Fetch event handler not found');
+      }
+
+      fetchHandler(fakeEvent);
+      const res = await respondWithPromise;
+      return { res, interceptedOpts, timeoutMs };
+    }
+
+    const timeoutSim = await simulateSwFetch(
+      swContent,
+      'https://example.com/version.json?t=123456789',
+      async (_req, _opts) => {
+        const timeoutErr = new Error('The operation was aborted due to timeout');
+        timeoutErr.name = 'TimeoutError';
+        throw timeoutErr;
+      }
+    );
+
+    check('sw.js intercepts version.json and configures exactly 5000ms timeout signal',
+      timeoutSim.timeoutMs === 5000 &&
+      timeoutSim.interceptedOpts &&
+      timeoutSim.interceptedOpts.signal instanceof AbortSignal
+    );
+
+    const timeoutBody = await timeoutSim.res.json();
+    check('sw.js returns offline fallback when version.json fetch times out (captive portal)',
+      timeoutSim.res &&
+      timeoutBody &&
+      timeoutBody.ok === false &&
+      timeoutBody.error === 'Offline' &&
+      timeoutSim.res.headers.get('Content-Type') === 'application/json'
+    );
+
+    const successSimFetch = await simulateSwFetch(
+      swContent,
+      'https://example.com/version.json',
+      async () => {
+        return {
+          status: 200,
+          headers: new Map([['Content-Type', 'application/json']]),
+          json: async () => ({ version: '2.5.0', buildId: '2.5.0-pwa' })
+        };
+      }
+    );
+    const successBody = await successSimFetch.res.json();
+    check('sw.js returns live network response when version.json fetch succeeds',
+      successSimFetch.res &&
+      successBody &&
+      successBody.version === '2.5.0'
+    );
   } catch (e) {
     check('service worker validation failed', false, e.message);
   }
