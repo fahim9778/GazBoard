@@ -51,3 +51,35 @@ export function inkCursor(kind, color, fallback = 'crosshair') {
   }
   return c;
 }
+
+/* ------------------------------------------------------------------ *
+ * The same glyphs, as a plain image for the ink-pointer layer.
+ *
+ * A CSS cursor is drawn by the operating system, and Windows takes the system
+ * pointer away the moment a pen touches the digitiser, putting it back on lift.
+ * On a tablet that reads as the nib blinking once per stroke, and there is
+ * nothing CSS can do about it - the thing being hidden is not ours.
+ *
+ * So the nib becomes an element of our own, moved with a transform. Not painted
+ * into the canvas: while hovering there is no stroke in flight and therefore no
+ * cached frame to reuse, so a canvas nib means redrawing the entire board on
+ * every pointer move. A composited layer moves for free and leaves the board
+ * alone.
+ * ------------------------------------------------------------------ */
+
+/** The glyph on its own, with no hotspot - for `background-image`. */
+export function inkGlyphUrl(kind, color) {
+  const key = 'img' + kind + color;
+  let u = cache.get(key);
+  if (!u) {
+    const svg = kind === 'highlighter' ? markerSvg(color) : penSvg(color);
+    u = `url("data:image/svg+xml,${esc(svg)}")`;
+    cache.set(key, u);
+  }
+  return u;
+}
+
+/** Where the drawing tip sits inside that 26x26 glyph. */
+export function inkGlyphHotspot(kind) {
+  return kind === 'highlighter' ? { x: 2, y: 5 } : { x: 2, y: 2 };
+}

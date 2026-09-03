@@ -230,6 +230,14 @@ async function migrateLegacyData() {
  * ------------------------------------------------------------------ */
 let mainWindow = null;
 let pendingOpen = null;
+/*
+ * Sticky, unlike pendingOpen, which is cleared the moment the file is handed to
+ * the window. The renderer asks whether a file was double-clicked so it knows
+ * not to reopen its own last board on top - and it may ask before or after the
+ * hand-off. A flag that goes false halfway through would just move the race
+ * rather than settle it.
+ */
+let openedFromFile = false;
 const stateFile = () => path.join(app.getPath('userData'), 'window-state.json');
 
 function loadWindowState() {
@@ -258,6 +266,11 @@ async function openBoardPath(filePath) {
   if (!filePath) return;
   try {
     const data = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+    // Which file this is, not just what is in it. An exported board keeps the
+    // id of the board it came from, so two different files can carry the same
+    // id; the renderer needs the path to tell them apart. See claimLocalBoard().
+    data.origin = filePath;
+    openedFromFile = true;
     if (mainWindow && !mainWindow.isDestroyed()) send('board:open', data);
     else pendingOpen = data;
   } catch (e) {
@@ -526,7 +539,12 @@ function ipc() {
     libreoffice: !!findSoffice(), userData: app.getPath('userData'),
     // the suite drives the app headlessly; it must never be stopped by a
     // consent dialog, and it must never reach the network
-    smoke: process.argv.includes('--smoke')
+    smoke: process.argv.includes('--smoke'),
+    // A .gazboard was double-clicked: the renderer must not open anything of
+    // its own choosing, or its guess will land on top of what was asked for.
+    // Answered from the main process because it knows before the window exists,
+    // which is the only way to settle this without a race.
+    pendingBoardFile: openedFromFile
   }));
 
   ipcMain.handle('fs:readFile', async (_e, p) => { const b = await fsp.readFile(p); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); });
@@ -599,7 +617,7 @@ function ipc() {
       try {
         const st = await fsp.stat(path.join(dataDir(), f));
         const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), f), 'utf8'));
-        out.push({ id: raw.id || path.basename(f, '.json'), name: raw.name || 'Untitled board', modified: st.mtimeMs, objects: (raw.objects || []).length, thumb: raw.thumb || null });
+        out.push({ id: raw.id || path.basename(f, '.json'), name: raw.name || 'Untitled board', modified: st.mtimeMs, objects: (raw.objects || []).length, thumb: raw.thumb || null, origin: raw.origin || null });
       } catch {}
     }
     return out.sort((a, b) => b.modified - a.modified);

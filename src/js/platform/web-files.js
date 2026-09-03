@@ -10,6 +10,27 @@ export function registerSessionFile(file) {
   return token;
 }
 
+/**
+ * A key that names the FILE, not this visit to it.
+ *
+ * The virtual token above carries a counter that goes up on every pick and
+ * resets on every reload, so it says nothing about which file this is - open
+ * the same file twice and it looks like two files, reload and a different file
+ * can wear the token the last one had. claimLocalBoard() decides whether a
+ * board is a copy or the same document off the back of this, and getting it
+ * wrong either breeds copies or writes over the wrong board.
+ *
+ * The browser gives no path, so name, size and last-modified stand in for one.
+ * Two genuinely different files agreeing on all three is a copy for our
+ * purposes anyway. Returns null when the token is unknown, and the caller then
+ * falls back to the token, which is no worse than before.
+ */
+export function fileOrigin(token) {
+  const f = _sessionFiles.get(token);
+  if (!f) return null;
+  return 'web:' + (f.name || 'file') + '|' + (f.size || 0) + '|' + (f.lastModified || 0);
+}
+
 /** Open a file picker dialog in the browser and return virtual file paths. */
 export function openFileDialog(opts = {}) {
   return new Promise((resolve) => {

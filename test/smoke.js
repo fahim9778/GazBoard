@@ -760,7 +760,7 @@ async function run(win, app) {
     const selAfterSelect = sf.selection.size;
 
     // and with an ink tool, where the mouse pans
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = true;
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = true;
     a.setTool('select'); a.setSelection(['d1']);
     a.setTool('pen');
     a.setSelection(['d1']);
@@ -779,7 +779,7 @@ async function run(win, app) {
     const handStack = fontStack('hand');
     const resolved = faceOf('hand');
 
-    a.settings.penSeen = false; a.setTool('select'); a.store.clear();
+    a.penSeenThisSession = false; a.setTool('select'); a.store.clear();
     return { selBefore, selAfterSelect, selAfterPan, pillShown, pillText,
              fonts: FONTS.map(f => f.id), comic: /Comic Sans/i.test(handStack), resolved: resolved === handStack };
   `);
@@ -968,7 +968,7 @@ async function run(win, app) {
   const dragOutline = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
     a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = true;
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = true;
     a.setTool('pen');
     a.store.add({ id: 'k', type: 'shape', kind: 'rect', x: 200, y: 200, w: 200, h: 150,
                   rotation: 0, stroke: '#000', fill: '#eee', lineWidth: 2 });
@@ -1000,7 +1000,7 @@ async function run(win, app) {
       const p = probe(x, 195);
       if (p.b > 150 && p.b > p.r + 40) { after = true; break; }
     }
-    a.settings.penSeen = false; a.setTool('select'); a.store.clear();
+    a.penSeenThisSession = false; a.setTool('select'); a.store.clear();
     return { duringDrag, after, selection: sf.selection.size };
   `);
   check('dragging with an ink tool shows an outline of what you are moving', dragOutline.duringDrag);
@@ -1080,7 +1080,7 @@ async function run(win, app) {
   const hover = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
     a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = true;
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = true;
     const pts = [];
     for (let i = 0; i <= 60; i++) pts.push({ x: 100 + i * 5, y: 300, p: 0.5 });
     a.store.add({ id: 'ink', type: 'stroke', tool: 'pen', color: '#111', width: 8, effect: 'none',
@@ -1092,32 +1092,51 @@ async function run(win, app) {
     const hoverAt = (x, y, type) => {
       it.onMove({ pointerId: 9, pointerType: type, buttons: 0, clientX: rect.left + x, clientY: rect.top + y,
                   shiftKey: false, altKey: false, pressure: 0 });
-      return { hoverId: sf.hoverId, cursor: sf.canvas.style.cursor };
+      return { hoverId: sf.hoverId, cursor: sf.canvas.style.cursor,
+               nib: it.inkPointer ? { x: Math.round(it.inkPointer.x), y: Math.round(it.inkPointer.y) } : null };
     };
 
     a.setTool('pen');
     a.settings.penColor = '#e81123';                   // so the nib's tint is checkable
+    a.settings.inkPointer = 'nib';
     const penOverInk = hoverAt(250, 300, 'pen');       // stylus hovering its own writing
     const penOverBox = hoverAt(580, 310, 'pen');
     const mouseOverInk = hoverAt(250, 300, 'mouse');   // mouse: cursor hints, no outline
     const mouseOverEmpty = hoverAt(900, 700, 'mouse');
 
+    // the same hover with the pointer set to the CSS cursors instead
+    a.setTool('pen');
+    a.settings.inkPointer = 'arrow';
+    const asArrow = hoverAt(250, 300, 'pen');
+    a.settings.inkPointer = 'crosshair';
+    const asCross = hoverAt(250, 300, 'pen');
+    a.settings.inkPointer = 'nib';
+
     a.setTool('select');
+    it._penAt = 0;        // the probes above were pen hovers; clear the pen-ghost guard
     const selectOverInk = hoverAt(250, 300, 'mouse');  // picking tool: outline is useful
 
-    a.settings.penSeen = false; a.store.clear(); sf.hoverId = null;
-    return { penOverInk, penOverBox, mouseOverInk, mouseOverEmpty, selectOverInk };
+    a.penSeenThisSession = false; a.store.clear(); sf.hoverId = null; it.inkPointer = null;
+    return { penOverInk, penOverBox, mouseOverInk, mouseOverEmpty, selectOverInk, asArrow, asCross };
   `);
-  const isNib = (c) => c.startsWith('url("data:image/svg+xml,') && c.endsWith('2 2, crosshair');
+  // A HOVERING pen keeps the system cursor: it is moved by the compositor at
+  // the rate the digitiser reports, which nothing we draw ourselves can match.
+  // Our own layer is for the stroke, where Windows takes that cursor away.
+  const isCssNib = (c) => c.startsWith('url("data:image/svg+xml,') && c.endsWith('2 2, crosshair');
   check('a hovering stylus does not highlight ink',
-    hover.penOverInk.hoverId === null && isNib(hover.penOverInk.cursor),
+    hover.penOverInk.hoverId === null && isCssNib(hover.penOverInk.cursor),
     `hoverId ${hover.penOverInk.hoverId}, cursor ${hover.penOverInk.cursor.slice(0, 40)}`);
   check('a hovering stylus does not highlight objects either',
-    hover.penOverBox.hoverId === null && isNib(hover.penOverBox.cursor));
-  check('the pen cursor is a nib, not a crosshair, and its point is the hotspot',
-    isNib(hover.penOverInk.cursor), hover.penOverInk.cursor.slice(-24));
+    hover.penOverBox.hoverId === null && isCssNib(hover.penOverBox.cursor));
+  check('a hovering pen keeps the system cursor, which nothing we draw can outrun',
+    isCssNib(hover.penOverInk.cursor) && !hover.penOverInk.nib,
+    hover.penOverInk.nib ? 'our layer was used instead' : 'system cursor, no layer');
   check('the nib is tinted with the colour loaded in the pen',
     hover.penOverInk.cursor.includes('%23e81123'), hover.penOverInk.cursor.slice(-60));
+  check('choosing Arrow or Crosshair hands the pointer back to the system',
+    hover.asArrow.cursor === 'default' && !hover.asArrow.nib
+    && hover.asCross.cursor === 'crosshair' && !hover.asCross.nib,
+    `${hover.asArrow.cursor} / ${hover.asCross.cursor}`);
   check('the mouse hints with the cursor, not an outline',
     hover.mouseOverInk.hoverId === null && hover.mouseOverInk.cursor === 'move',
     `hoverId ${hover.mouseOverInk.hoverId}, cursor ${hover.mouseOverInk.cursor}`);
@@ -1129,7 +1148,7 @@ async function run(win, app) {
   const pointer = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
     a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = true;   // stylus already seen
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = true;   // stylus already seen
     a.setTool('pen');
     const rect = sf.canvas.getBoundingClientRect();
     const ev = (x, y) => ({ pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1,
@@ -1171,7 +1190,7 @@ async function run(win, app) {
     it.onDown(evPen(380, 230)); it.onMove(evPen(420, 250)); it.onUp(evPen(420, 250)); reset();
     const inked = a.store.objects.filter(o => o.type === 'stroke').length;
 
-    a.settings.penSeen = false; a.setTool('select'); a.store.clear();
+    a.penSeenThisSession = false; a.setTool('select'); a.store.clear();
     return { startedOnObject, onlyOneMoved, selectedAfter, startedOnEmpty, panned, objectsStill, inked, before, after };
   `);
   check('the mouse drags the object under it', pointer.startedOnObject === 'move' && pointer.onlyOneMoved,
@@ -1448,7 +1467,7 @@ async function run(win, app) {
                       strokes: a.store.objects.filter(o => o.type === 'stroke').length };
 
     // 3. after a stylus, where the mouse would otherwise pan
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = true;
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = true;
     hp = fresh();
     const camX = sf.cam.x;
     started = dragHandle(hp, 'se', 120, 80);
@@ -1467,7 +1486,7 @@ async function run(win, app) {
     const lockedBox = sf.selectionIsLocked();
     a.store.update('box', { locked: false });
 
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = false;
+    a.settings.inkWithMouse = 'no'; a.penSeenThisSession = false;   // back to the default
     a.setTool('select'); a.store.clear();
     return { withSelect, withPen, withPan, rotated, lockedHandle, lockedBox };
   `);
@@ -1561,8 +1580,8 @@ async function run(win, app) {
     const strokes = () => a.store.objects.filter(o => o.type === 'stroke').length;
     const reset = () => { a.store.clear(); sf.cam.x = 0; sf.cam.y = 0; };
 
-    // --- fresh profile: no stylus seen, so the mouse still draws ---
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = false;
+    // --- 'auto': no stylus seen yet this session, so the mouse still draws ---
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = false;
     a.setTool('pen');
     reset();
     const mouseInksAtFirst = a.mouseInks;
@@ -1573,7 +1592,7 @@ async function run(win, app) {
     reset();
     drag('pen', 2, 200, 300, 340, 360);
     const penDrew = strokes() === 1;
-    const penRemembered = a.settings.penSeen === true;
+    const penRemembered = a.penSeenThisSession === true;
     const mouseInksNow = a.mouseInks;
 
     // --- from here the mouse pans and never inks ---
@@ -1621,20 +1640,20 @@ async function run(win, app) {
     const drewWhenForced = strokes() === 1;
 
     reset();
-    a.settings.inkWithMouse = 'no'; a.settings.penSeen = false;
+    a.settings.inkWithMouse = 'no'; a.penSeenThisSession = false;
     const forcedOff = a.mouseInks;
     const camX3 = sf.cam.x;
     drag('mouse', 11, 200, 200, 320, 200);
     const pannedWhenForced = Math.round(sf.cam.x - camX3) === 120 && strokes() === 0;
 
-    a.settings.inkWithMouse = 'auto'; a.settings.penSeen = false;
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = false;
     a.setTool('select'); a.store.clear();
     return { mouseInksAtFirst, drewWithMouseBefore, penDrew, penRemembered, mouseInksNow,
              mousePanned, mouseDrewAfter, penStillDraws, hlMousePanned, noteWithMouse,
              selectUnaffected, eraserWithMouse, forcedOn, drewWhenForced, forcedOff, pannedWhenForced };
   `);
   check('mouse-only setup: the mouse still inks', roles.mouseInksAtFirst === true && roles.drewWithMouseBefore);
-  check('stylus draws and is remembered', roles.penDrew && roles.penRemembered);
+  check('a stylus is noticed for this session', roles.penDrew && roles.penRemembered);
   check('after a stylus appears the mouse stops inking', roles.mouseInksNow === false);
   check('mouse pans the canvas instead', roles.mousePanned === 200 && roles.mouseDrewAfter === 0, `${roles.mousePanned}px, ${roles.mouseDrewAfter} strokes`);
   check('stylus keeps drawing normally', roles.penStillDraws);
@@ -1642,6 +1661,121 @@ async function run(win, app) {
   check('notes, select and eraser still take the mouse', roles.noteWithMouse && roles.selectUnaffected && roles.eraserWithMouse);
   check('"Always" forces the mouse to ink', roles.forcedOn === true && roles.drewWhenForced);
   check('"Never" forces the mouse to pan', roles.forcedOff === false && roles.pannedWhenForced);
+
+  /* ---- the pen inks and the mouse pans, both at once, out of the box ---- */
+  const penDefault = await js(`
+    const a = window.app;
+    const r = {};
+    const saved = localStorage.getItem('gazboard.settings');
+
+    // out of the box
+    localStorage.removeItem('gazboard.settings');
+    const fresh = a.loadSettings();
+    r.freshDefault = fresh.inkWithMouse;
+
+    // an install stuck the way a drawing tablet used to leave it: 'auto' was
+    // the old default and the stylus flag was remembered for ever
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'auto', penSeen: true }));
+    const rescued = a.loadSettings();
+    r.rescued = rescued.inkWithMouse;
+    r.staleFlagDropped = !('penSeen' in rescued);
+
+    // the 'yes' and the 'no' that 2.4.3 development builds wrote by migration
+    // were ours, not choices anyone made - both go back, and their flags go too
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'yes', mouseInkDefault3: true }));
+    const undone = a.loadSettings();
+    r.undevYes = undone.inkWithMouse;
+    r.devFlagDropped = !('mouseInkDefault3' in undone) && !('mouseInkDefault4' in undone);
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'no', mouseInkDefault4: true }));
+    r.undevNo = a.loadSettings().inkWithMouse;
+
+    // a deliberate choice is never overwritten
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'yes' }));
+    r.keptAlways = a.loadSettings().inkWithMouse;
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'no' }));
+    r.keptNever = a.loadSettings().inkWithMouse;
+    localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'auto', mouseInkDefault5: true }));
+    r.keptAuto = a.loadSettings().inkWithMouse;
+
+    // and the session flag is never written to disk
+    a.penSeenThisSession = true;
+    a.settings.inkWithMouse = 'auto';
+    a.saveSettings();
+    r.notPersisted = !('penSeen' in JSON.parse(localStorage.getItem('gazboard.settings')));
+
+    if (saved) localStorage.setItem('gazboard.settings', saved);
+    a.settings.inkWithMouse = 'auto'; a.penSeenThisSession = false;
+    return r;
+  `);
+
+  check('out of the box the mouse draws until a stylus turns up',
+    penDefault.freshDefault === 'auto', penDefault.freshDefault);
+  check('and the stylus flag that used to outlive the tablet is dropped',
+    penDefault.rescued === 'auto' && penDefault.staleFlagDropped,
+    `${penDefault.rescued}, stale flag dropped: ${penDefault.staleFlagDropped}`);
+  check('both never-released development defaults are undone, not inherited',
+    penDefault.undevYes === 'auto' && penDefault.undevNo === 'auto' && penDefault.devFlagDropped,
+    `${penDefault.undevYes} / ${penDefault.undevNo}, dev flags dropped: ${penDefault.devFlagDropped}`);
+  check('a deliberate Always, Never or Auto is left exactly as chosen',
+    penDefault.keptAlways === 'yes' && penDefault.keptNever === 'no' && penDefault.keptAuto === 'auto',
+    `${penDefault.keptAlways} / ${penDefault.keptNever} / ${penDefault.keptAuto}`);
+  check('noticing a stylus is never written to disk, so it cannot outlive the tablet',
+    penDefault.notPersisted);
+
+  /* ---- and that default is what the two devices actually DO ---- */
+  const bothLive = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true);
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.inkWithMouse = 'no'; a.penSeenThisSession = false;
+
+    const ev = (x, y, id, type) => ({ pointerId: id, pointerType: type, button: 0, buttons: 1,
+      clientX: x, clientY: y, pressure: type === 'pen' ? 0.6 : 0,
+      preventDefault(){}, stopPropagation(){}, target: { setPointerCapture(){}, releasePointerCapture(){} } });
+    const drag = (type, id, x0, y0, x1, y1) => {
+      it.onDown(ev(x0, y0, id, type));
+      it.onMove(ev((x0 + x1) / 2, (y0 + y1) / 2, id, type));
+      it.onMove(ev(x1, y1, id, type));
+      it.onUp(ev(x1, y1, id, type));
+      it.action = null; it.pointers.clear(); it.pinch = null; it.secondaryPan = null;
+    };
+    const strokes = () => a.store.objects.filter(o => o.type === 'stroke').length;
+    const r = {};
+
+    // pen tool chosen, no stylus has ever touched this machine
+    a.setTool('pen');
+    const x0 = sf.cam.x;
+    drag('mouse', 1, 200, 200, 400, 200);
+    r.mousePanned = Math.round(sf.cam.x - x0);
+    r.mouseLeftNoInk = strokes() === 0;
+
+    // the stylus inks in the same breath - no mode changed in between
+    drag('pen', 2, 200, 300, 340, 360);
+    r.penInked = strokes() === 1;
+
+    // and the mouse is STILL panning afterwards: seeing a pen changes nothing
+    const x1 = sf.cam.x;
+    drag('mouse', 3, 200, 200, 300, 200);
+    r.mouseStillPans = Math.round(sf.cam.x - x1) === 100 && strokes() === 1;
+
+    // switching ink tools changes what the PEN does, never what the mouse does
+    a.setTool('highlighter');
+    const x2 = sf.cam.x;
+    drag('mouse', 4, 200, 200, 340, 200);
+    r.mouseUnmovedByToolChoice = Math.round(sf.cam.x - x2) === 140 && strokes() === 1;
+
+    a.setTool('select'); a.store.clear();
+    return r;
+  `);
+
+  check('with the default, a mouse drag pans and leaves no ink',
+    bothLive.mousePanned === 200 && bothLive.mouseLeftNoInk, `${bothLive.mousePanned}px`);
+  check('the stylus inks at the same moment, with no mode change',
+    bothLive.penInked);
+  check('seeing a stylus changes nothing - the mouse was already panning',
+    bothLive.mouseStillPans);
+  check('choosing another ink tool changes the pen, never the mouse',
+    bothLive.mouseUnmovedByToolChoice);
 
   /* ---- panning while drawing ---- */
   const pan = await js(`
@@ -1868,6 +2002,12 @@ async function run(win, app) {
   const afterLift = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
     a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    // The mouse draws by default now, so the pen tool would show the nib for a
+    // mouse too - and this test would pass without proving anything, because
+    // "kept the nib" and "the nib is the cursor anyway" would look identical.
+    // Put it in the one mode where a ghost move and a real one differ.
+    const wasInk = a.settings.inkWithMouse;
+    a.settings.inkWithMouse = 'auto';
     a.setTool('pen'); a.notePenSeen();
     it.action = null; it.actionId = null; it.pointers.clear();
     const rect = sf.canvas.getBoundingClientRect();
@@ -1879,7 +2019,10 @@ async function run(win, app) {
     it.onDown(mk(X(300), Y(300), 'pen', 1));
     it.onMove(mk(X(302), Y(301), 'pen', 1));
     it.onUp(mk(X(302), Y(301), 'pen', 0));
+    // the stroke is over, so the system cursor should be back and carrying
+    // the nib again - the layer is only for the stroke itself
     const nib = sf.canvas.style.cursor || '';
+    const layerGone = !it.inkPointer;
 
     // Windows re-asserts the mouse pointer as the pen leaves proximity: a
     // pointermove arrives with pointerType 'mouse', at the pen's own position,
@@ -1893,11 +2036,14 @@ async function run(win, app) {
     const afterRealMouse = sf.canvas.style.cursor || '';
 
     a.store.clear(); it.action = null; it.pointers.clear();
-    return { nibIsPen: nib.startsWith('url('), ghostKeptNib: afterGhost === nib,
+    a.settings.inkWithMouse = wasInk; a.penSeenThisSession = false;
+    return { nibIsPen: nib.startsWith('url(') && layerGone, ghostKeptNib: afterGhost === nib,
              realMouseStillGrabs: afterRealMouse === 'grab',
              ghost: afterGhost.slice(0, 20), real: afterRealMouse };
   `);
   check('the pen nib survives the pen lifting off', afterLift.nibIsPen);
+  check('and the system cursor is what carries it once the stroke is over',
+    afterLift.ghost.startsWith('url('), `cursor "${afterLift.ghost}"`);
   check('the cursor does not flash to a hand when the pen leaves the screen',
     afterLift.ghostKeptNib, `became "${afterLift.ghost}"`);
   check('but a real mouse move still shows what a click will do',
@@ -4124,6 +4270,861 @@ module.exports.run = async (win, app) => {
     keyboardPan.touchLaptop === 0, `${keyboardPan.touchLaptop}px`);
   check('but a phone still lifts the note clear of the software keyboard',
     keyboardPan.phone > 100, `${keyboardPan.phone}px`);
+
+  /* ---- a board carried to another machine keeps its pictures ---- */
+  const travelled = await js(`
+    const a = window.app;
+    a.newBoard(true);
+    const r = {};
+
+    // A .gazboard exported from machine A carries the picture inline AND the
+    // id that machine gave it. Machine B has the file but not that asset, so
+    // its store has never seen the id - which is exactly this shape.
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAKklEQVR42mNk'
+      + 'YPhfz0AEYBxVSF+FjIyMDAwMDP8ZGRn/M4wqpK9CAGRcBQWm9m8OAAAAAElFTkSuQmCC';
+    const strangerId = 'a'.repeat(64) + '.png';   // a valid-looking id from elsewhere
+
+    a.store.add({ id: 'pic', type: 'image', x: 0, y: 0, w: 120, h: 120,
+      src: png, assetId: strangerId, rotation: 0 }, 'arrived from another machine');
+
+    r.storeHasTheStrangerId = (await window.board.assets.have([strangerId]))[strangerId];
+
+    // what the next autosave would write
+    const written = await a.externaliseAssets(a.store.toJSON());
+    const saved = written.objects.find((o) => o.id === 'pic');
+    r.savedSrc = String(saved.src).slice(0, 6);
+    r.savedAssetId = saved.assetId || null;
+
+    // the question that decides whether the picture survives: is the thing it
+    // now points at actually on this machine?
+    r.pointsAtSomethingReal = saved.assetId
+      ? (await window.board.assets.have([saved.assetId]))[saved.assetId] === true
+      : String(saved.src).startsWith('data:');
+
+    // and prove it by reopening: resolveAssets must bring the picture back
+    const reopened = await a.resolveAssets(JSON.parse(JSON.stringify(written)));
+    const back = reopened.objects.find((o) => o.id === 'pic');
+    r.cameBack = !back.missing && typeof back.src === 'string' && back.src.startsWith('data:');
+    r.sameBytes = back.src === png;
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('a picture arriving from another machine is not assumed to be filed here',
+    travelled.storeHasTheStrangerId === false,
+    'the store should not claim an id it has never seen');
+  check('saving it files the picture on THIS machine instead of trusting the id',
+    travelled.pointsAtSomethingReal,
+    `saved as ${travelled.savedSrc}… assetId ${String(travelled.savedAssetId).slice(0, 12)}…`);
+  check('so the picture is still there when the board is opened again',
+    travelled.cameBack, travelled.cameBack ? 'came back' : 'came back as a gap');
+  check('and it is the same picture, byte for byte', travelled.sameBytes);
+
+  /* ---- every direction a board can travel keeps its pictures ---- */
+  const matrix = await js(`
+    const a = window.app;
+    const { exportable } = await import('app://board/js/export.js');
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAKklEQVR42mNk'
+      + 'YPhfz0AEYBxVSF+FjIyMDAwMDP8ZGRn/M4wqpK9CAGRcBQWm9m8OAAAAAElFTkSuQmCC';
+
+    // Both runtimes reduce to the same question: does THIS store hold the file
+    // the board's id points at? Electron asks a folder, the PWA asks IndexedDB,
+    // through the same put/get/have contract - so a store that has never seen
+    // the id is what "another machine" means in either of them.
+    const STRANGER = 'c'.repeat(64) + '.png';
+
+    // one hop: a board leaves a machine that has the file and lands on one that
+    // does not, then autosaves and is reopened
+    const hop = async (obj) => {
+      a.newBoard(true);
+      a.store.add(JSON.parse(JSON.stringify(obj)), 'arrived');
+      const written = await a.externaliseAssets(a.store.toJSON());
+      const reopened = await a.resolveAssets(JSON.parse(JSON.stringify(written)));
+      const back = reopened.objects.find((o) => o.id === 'pic');
+      return { survived: !back.missing && String(back.src).startsWith('data:'),
+               identical: back.src === PNG, written };
+    };
+
+    const r = {};
+
+    // a file exported from another machine: picture inline, id from over there
+    r.freshMachine = await hop({ id:'pic', type:'image', x:0, y:0, w:100, h:100,
+      src: PNG, assetId: STRANGER, rotation: 0 });
+
+    // a file exported from a machine that never filed it at all
+    r.noIdAtAll = await hop({ id:'pic', type:'image', x:0, y:0, w:100, h:100,
+      src: PNG, rotation: 0 });
+
+    // the same machine, second save: the id IS local, and must not be refiled
+    // needlessly or the board would rewrite its pictures on every save
+    a.newBoard(true);
+    const local = await a.externaliseAssets({ objects: [
+      { id:'pic', type:'image', x:0, y:0, w:100, h:100, src: PNG, rotation: 0 }] });
+    const localId = local.objects[0].assetId;
+    r.sameMachine = await hop({ id:'pic', type:'image', x:0, y:0, w:100, h:100,
+      src: PNG, assetId: localId, rotation: 0 });
+
+    // and the round trip through a board that lost its picture: exporting it
+    // must keep the reference, not write an empty src that can never recover
+    a.newBoard(true);
+    const lost = await a.resolveAssets({ objects: [
+      { id:'pic', type:'image', x:0, y:0, w:100, h:100,
+        src: 'asset:' + STRANGER, assetId: STRANGER, rotation: 0 }] });
+    a.store.add(lost.objects[0], 'lost picture');
+    // exportable() is exactly what saveBoardFile writes to the file; calling it
+    // directly avoids driving a native save dialog that nothing can answer
+    const written = exportable(a.store.toJSON({ app: 'GazBoard', version: 1 }));
+    const exportedSrc = written.objects.find((o) => o.id === 'pic').src;
+    r.exportOfLostKeepsReference = String(exportedSrc).startsWith('asset:');
+    r.exportDropsRuntimeMarker = !('missing' in written.objects.find((o) => o.id === 'pic'));
+    r.exportedSrc = String(exportedSrc).slice(0, 12);
+
+    // put the file back where that reference points, and the picture returns
+    await window.board.assets.put(PNG);
+    const realId = (await a.externaliseAssets({ objects: [
+      { id:'p2', type:'image', x:0, y:0, w:10, h:10, src: PNG, rotation: 0 }] })).objects[0].assetId;
+    const recovered = await a.resolveAssets({ objects: [
+      { id:'pic', type:'image', x:0, y:0, w:100, h:100, src: 'asset:' + realId, assetId: realId, rotation: 0 }] });
+    r.referenceStillResolves = recovered.objects[0].src === PNG;
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('a board from another machine keeps its picture (Electron/PWA, machine to machine)',
+    matrix.freshMachine.survived && matrix.freshMachine.identical);
+  check('a board that was never filed anywhere keeps its picture',
+    matrix.noIdAtAll.survived && matrix.noIdAtAll.identical);
+  check('a board saved again on its own machine still keeps its picture',
+    matrix.sameMachine.survived && matrix.sameMachine.identical);
+  check('exporting a board whose picture is missing keeps the reference, not an empty src',
+    matrix.exportOfLostKeepsReference, `exported src begins "${matrix.exportedSrc}"`);
+  check('and putting the file back makes that reference resolve again',
+    matrix.referenceStillResolves);
+
+  /* ---- cancelling an edit must throw the edit away, not save it ---- */
+  const cancelEdit = await js(`
+   try {
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true);
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const r = {};
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const ev = (x, y) => ({ pointerId: 5, pointerType: 'mouse', button: 0, buttons: 1,
+      clientX: x, clientY: y, pressure: 0, preventDefault(){}, stopPropagation(){},
+      target: { setPointerCapture(){}, releasePointerCapture(){} } });
+
+    // a note with something already in it
+    a.setTool('note');
+    it.onDown(ev(300, 300)); it.onUp(ev(300, 300));
+    it.action = null; it.pointers.clear();
+    await sleep(30);
+    const note = a.store.objects.find(o => o.type === 'note');
+    a.textEditor.el.value = 'keep this';
+    a.textEditor.commit();
+    await sleep(20);
+    r.saved = a.store.get(note.id).text === 'keep this';
+
+    // edit it again, type something else, then change your mind
+    a.textEditor.begin(note);
+    await sleep(30);                      // let the focus land - blur needs it
+    r.hasFocus = document.activeElement === a.textEditor.el;
+    a.textEditor.el.value = 'rubbish typed by mistake';
+    a.textEditor.cancel();
+    await sleep(20);
+    r.discarded = a.store.get(note.id).text === 'keep this';
+    r.editorClosed = !a.textEditor.active;
+
+    // and cancelling twice is not an error
+    a.textEditor.cancel();
+    r.doubleCancelSurvived = true;
+
+    a.setTool('select'); a.newBoard(true);
+    return r;
+   } catch (e) { return { crashed: String(e && e.message || e) }; }
+  `);
+  if (cancelEdit.crashed) console.log('  cancel probe threw:', cancelEdit.crashed);
+
+  check('the editor really had focus, so blur is in play',
+    cancelEdit.hasFocus === true);
+  check('cancelling an edit discards it instead of saving it',
+    cancelEdit.saved === true && cancelEdit.discarded === true && !cancelEdit.crashed,
+    cancelEdit.crashed || '');
+  check('and closes cleanly, twice over',
+    cancelEdit.editorClosed === true && cancelEdit.doubleCancelSurvived === true);
+
+  /* ---- moving the nib must not cost a repaint of the board ---- */
+  const nibCost = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.inkPointer = 'nib';
+    const r = {};
+
+    // a board with something on it, so a full redraw would actually cost
+    for (let n = 0; n < 300; n++) {
+      const pts = [];
+      for (let i = 0; i <= 20; i++) pts.push({ x: (n % 20) * 60 + i * 2, y: Math.floor(n / 20) * 40, p: 0.5 });
+      a.store.add({ id: 'k' + n, type: 'stroke', tool: 'pen', color: '#333', width: 4,
+        effect: 'none', points: pts, bbox: { x: (n % 20) * 60, y: Math.floor(n / 20) * 40, w: 40, h: 1 },
+        rotation: 0 }, 'seed');
+    }
+    a.setTool('pen');
+
+    // count real scene redraws, not invalidate() calls - drawScene IS the cost
+    let scenes = 0;
+    const realDrawScene = sf.drawScene;
+    sf.drawScene = function (...args) { scenes++; return realDrawScene.apply(this, args); };
+    const frame = () => new Promise(res => requestAnimationFrame(() => res()));
+
+    const rect = sf.canvas.getBoundingClientRect();
+    const hover = (x, y) => it.onMove({ pointerId: 1, pointerType: 'pen', button: -1, buttons: 0,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0,
+      preventDefault(){}, stopPropagation(){}, target:{setPointerCapture(){},releasePointerCapture(){}} });
+
+    hover(200, 300);
+    await frame(); await frame();          // let any pending paint settle
+    scenes = 0;
+
+    for (let i = 0; i < 60; i++) { hover(200 + i * 3, 300 + (i % 5)); }
+    await frame(); await frame(); await frame();
+    r.scenesWhileHovering = scenes;
+
+    // for the record: what a repaint-per-move would have been spending
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) realDrawScene.call(sf, sf.ctx, sf.width, sf.height);
+    r.msPerRedraw = Math.round((performance.now() - t0) / 10 * 10) / 10;
+
+    const el = document.getElementById('inkNib');
+    r.layerIdleWhileHovering = !el || el.hidden;
+    r.hoverUsedSystemCursor = String(sf.canvas.style.cursor).startsWith('url(');
+
+    sf.drawScene = realDrawScene;
+    a.setTool('select'); a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+
+  check('60 hover moves across a 300-stroke board repaint it 0 times',
+    nibCost.scenesWhileHovering === 0,
+    `${nibCost.scenesWhileHovering} full scene redraw(s)`);
+  check('because hovering never leaves the system cursor at all',
+    nibCost.hoverUsedSystemCursor && nibCost.layerIdleWhileHovering);
+  console.log('  what one full redraw of that board costs:', nibCost.msPerRedraw, 'ms');
+
+  /* ---- the nib must not vanish for as long as you are writing ---- */
+  const nibDuringStroke = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.inkPointer = 'nib';
+    a.setTool('pen');
+    const r = {};
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0.6,
+      preventDefault(){}, stopPropagation(){}, target:{setPointerCapture(){},releasePointerCapture(){}} });
+
+    // hovering first, as a hand does
+    it.onMove(mk(200, 300, 0));
+    r.hoverUsedSystemCursor = String(sf.canvas.style.cursor).startsWith('url(');
+    r.beforeStroke = it.inkPointer ? Math.round(it.inkPointer.x) : null;
+
+    // now write, and watch the nib at every step of the stroke
+    it.onDown(mk(200, 300, 1));
+    const seen = [];
+    for (let x = 220; x <= 400; x += 20) {
+      it.onMove(mk(x, 300, 1));
+      seen.push(it.inkPointer ? Math.round(it.inkPointer.x) : null);
+    }
+    r.duringStroke = seen;
+    r.neverVanished = seen.every(v => v !== null);
+    r.keptUp = seen[seen.length - 1] === 400;
+    r.cursorStayedOff = sf.canvas.style.cursor === 'none';
+
+    it.onUp(mk(400, 300, 0));
+    it.pointers.clear();
+    r.afterLift = it.inkPointer ? Math.round(it.inkPointer.x) : null;
+    r.systemCursorBack = String(sf.canvas.style.cursor).startsWith('url(');
+    const nibEl2 = document.getElementById('inkNib');
+    r.layerPutAway = !nibEl2 || nibEl2.hidden;
+
+    // leaving the board takes it away rather than stranding it at the edge
+    sf.canvas.dispatchEvent(new PointerEvent('pointerleave', { bubbles: true }));
+    r.goneOnLeave = it.inkPointer === null;
+
+    a.setTool('select'); a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+
+  check('a hovering pen is carried by the system cursor, not our layer',
+    nibDuringStroke.hoverUsedSystemCursor && nibDuringStroke.beforeStroke === null);
+  check('and does not vanish for a single frame of the stroke',
+    nibDuringStroke.neverVanished && nibDuringStroke.cursorStayedOff,
+    JSON.stringify(nibDuringStroke.duringStroke));
+  check('it keeps up with the pen rather than lagging behind it',
+    nibDuringStroke.keptUp);
+  check('and the system cursor takes it back the moment the pen lifts',
+    nibDuringStroke.systemCursorBack && nibDuringStroke.layerPutAway && nibDuringStroke.afterLift === null,
+    `layer at ${nibDuringStroke.afterLift}`);
+  check('but it goes away when the pointer leaves the board',
+    nibDuringStroke.goneOnLeave);
+
+  /* ---- a mouse keeps the hardware cursor; only the pen gets the drawn nib ---- */
+  const mouseNib = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.inkPointer = 'nib';
+    a.settings.inkWithMouse = 'yes';       // so the mouse takes the ink path at all
+    a.penSeenThisSession = false;
+    a.setTool('pen');
+    const r = {};
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, type, buttons) => ({ pointerId: type === 'mouse' ? 3 : 1, pointerType: type,
+      button: 0, buttons, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false, pressure: type === 'pen' ? 0.6 : 0,
+      preventDefault(){}, stopPropagation(){}, target:{setPointerCapture(){},releasePointerCapture(){}} });
+
+    it.onMove(mk(250, 300, 'mouse', 0));
+    r.mouseCursor = String(sf.canvas.style.cursor).startsWith('url(') ? 'css-nib' : sf.canvas.style.cursor;
+    r.mouseDrewNoNib = it.inkPointer === null;
+
+    it._penAt = 0;
+    it.onMove(mk(250, 300, 'pen', 0));
+    r.penHoverCursor = String(sf.canvas.style.cursor).startsWith('url(') ? 'css-nib' : sf.canvas.style.cursor;
+    r.penHoverUsedNoLayer = it.inkPointer === null;
+
+    // it is the STROKE where the pen needs our layer
+    it.onDown(mk(260, 300, 'pen', 1));
+    it.onMove(mk(300, 300, 'pen', 1));
+    r.penStrokeCursor = sf.canvas.style.cursor;
+    r.penStrokeUsedTheLayer = !!it.inkPointer;
+    it.onUp(mk(300, 300, 'pen', 0));
+    it.action = null; it.pointers.clear();
+
+    // and a mouse stroke keeps the hardware cursor the whole way through
+    it.onDown(mk(300, 300, 'mouse', 1));
+    it.onMove(mk(340, 300, 'mouse', 1));
+    r.duringMouseStroke = String(sf.canvas.style.cursor).startsWith('url(') ? 'css-nib' : sf.canvas.style.cursor;
+    r.stillNoNib = it.inkPointer === null;
+    it.onUp(mk(340, 300, 'mouse', 0));
+    it.action = null; it.pointers.clear();
+
+    a.setTool('select'); a.settings.inkWithMouse = 'auto'; a.store.clear(); a.newBoard(true);
+    it.inkPointer = null;
+    return r;
+  `);
+
+  check('the mouse keeps a hardware cursor rather than a repainted one',
+    mouseNib.mouseCursor === 'css-nib' && mouseNib.mouseDrewNoNib, mouseNib.mouseCursor);
+  check('a hovering pen is on the system cursor too',
+    mouseNib.penHoverCursor === 'css-nib' && mouseNib.penHoverUsedNoLayer, mouseNib.penHoverCursor);
+  check('and only a pen STROKE falls back to our own layer',
+    mouseNib.penStrokeCursor === 'none' && mouseNib.penStrokeUsedTheLayer, mouseNib.penStrokeCursor);
+  check('and a mouse stroke keeps it for the whole stroke',
+    mouseNib.duringMouseStroke === 'css-nib' && mouseNib.stillNoNib, mouseNib.duringMouseStroke);
+
+  /* ---- the nib is set once, not on every single pointermove ---- */
+  const cursorChurn = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.inkWithMouse = 'yes';
+    const r = {};
+
+    // count every real write to the DOM property
+    const canvas = it.canvas;
+    let writes = 0;
+    // setCursor is the ONLY place in tools.js that writes canvas.style.cursor,
+    // so counting the writes it actually performs counts the writes the DOM
+    // sees. It returns true only when the value changed and was written.
+    const realSetCursor = it.setCursor;
+    it.setCursor = function (v) { const wrote = realSetCursor.call(this, v); if (wrote) writes++; return wrote; };
+
+    const move = (x, y, type = 'pen') => it.onMove({ pointerId: 1, pointerType: type,
+      button: -1, buttons: 0, clientX: x, clientY: y, pressure: 0,
+      preventDefault(){}, stopPropagation(){},
+      target: { setPointerCapture(){}, releasePointerCapture(){} } });
+
+    // hover the pen tool across the board the way a hand does before writing
+    a.setTool('pen');
+    a.settings.inkPointer = 'nib';
+    it.action = null; it.pointers.clear();
+    it._cursor = null; canvas.style.cursor = 'default';   // start from a known cursor
+    writes = 0;
+    for (let i = 0; i < 120; i++) move(300 + i, 400 + (i % 7));
+    r.writesWhileHovering = writes;
+    r.hoverKeptSystemCursor = String(canvas.style.cursor).startsWith('url(');
+
+    // a colour change re-tints straight away, without waiting for a move
+    writes = 0;
+    a.settings.penColor = '#00b294';
+    it.refreshInkCursor();
+    r.retintWroteCursor = writes;
+    r.tintedToTheNewColour = String(canvas.style.cursor).includes('%2300b294');
+
+    // and a genuine change of cursor still happens
+    writes = 0;
+    a.setTool('note');
+    for (let i = 0; i < 5; i++) move(500 + i, 400);
+    r.writesOnARealChange = writes;
+    r.endedOnTheNoteCursor = canvas.style.cursor === 'copy';
+
+    it.setCursor = realSetCursor;
+    a.setTool('select'); a.settings.inkWithMouse = 'no'; a.newBoard(true);
+    return r;
+  `);
+
+  check('hovering with the pen sets the cursor once, not on every move',
+    cursorChurn.hoverKeptSystemCursor && cursorChurn.writesWhileHovering === 1,
+    `${cursorChurn.writesWhileHovering} write(s) across 120 moves`);
+  check('a colour change re-tints the nib at once, in one write',
+    cursorChurn.retintWroteCursor === 1 && cursorChurn.tintedToTheNewColour,
+    `${cursorChurn.retintWroteCursor} cursor write(s)`);
+  check('and switching tools still changes the cursor',
+    cursorChurn.writesOnARealChange === 1 && cursorChurn.endedOnTheNoteCursor,
+    `${cursorChurn.writesOnARealChange} write(s)`);
+
+  /* ---- snip a page, Ctrl+V, ink on it ---- */
+  const pasted = await js(`
+   try {
+    const a = window.app, sf = a.surface;
+    a.newBoard(true);
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.textEditor.cancel();
+    const r = {};
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+    // a 1600x900 "screenshot", the shape a snip of a book page tends to be
+    const shot = document.createElement('canvas');
+    shot.width = 1600; shot.height = 900;
+    const g = shot.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, 1600, 900);
+    g.fillStyle = '#201f1e'; g.fillRect(80, 80, 900, 40);
+    const blob = await new Promise(res => shot.toBlob(res, 'image/png'));
+    const file = new File([blob], 'image.png', { type: 'image/png' });
+
+    const firePaste = (build) => {
+      const dt = new DataTransfer();
+      build(dt);
+      document.dispatchEvent(new ClipboardEvent('paste', {
+        clipboardData: dt, bubbles: true, cancelable: true
+      }));
+    };
+
+    // --- the paste itself ---
+    firePaste(dt => dt.items.add(file));
+    for (let i = 0; i < 200 && !a.store.objects.some(o => o.type === 'image'); i++) await sleep(10);
+    const img = a.store.objects.find(o => o.type === 'image');
+    r.landed = !!img;
+    r.carriesThePixels = !!img && typeof img.src === 'string' && img.src.startsWith('data:image/');
+
+    // a screenshot is far wider than the window; it has to arrive at a size you
+    // can actually draw on rather than filling the whole canvas
+    r.scaledDown = !!img && Math.round(img.w) === 640 && Math.round(img.h) === 360;
+
+    // and it lands where you are looking, not off at the origin
+    const view = sf.cam.viewport(sf.width, sf.height);
+    r.centredInView = !!img
+      && Math.abs((img.x + img.w / 2) - (view.x + view.w / 2)) < 1
+      && Math.abs((img.y + img.h / 2) - (view.y + view.h / 2)) < 1;
+
+    // selected on arrival, so it can be moved or resized straight away
+    r.selectedOnArrival = !!img && sf.selection.has(img.id);
+
+    // --- ink goes on top of it, not underneath ---
+    a.setTool('pen');
+    a.settings.inkWithMouse = 'yes';        // this test is about z-order, not devices
+    const it = a.interaction;
+    const ev = (x, y) => ({ pointerId: 9, pointerType: 'mouse', button: 0, buttons: 1,
+      clientX: x, clientY: y, pressure: 0, preventDefault(){}, stopPropagation(){},
+      target: { setPointerCapture(){}, releasePointerCapture(){} } });
+    it.onDown(ev(300, 300)); it.onMove(ev(360, 330)); it.onMove(ev(420, 300)); it.onUp(ev(420, 300));
+    it.action = null; it.pointers.clear();
+    const stroke = a.store.objects.find(o => o.type === 'stroke');
+    r.inkedOnIt = !!stroke;
+    r.inkSitsAbove = !!stroke && !!img
+      && a.store.doc.order.indexOf(stroke.id) > a.store.doc.order.indexOf(img.id);
+    a.settings.inkWithMouse = 'no';
+
+    // --- plain text on the clipboard becomes a text object, not an image ---
+    a.newBoard(true); a.textEditor.cancel();
+    firePaste(dt => dt.setData('text/plain', 'from the book'));
+    await sleep(50);
+    const t = a.store.objects.find(o => o.type === 'text');
+    r.textPasteWorks = !!t && t.text === 'from the book';
+
+    // --- but not while a note or text box is being typed into ---
+    a.newBoard(true);
+    a.setTool('note');
+    it.onDown(ev(300, 300)); it.onUp(ev(300, 300));
+    it.action = null; it.pointers.clear();
+    await sleep(30);
+    r.editorOpen = a.textEditor.active;
+    const beforeCount = a.store.objects.length;
+    firePaste(dt => dt.items.add(file));
+    await sleep(120);
+    r.leftTheEditorAlone = a.store.objects.length === beforeCount;
+    a.textEditor.cancel();
+
+    a.setTool('select'); a.newBoard(true);
+    return r;
+   } catch (e) { return { crashed: String(e && e.message || e) }; }
+  `);
+  if (pasted.crashed) console.log('  paste probe threw:', pasted.crashed);
+
+  check('a screenshot on the clipboard pastes onto the board',
+    pasted.landed && pasted.carriesThePixels);
+  check('and arrives at a workable size rather than filling the canvas',
+    pasted.scaledDown);
+  check('it lands where you are looking, already selected',
+    pasted.centredInView && pasted.selectedOnArrival);
+  check('ink goes on top of the pasted picture, not under it',
+    pasted.inkedOnIt && pasted.inkSitsAbove);
+  check('text on the clipboard still pastes as text',
+    pasted.textPasteWorks);
+  check('pasting into a note being typed goes to the note, not the board',
+    pasted.editorOpen && pasted.leftTheEditorAlone);
+
+  /* ---- two files, one id: neither may eat the other ---- */
+  const twoFiles = await js(`
+    const a = window.app;
+    const r = {};
+    const ID = 'bvbfuva6r4050';           // the id both exports carry
+    // A backslash inside a template literal inside a template literal is one
+    // collapse away from becoming nothing at all, and a path with no separator
+    // left in it would test the wrong thing while still reporting "ok". Built
+    // from the character itself so there is nothing to collapse.
+    const BS = String.fromCharCode(92);
+    const DIR = 'C:' + BS + 'Users' + BS + 'User' + BS + 'Downloads' + BS;
+    const P1 = DIR + 'Save from 1st Device 4_23.gazboard';
+    const P2 = DIR + 'Save from 1st Device 4_23-3.gazboard';
+    const P3 = DIR + 'Third copy.gazboard';
+
+    const text = (id, s) => ({ id, type:'text', x:0, y:0, w:200, h:40, text:s,
+      fontSize:20, color:'#201f1e', align:'left', valign:'top', rotation:0,
+      font:'hand', background:'none' });
+    const file = (origin, n) => ({
+      id: ID, name: 'Untitled board', schema: 2, origin,
+      objects: Array.from({ length: n }, (_, i) => text('o' + i, 'line ' + i)),
+      pages: [], camera: { x: 0, y: 0, z: 1 }
+    });
+
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const dialogButtons = () =>
+      [...document.querySelectorAll('#overlayCard .actions button')].map(b => b.textContent);
+    const waitForDialog = async () => {
+      for (let i = 0; i < 200; i++) {
+        if (document.getElementById('overlay').classList.contains('show')
+            && dialogButtons().length) return dialogButtons();
+        await sleep(10);
+      }
+      return null;
+    };
+    const clickDialog = async (label) => {
+      const btns = [...document.querySelectorAll('#overlayCard .actions button')];
+      const b = btns.find(x => x.textContent === label);
+      if (!b) return false;
+      b.click();
+      await sleep(0);
+      return true;
+    };
+    const escapeDialog = async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(0);
+    };
+    const dialogShowing = () => document.getElementById('overlay').classList.contains('show');
+    const listed = async () => (await window.board.boards.list());
+
+    const before = (await listed()).map(b => b.id);
+    const mine = async () => (await listed()).filter(b => !before.includes(b.id));
+
+    // --- the earlier export lands first: nothing to clash with, no question ---
+    const p1 = a.loadBoard(file(P1, 7));
+    await sleep(120);
+    r.noQuestionOnAFreshFile = !dialogShowing();
+    await p1;
+    const idA = a.store.doc.id;
+    await a.persist({ force: true });
+
+    // --- the later export of the SAME board, from a different file ---
+    const p2 = a.loadBoard(file(P2, 9));
+    r.askedBeforeTouchingAnything = await waitForDialog();
+    r.offersBoth = !!r.askedBeforeTouchingAnything
+      && r.askedBeforeTouchingAnything.includes('Keep both')
+      && r.askedBeforeTouchingAnything.includes('Replace my copy');
+    // nothing may have been written while the question was still on screen
+    const midway = await mine();
+    r.untouchedWhileAsking = midway.length === 1 && midway[0].objects === 7;
+    await clickDialog('Keep both');
+    await p2;
+    const idB = a.store.doc.id;
+    await a.persist({ force: true });
+
+    r.gotSeparateIds = idA !== idB;
+    const fresh = await mine();
+    r.boardsMade = fresh.length;
+    const a1 = fresh.find(b => b.id === idA), b1 = fresh.find(b => b.id === idB);
+    r.firstStillThere = !!a1 && a1.objects === 7;
+    r.secondAlsoThere = !!b1 && b1.objects === 9;
+
+    // --- and they are numbered apart, not two identical rows ---
+    r.pathHasSeparators = P1.indexOf(BS) > 0;
+    r.namedApart = !!a1 && !!b1 && a1.name !== b1.name;
+    r.firstName = a1 && a1.name;
+    r.secondName = b1 && b1.name;
+
+    // --- re-opening the FIRST file: known already, so no question and no copy ---
+    const p3 = a.loadBoard(file(P1, 7));
+    await sleep(120);
+    r.noQuestionOnAFileSeenBefore = !dialogShowing();
+    await p3;
+    r.reopenedSameBoard = a.store.doc.id === idA;
+    await a.persist({ force: true });
+    r.stillOnlyTwo = (await mine()).length === 2;
+
+    // --- Escape is not an answer: it must land on the side that destroys nothing ---
+    const p4 = a.loadBoard(file(P3, 5));
+    await waitForDialog();
+    await escapeDialog();
+    await p4;
+    await a.persist({ force: true });
+    const afterEscape = await mine();
+    r.escapeKeptBoth = afterEscape.length === 3
+      && !!afterEscape.find(b => b.id === idA && b.objects === 7)
+      && !!afterEscape.find(b => b.id === idB && b.objects === 9);
+
+    // --- "Replace my copy" does what it says, and only when it is chosen ---
+    const victim = a.store.doc.id;                 // the board Escape just created
+    const victimBefore = (await mine()).find(b => b.id === victim).objects;
+    const p5 = a.loadBoard({ ...file(P3 + '-again', 2), id: victim });
+    await waitForDialog();
+    await clickDialog('Replace my copy');
+    await p5;
+    await a.persist({ force: true });
+    const afterReplace = await mine();
+    r.replaceOverwrote = afterReplace.length === 3
+      && afterReplace.find(b => b.id === victim).objects === 2 && victimBefore === 5;
+
+    // --- the local path must not travel inside a file you share ---
+    const { exportable } = await import('app://board/js/export.js');
+    const exported = exportable(a.store.toJSON());
+    r.originStrippedOnExport = !('origin' in exported);
+    r.originKeptLocally = a.store.toJSON().origin === P3 + '-again';
+
+    // --- a board with no file behind it is left completely alone ---
+    a.newBoard(true);
+    const plainId = a.store.doc.id;
+    await a.loadBoard({ id: plainId, name: 'Untitled board', schema: 2,
+      objects: [], pages: [], camera: { x:0, y:0, z:1 } });
+    r.noOriginNoChange = a.store.doc.id === plainId && a.store.doc.name === 'Untitled board';
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('a file with nothing to clash with opens without a question',
+    twoFiles.noQuestionOnAFreshFile);
+  check('a second file carrying the same id asks before it writes anything',
+    twoFiles.offersBoth && twoFiles.untouchedWhileAsking,
+    `buttons: ${JSON.stringify(twoFiles.askedBeforeTouchingAnything)}`);
+  check('"Keep both" makes two boards, not one on top of the other',
+    twoFiles.gotSeparateIds && twoFiles.boardsMade === 2,
+    `${twoFiles.boardsMade} board(s), separate ids: ${twoFiles.gotSeparateIds}`);
+  check('the earlier export is still on disk after the later one is opened',
+    twoFiles.firstStillThere && twoFiles.secondAlsoThere);
+  check('and they are numbered apart in the list',
+    twoFiles.pathHasSeparators && twoFiles.namedApart,
+    `"${twoFiles.firstName}" / "${twoFiles.secondName}"`);
+  check('a file opened before is recognised: no question, no extra copy',
+    twoFiles.noQuestionOnAFileSeenBefore && twoFiles.reopenedSameBoard && twoFiles.stillOnlyTwo);
+  check('Escape is not an answer - it keeps both, it never replaces',
+    twoFiles.escapeKeptBoth);
+  check('"Replace my copy" overwrites, and only when it is chosen',
+    twoFiles.replaceOverwrote);
+  check('the path it was opened from never leaves this machine',
+    twoFiles.originStrippedOnExport && twoFiles.originKeptLocally);
+  check('a board that came from no file is untouched by any of this',
+    twoFiles.noOriginNoChange);
+
+  /* ---- same name, different board: numbered, never doubled up ---- */
+  const naming = await js(`
+    const a = window.app;
+    const r = {};
+    const BS = String.fromCharCode(92);
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const board = (id, origin, name) => ({ id, name, schema: 2, origin,
+      objects: [{ id:'t1', type:'text', x:0, y:0, w:200, h:40, text:name,
+        fontSize:20, color:'#201f1e', align:'left', valign:'top', rotation:0,
+        font:'hand', background:'none' }],
+      pages: [], camera: { x:0, y:0, z:1 } });
+
+    const before = (await window.board.boards.list()).map(b => b.id);
+    const mine = async () => (await window.board.boards.list()).filter(b => !before.includes(b.id));
+
+    // three unrelated boards - different ids, so nothing clashes and nothing is
+    // asked - that happen to be called the same thing
+    await a.loadBoard(board('nm-1', 'D:' + BS + 'a' + BS + 'Lesson plan.gazboard', 'Lesson plan'));
+    await a.persist({ force: true });
+    await a.loadBoard(board('nm-2', 'D:' + BS + 'b' + BS + 'Lesson plan.gazboard', 'Lesson plan'));
+    await a.persist({ force: true });
+    await a.loadBoard(board('nm-3', 'D:' + BS + 'c' + BS + 'Lesson plan.gazboard', 'Lesson plan'));
+    await a.persist({ force: true });
+    await sleep(20);
+
+    const names = (await mine()).map(b => b.name).sort();
+    r.names = names;
+    r.allDistinct = new Set(names).size === names.length;
+    r.numbered = names.join('|') === 'Lesson plan|Lesson plan 2|Lesson plan 3';
+
+    // and a board with a placeholder name takes its file's name, not "Untitled board"
+    await a.loadBoard(board('nm-4', 'D:' + BS + 'd' + BS + 'Week 3 warm-up.gazboard', 'Untitled board'));
+    await a.persist({ force: true });
+    await sleep(20);
+    r.tookTheFileName = !!(await mine()).find(b => b.id === 'nm-4' && b.name === 'Week 3 warm-up');
+
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('boards that would share a name are numbered instead',
+    naming.allDistinct && naming.numbered, JSON.stringify(naming.names));
+  check('a board still called "Untitled board" takes the name of its file',
+    naming.tookTheFileName);
+
+  /* ---- opening a board file is reachable without knowing the shortcut ---- */
+  const openable = await js(`
+    const a = window.app;
+    a.newBoard(true);
+    const labels = (id) => [...(document.getElementById(id) || document.body).querySelectorAll('button')]
+      .map((b) => (b.textContent || '').trim());
+
+    await a.panels.boards();
+    await new Promise((r) => setTimeout(r, 400));
+    const boardsPanel = labels('boardList');
+
+    a.panels.close();
+    await a.panels.settings();
+    await new Promise((r) => setTimeout(r, 250));
+    const settingsPanel = [...document.querySelectorAll('.panel button')].map((b) => (b.textContent || '').trim());
+    a.panels.close();
+
+    return { boardsPanel, settingsPanel, hasCommand: typeof a.command === 'function' };
+  `);
+
+  const hasOpen = (list) => list.some((t) => /^open a board file/i.test(t));
+  check('the boards panel offers a way to open a board file',
+    hasOpen(openable.boardsPanel), openable.boardsPanel.join(' | ') || '(none)');
+  check('and so does the board section in Settings',
+    hasOpen(openable.settingsPanel),
+    openable.settingsPanel.filter((t) => /board|copy|canvas/i.test(t)).join(' | ') || '(none)');
+
+  /* ---- a board opened from a file is not clobbered by the startup restore ---- */
+  const raceResult = await js(`
+    const a = window.app;
+    const r = {};
+
+    // the stale copy this machine already has, under the same id as the file -
+    // which is what happens when one board travels between two computers
+    const ID = 'shared-board-id';
+    const localCopy = { id: ID, name: 'Untitled board', schema: 2, objects: [
+      { id:'old1', type:'text', x:0, y:0, w:200, h:40, text:'from this machine',
+        fontSize:20, color:'#201f1e', align:'left', valign:'top', rotation:0, font:'hand', background:'none' }
+    ], pages: [], camera: { x:0, y:0, z:1 } };
+
+    // the file carried back from the other computer: same board, more work on it
+    const fromTheOtherMachine = { id: ID, name: 'Untitled board', schema: 2, objects: [
+      ...localCopy.objects,
+      { id:'new1', type:'text', x:0, y:60, w:200, h:40, text:'drawn on the laptop',
+        fontSize:20, color:'#201f1e', align:'left', valign:'top', rotation:0, font:'hand', background:'none' },
+      { id:'new2', type:'stroke', tool:'pen', color:'#e81123', width:4, effect:'none',
+        points:[{x:0,y:120},{x:60,y:140},{x:120,y:120}], bbox:{x:0,y:110,w:120,h:40}, rotation:0 }
+    ], pages: [], camera: { x:0, y:0, z:1 } };
+
+    // Stand the race up exactly as it happens: the restore is already in flight
+    // when the file arrives. resume() is made slow so the ordering is certain
+    // rather than lucky.
+    const realResume = window.board.boards.resume;
+    a.boardOpenedExplicitly = false;
+    const slowResume = () => new Promise((res) => setTimeout(() => res({ board: localCopy, reason: 'pointer' }), 250));
+    window.board.boards.resume = slowResume;   // the race only exists if resume is actually slow
+    const restore = a.restoreLastBoard.call({
+      ...a,
+      store: a.store, surface: a.surface, textEditor: a.textEditor, settings: a.settings,
+      loadBoard: a.loadBoard.bind(a), toast: () => {}, newBoard: a.newBoard.bind(a),
+      resolveAssets: a.resolveAssets.bind(a), command: a.command.bind(a), syncUI: () => {},
+      // a spread copies own properties only, so the prototype methods
+      // restoreLastBoard leans on have to be handed over by name
+      appInfo: a.appInfo.bind(a),
+      get boardOpenedExplicitly() { return a.boardOpenedExplicitly; }
+    });
+
+    // the file lands first, as it does in real life
+    await a.loadBoard(JSON.parse(JSON.stringify(fromTheOtherMachine)));
+    r.rightAfterTheFileOpened = a.store.objects.length;
+
+    // now let the restore finish and try to have its say
+    await new Promise((res) => setTimeout(res, 500));
+    await restore.catch(() => {});
+    r.afterTheRestoreSettled = a.store.objects.length;
+    r.keptTheLaptopWork = !!a.store.get('new1') && !!a.store.get('new2');
+    r.stillHasTheOlderWork = !!a.store.get('old1');
+
+    r.mainReportsTheFlag = !!(await window.board.info()).pendingBoardFile;
+
+    window.board.boards.resume = realResume;
+    a.boardOpenedExplicitly = false;
+    a.newBoard(true);
+    return r;
+  `);
+
+  check('the app is told up front when a file was double-clicked, rather than racing',
+    raceResult.mainReportsTheFlag === false,
+    'no file on this launch, so the flag is false — the two-launch check covers the true case');
+  check('a board opened from a file survives the startup restore',
+    raceResult.afterTheRestoreSettled === raceResult.rightAfterTheFileOpened,
+    `${raceResult.rightAfterTheFileOpened} objects on open, ${raceResult.afterTheRestoreSettled} after`);
+  check('work done on the other computer is still there',
+    raceResult.keptTheLaptopWork && raceResult.stillHasTheOlderWork);
+
+  /* ---- dismissing the update question is not the same as never answering ---- */
+  const nag = await js(`
+    const a = window.app;
+    const { App } = await import('app://board/js/app.js').catch(() => ({}));
+    const r = {};
+    const saved = { uc: a.settings.updateCheck, at: a.settings.updateAskedAt };
+
+    // never asked: the question is due
+    a.settings.updateCheck = null; a.settings.updateAskedAt = 0;
+    r.dueWhenNeverAsked = Date.now() - (a.settings.updateAskedAt || 0) > a.constructor.ASK_AGAIN_AFTER;
+
+    // Actually dismiss it, rather than setting the flag by hand - otherwise this
+    // checks the rule and never checks that anything records the dismissal.
+    a.settings.updateCheck = null; a.settings.updateAskedAt = 0;
+    const asking = a.askAboutUpdates();
+    await new Promise((res) => setTimeout(res, 150));
+    r.dialogAppeared = document.getElementById('overlay').classList.contains('show');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await asking;
+    r.stillUnanswered = a.settings.updateCheck === null;
+    r.dismissalRecorded = (a.settings.updateAskedAt || 0) > 0;
+    r.notDueAgainToday = !(Date.now() - (a.settings.updateAskedAt || 0) > a.constructor.ASK_AGAIN_AFTER);
+
+    // and it does come back eventually rather than being buried for good
+    a.settings.updateAskedAt = Date.now() - (8 * 24 * 60 * 60 * 1000);
+    r.dueAgainAfterAWeek = Date.now() - a.settings.updateAskedAt > a.constructor.ASK_AGAIN_AFTER;
+
+    // a real answer is still remembered for good
+    a.settings.updateCheck = true; a.settings.updateAskedAt = 0;
+    r.answerSticks = a.settings.updateCheck === true;
+
+    a.settings.updateCheck = saved.uc; a.settings.updateAskedAt = saved.at;
+    return r;
+  `);
+
+  check('the update question is asked on a fresh install', nag.dueWhenNeverAsked);
+  check('dismissing it records no answer', nag.stillUnanswered && nag.dialogAppeared);
+  check('but the dismissal itself is remembered', nag.dismissalRecorded);
+  check('but it does not come back the very next time the app opens', nag.notDueAgainToday);
+  check('it does come back after a week, rather than never', nag.dueAgainAfterAWeek);
+  check('an actual answer is still kept for good', nag.answerSticks);
 
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);

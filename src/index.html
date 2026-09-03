@@ -32,6 +32,9 @@
 
   <main id="stage">
     <canvas id="c"></canvas>
+    <!-- The ink pointer. A layer of its own so moving it is a compositor
+         transform rather than a repaint of the board - see showInkPointer(). -->
+    <div id="inkNib" hidden></div>
     <div id="editLayer"></div>
 
     <div id="ctxbar"></div>

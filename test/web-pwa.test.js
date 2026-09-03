@@ -833,7 +833,7 @@ async function runTests() {
 
   /* ---------------- 6. Web Files Bridge Validation ---------------- */
   try {
-    const { registerSessionFile, readVirtualFile, writeVirtualFile } = await import('../src/js/platform/web-files.js');
+    const { registerSessionFile, readVirtualFile, writeVirtualFile, fileOrigin } = await import('../src/js/platform/web-files.js');
 
     const fakeFile = new global.Blob(['Hello GazBoard'], { type: 'text/plain' });
     fakeFile.name = 'test-board.gazboard';
@@ -847,6 +847,29 @@ async function runTests() {
 
     const writeOk = await writeVirtualFile('export.png', new Uint8Array([1, 2, 3]));
     check('writeVirtualFile initiates download without error', writeOk === true);
+
+    // The virtual token counts picks; it does not name the file. Opening the
+    // same board twice has to look like the same board, or the desktop's
+    // copy-vs-same-document question would be asked again on every open and
+    // breed a copy each time. See claimLocalBoard() in app.js.
+    const again = new global.Blob(['Hello GazBoard'], { type: 'text/plain' });
+    again.name = 'test-board.gazboard';
+    Object.defineProperty(again, 'lastModified', { value: 1700000000000 });
+    Object.defineProperty(fakeFile, 'lastModified', { value: 1700000000000 });
+    const t2 = registerSessionFile(again);
+    check('a second pick of the same file gets a different token', token !== t2);
+    check('but the same origin, so it is recognised as the same board',
+      fileOrigin(token) && fileOrigin(token) === fileOrigin(t2), fileOrigin(t2));
+
+    // a genuinely different file must NOT be mistaken for it
+    const other = new global.Blob(['Hello GazBoard, but longer'], { type: 'text/plain' });
+    other.name = 'test-board.gazboard';
+    Object.defineProperty(other, 'lastModified', { value: 1700000000000 });
+    const t3 = registerSessionFile(other);
+    check('a different file of the same name is not mistaken for it',
+      fileOrigin(t3) !== fileOrigin(token), fileOrigin(t3));
+
+    check('an unknown token has no origin at all', fileOrigin('virt://nope/x') === null);
   } catch (e) {
     check('web files bridge failed', false, e.message);
   }
@@ -860,7 +883,7 @@ async function runTests() {
     const adapter = createWebAdapter();
 
     const requiredMethods = [
-      'info', 'readFile', 'writeFile', 'openDialog', 'saveDialog',
+      'info', 'readFile', 'fileOrigin', 'writeFile', 'openDialog', 'saveDialog',
       'showItem', 'openReleases', 'checkForUpdate', 'importToPdf', 'exportPdf',
       'onMenu', 'onOpenFile', 'onWindowResized', 'onFlush'
     ];

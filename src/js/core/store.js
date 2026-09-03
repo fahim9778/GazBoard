@@ -297,7 +297,11 @@ export class Store {
     // `page` is written alongside `pages` so a board saved here still opens on
     // a build from before multi-page: it sees the first sheet and ignores the
     // rest, which beats falling back to an infinite canvas.
+    // `origin` is the file this board was opened from. It belongs to THIS
+    // machine and is stripped on the way out - see exportable() in export.js.
+    // Left undefined when there is none, so it never appears in the JSON.
     return { id: d.id, name: d.name, schema: 2, created: d.created, modified: d.modified,
+      origin: d.origin || undefined,
       background: d.background, pages: d.pages.map((p) => ({ ...p })), page: d.pages[0] || null,
       camera: d.camera, objects: d.order.map((id) => d.objects[id]).filter(Boolean), ...extra };
   }
@@ -316,6 +320,7 @@ export class Store {
     d.id = data.id || d.id;
     d.created = data.created || Date.now();
     d.modified = data.modified || Date.now();
+    if (data.origin) d.origin = data.origin;
     d.background = { ...d.background, ...(data.background || {}) };
     d.pages = pagesFrom(data);
     d.camera = data.camera || d.camera;

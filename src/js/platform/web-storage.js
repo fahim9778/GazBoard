@@ -242,7 +242,8 @@ export async function listBoards() {
           name: r.name || 'Untitled board',
           modified: r.modified || Date.now(),
           objects: typeof r.objects === 'number' ? r.objects : (r.doc?.objects || []).length,
-          thumb: r.thumb || null
+          thumb: r.thumb || null,
+          origin: r.origin || r.doc?.origin || null
         }));
         out.sort((a, b) => b.modified - a.modified);
         resolve(out);

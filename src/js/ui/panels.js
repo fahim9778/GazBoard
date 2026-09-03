@@ -211,12 +211,22 @@ export function createPanels(app) {
             () => s.inkWithMouse,
             (v) => { s.inkWithMouse = v; app.saveSettings(); rerender(); }
           ), s.inkWithMouse === 'auto'
-            ? (s.penSeen
-              ? 'A stylus has been used on this board, so the mouse pans the canvas instead of inking.'
-              : 'No stylus seen yet, so the mouse draws. It switches to panning the first time you use a pen.')
+            ? (app.penSeenThisSession
+              ? 'A stylus has been used since the app started, so the mouse pans the canvas instead of inking. It draws again next time you open GazBoard.'
+              : 'The mouse draws until a stylus is used, then it pans instead — only for this session.')
             : s.inkWithMouse === 'yes'
-              ? 'The mouse always inks, like a stylus.'
-              : 'The mouse only ever pans and selects; ink comes from the stylus.'),
+              ? 'The mouse always inks, like a stylus. Pan with space and drag, the middle button, right-drag, or the pan tool. Choose this if you draw with a mouse and have no pen.'
+              : 'Never (default): the pen inks and the mouse moves the canvas and drags objects — both at the same time, whichever tool is chosen.'),
+          row('Pointer while inking', mkChoice(
+            [['nib', 'Pen nib'], ['arrow', 'Arrow'], ['crosshair', 'Crosshair']],
+            () => s.inkPointer || 'nib',
+            (v) => { s.inkPointer = v; app.saveSettings(); app.interaction.inkPointer = null;
+                     app.surface.invalidate(); rerender(); }
+          ), (s.inkPointer || 'nib') === 'nib'
+            ? 'A pen tip in the colour you are drawing with, painted onto the board itself so it stays put for the whole stroke — Windows hides the ordinary pointer while a stylus is touching the screen.'
+            : (s.inkPointer === 'arrow'
+              ? 'The ordinary mouse pointer, the way most whiteboards do it. On a tablet it will disappear while the pen is down; that is Windows, not GazBoard.'
+              : 'A crosshair for placing a mark exactly. Same caveat as the arrow on a tablet.')),
           row('Ruler snapping', mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
         h('div', { class: 'section' },
@@ -238,6 +248,8 @@ export function createPanels(app) {
         h('div', { class: 'section' },
           h('h5', {}, 'Board'),
           h('button', { class: 'btn', style: 'width:100%;margin-bottom:8px', onclick: () => { app.command('board.new'); close(); } }, 'New board'),
+          h('button', { class: 'btn', style: 'width:100%;margin-bottom:8px', onclick: () => { app.command('board.open'); close(); } }, 'Open a board file…'),
+          h('button', { class: 'btn', style: 'width:100%;margin-bottom:8px', onclick: () => { app.command('board.save'); close(); } }, 'Save a copy…'),
           h('button', { class: 'btn danger', style: 'width:100%', onclick: () => app.command('edit.clear') }, 'Clear this canvas')
         ),
         h('div', { class: 'section' }, h('h5', {}, 'About'), info,
@@ -254,7 +266,10 @@ export function createPanels(app) {
     const host = document.getElementById('boardList');
     if (!host) return;
     host.innerHTML = '';
-    host.appendChild(h('button', { class: 'btn primary', style: 'width:100%;margin-bottom:14px', onclick: () => { app.command('board.new'); close(); } }, '+ New board'));
+    host.appendChild(h('button', { class: 'btn primary', style: 'width:100%;margin-bottom:8px', onclick: () => { app.command('board.new'); close(); } }, '+ New board'));
+    // Opening a .gazboard file had a keyboard shortcut and nothing to click,
+    // which is no use to anyone who does not already know it is there.
+    host.appendChild(h('button', { class: 'btn', style: 'width:100%;margin-bottom:14px', onclick: () => { app.command('board.open'); close(); } }, 'Open a board file…'));
     if (!list.length) host.appendChild(h('p', { style: 'color:var(--text-2);font-size:13px' }, 'No saved boards yet.'));
 
     // Every board this app has ever saved is a plain file in one folder. Showing

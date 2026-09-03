@@ -34,11 +34,45 @@ const DEFAULT_SETTINGS = {
   edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d', showToolKeys: true,
   rightDragPans: true, hintsSeen: {},
   // null = never asked. Nothing reaches the network until this is true.
-  updateCheck: null, lastUpdateCheck: 0, skippedVersion: null,
-  // 'auto' follows Whiteboard: the mouse inks until a stylus shows up, then it
-  // becomes a pan-only device. 'yes' / 'no' pin it either way.
-  inkWithMouse: 'auto', penSeen: false
+  updateCheck: null, lastUpdateCheck: 0, skippedVersion: null, updateAskedAt: 0,
+  // 'auto': the mouse draws until a stylus turns up, then it pans and the pen
+  // inks - decided fresh each session, never remembered. 'yes' and 'no' pin it.
+  // See mouseInks().
+  inkWithMouse: 'auto',
+  // What you see while inking: 'nib' (drawn by us, so Windows cannot hide it
+  // mid-stroke), 'arrow' or 'crosshair'. See inkPointerKind() in tools.js.
+  inkPointer: 'nib'
 };
+
+/**
+ * The file's own name, with its extension and folders taken off, for use as a
+ * board name. Handles both separators: the path comes from whichever OS is
+ * running, and a Windows path reaching a POSIX build is not worth a crash.
+ */
+function boardNameFromPath(p) {
+  if (!p || typeof p !== 'string') return null;
+  const base = p.split(/[\\/]/).pop() || '';
+  const name = base.replace(/\.(gazboard|openboard|json)$/i, '').trim();
+  return name || null;
+}
+
+/**
+ * A board name nothing else on this machine is already using.
+ *
+ * Two boards called the same thing is exactly how a copy carried back from
+ * another computer went unnoticed while it overwrote the original. The first
+ * one keeps the plain name; the next is " 2", the way every file manager has
+ * numbered a second copy for thirty years.
+ */
+function uniqueBoardName(base, list) {
+  const name = String(base || 'Untitled board').trim() || 'Untitled board';
+  const taken = new Set((list || []).map((b) => String(b && b.name || '')));
+  if (!taken.has(name)) return name;
+  for (let n = 2; n < 1000; n++) {
+    if (!taken.has(name + ' ' + n)) return name + ' ' + n;
+  }
+  return name + ' ' + Date.now();     // a thousand copies is somebody else's problem
+}
 
 class App {
   /*
@@ -49,6 +83,9 @@ class App {
    * happened to pause for long enough.
    */
   static SAVE_CEILING = 20000;
+
+  /** How long a dismissed update question stays dismissed. */
+  static ASK_AGAIN_AFTER = 7 * 24 * 60 * 60 * 1000;
 
   constructor() {
     this.store = new Store();
@@ -81,6 +118,28 @@ class App {
       // Text and notes were set in the sans face up to 1.13. Handwriting is the
       // default now; carry anyone who never touched the picker across to it, and
       // leave a deliberate choice of 'ui' alone once it has been made.
+      /*
+       * 'auto' used to be the default, and it remembered for ever that a stylus
+       * had once been seen - so a desktop with a drawing tablet would silently
+       * stop drawing with the mouse the moment the tablet was unplugged, with
+       * nothing on screen to explain it. `penSeen` is that stale flag; it is
+       * dropped here and never written again.
+       */
+      if (!s.mouseInkDefault5) {
+        // Two defaults were tried during 2.4.3 development and neither shipped:
+        // a flat 'yes', then a flat 'no'. Both were ours rather than anyone's
+        // choice, so both go back to 'auto'. A 'yes' or 'no' somebody picked by
+        // hand is left exactly as it is; the flags are what tell them apart.
+        const ours = s.inkWithMouse === undefined
+          || (s.inkWithMouse === 'yes' && s.mouseInkDefault3 === true)
+          || (s.inkWithMouse === 'no' && s.mouseInkDefault4 === true);
+        if (ours) s.inkWithMouse = 'auto';
+        delete s.penSeen;
+        delete s.mouseInkDefault3;
+        delete s.mouseInkDefault4;
+        s.mouseInkDefault5 = true;
+      }
+
       if (!s.fontDefaults2) {
         if (s.textFont === 'ui') s.textFont = 'hand';
         if (s.noteFont === 'ui') s.noteFont = 'hand';
@@ -217,6 +276,31 @@ class App {
    */
   async externaliseAssets(doc) {
     if (!doc || !Array.isArray(doc.objects) || !window.board.assets) return doc;
+
+    /*
+     * An assetId proves the picture was filed once, SOMEWHERE. It does not
+     * prove it is filed HERE.
+     *
+     * A .gazboard carried to another machine arrives with the picture still
+     * inline AND the id it was given on the machine it came from - but that
+     * machine's assets folder did not travel with it. Believing the id would
+     * write a reference to a file this machine has never had: the picture
+     * draws for the rest of the session, from the data still in memory, and
+     * is gone the next time the board is opened. Silently, and only on the
+     * second machine, which is what made it hard to see.
+     *
+     * So ask the store what it actually holds before trusting any id.
+     */
+    const claimed = [];
+    for (const o of doc.objects) {
+      if (o && o.type === 'image' && o.assetId
+          && typeof o.src === 'string' && o.src.startsWith('data:')) claimed.push(o.assetId);
+    }
+    let here = {};
+    if (claimed.length) {
+      try { here = (await window.board.assets.have(claimed)) || {}; } catch { here = {}; }
+    }
+
     const objects = [];
     for (const o of doc.objects) {
       if (!o || o.type !== 'image') { objects.push(o); continue; }
@@ -236,13 +320,17 @@ class App {
         continue;
       }
       let id = o.assetId;
-      if (!id) {
+      if (!id || here[id] !== true) {
         let r = null;
         try { r = await window.board.assets.put(o.src); } catch { r = null; }
         if (r && r.id) {
           id = r.id;
           const live = this.store.get(o.id);   // remember it, so the next save is cheap
           if (live) live.assetId = id;
+        } else if (id && here[id] !== true) {
+          // the store would not take it and does not already have it: keep the
+          // picture inline rather than point at a file that is not there
+          id = null;
         }
       }
       objects.push(id ? { ...o, src: 'asset:' + id, assetId: id } : o);
@@ -290,8 +378,30 @@ class App {
    * sitting on disk a folder away.
    */
   async restoreLastBoard() {
+    /*
+     * Double-clicking a .gazboard file starts the app AND asks it to restore
+     * whatever was open last, and those two race. The file arrives first and
+     * appears on screen; a moment later the resume finishes and quietly loads
+     * the local board over the top - resetting the zoom to 100%, which is the
+     * only visible sign that anything happened.
+     *
+     * On one machine that looks like a flicker. Carry a board between two
+     * computers and it looks like your work has been thrown away: the file and
+     * the local board share an id, so what lands on top is the older copy this
+     * machine already had. The work is still in the file, but nothing on screen
+     * says so.
+     *
+     * An explicit request always wins over a guess about what to reopen.
+     */
+    if (this.boardOpenedExplicitly) return;
     try {
+      // Ask first, guess second. The main process knows a file was
+      // double-clicked before this window even existed, so there is no need to
+      // race it - if one is on its way, there is nothing here to decide.
+      if ((await this.appInfo())?.pendingBoardFile) return;
+      if (this.boardOpenedExplicitly) return;
       const res = await window.board.boards.resume();
+      if (this.boardOpenedExplicitly) return;   // a file arrived while we asked
       if (res && res.board) {
         await this.loadBoard(res.board, { silent: true, startup: true });
         if (res.reason === 'newest') this.toast('Reopened your most recent board');
@@ -303,8 +413,10 @@ class App {
     const id = localStorage.getItem('gazboard.lastBoard') || localStorage.getItem('openboard.lastBoard');
     if (id) {
       const data = await window.board.boards.load(id);
+      if (this.boardOpenedExplicitly) return;
       if (data) { await this.loadBoard(data, { silent: true, startup: true }); return; }
     }
+    if (this.boardOpenedExplicitly) return;
     this.newBoard(true);
   }
 
@@ -383,7 +495,76 @@ class App {
     return wasOpen;
   }
 
+  /**
+   * Work out which local board a file opened from disk belongs to.
+   *
+   * An exported .gazboard keeps the id of the board it was exported FROM, and
+   * the local board store is keyed on that id. So two different files - a copy
+   * carried back from another machine, an earlier save kept as a checkpoint,
+   * two exports taken minutes apart - all carry the same id and all claim the
+   * same slot. Opening one wrote it over the other, and the board that had
+   * been there was simply gone. Nothing said so, and with every board called
+   * "Untitled board" there was nothing on screen to tell them apart either.
+   *
+   * The file's id is therefore treated as where the board came FROM, not as
+   * who it IS on this machine:
+   *
+   *   - a file opened here before keeps the local board it was given, so
+   *     editing a file on disk goes on updating the same board, as expected;
+   *   - a file whose id is already taken by some OTHER file gets a fresh local
+   *     id, so the two live side by side instead of one eating the other;
+   *   - a file whose id is free keeps it, which is the ordinary case and the
+   *     one that has always worked.
+   *
+   * `origin` never leaves this machine: exportable() strips it.
+   */
+  async claimLocalBoard(data) {
+    let list = [];
+    try { list = (await window.board.boards.list()) || []; } catch { return data; }
+
+    // Opened here before: it keeps the board it was given, so editing a file on
+    // disk goes on updating the same board. No question, no second copy.
+    const seenBefore = list.find((b) => b.origin && b.origin === data.origin);
+    if (seenBefore) return { ...data, id: seenBefore.id };
+
+    // A board that never got past the placeholder name is named after its file.
+    // Two rows reading "Untitled board" is how this went unnoticed for so long.
+    const base = data.name && data.name !== 'Untitled board'
+      ? data.name
+      : boardNameFromPath(data.origin) || 'Untitled board';
+
+    const clash = list.find((b) => b.id === data.id);
+    if (!clash) return { ...data, name: uniqueBoardName(base, list) };
+
+    const answer = await this.choose(
+      'You already have this board',
+      `“${clash.name}” on this computer came from the same board as this file - `
+      + 'most likely this file is a copy of it made on another machine. Keeping both '
+      + 'leaves your copy untouched and opens the file alongside it. Replacing writes '
+      + 'the file over your copy, and what is in your copy now would be gone.',
+      [{ id: 'both', label: 'Keep both', primary: true },
+       { id: 'replace', label: 'Replace my copy' }],
+      { cancel: false });
+
+    // Escape, or the dialog going away for any other reason, lands on the
+    // answer that destroys nothing. Losing a board to a stray keypress is the
+    // whole failure this exists to stop.
+    if (answer === 'replace') {
+      this.toast('Replaced your copy of “' + clash.name + '”');
+      return data;
+    }
+    return { ...data, id: uid('b'), name: uniqueBoardName(base, list), created: Date.now() };
+  }
+
   async loadBoard(data, opts = {}) {
+    // Anything that is not the startup restore is somebody asking for a
+    // particular board - from a file dialog, a drag onto the window, or a
+    // double-click in Explorer. Whatever the startup restore was about to
+    // reopen, it does not get to land on top of that.
+    if (!opts.startup) this.boardOpenedExplicitly = true;
+    // A board arriving from a file has to be given its own place to live before
+    // anything is written, or the first autosave lands on somebody else's board.
+    if (!opts.startup && data && data.origin) data = await this.claimLocalBoard(data);
     this.textEditor.cancel();
     data = await this.resolveAssets(data);
     this.store.load(data);
@@ -440,6 +621,8 @@ class App {
     if (this.tool === tool) return;
     this.textEditor.commit();
     this.tool = tool;
+    // a pen nib left behind by the tool it belonged to is just a stray picture
+    if (tool !== 'pen' && tool !== 'highlighter') this.interaction.hideInkPointer();
     if (tool !== 'laser') this.surface.laser.length = 0;   // no stale dot left behind
     // panning is a view change, not an edit - it must not throw a selection away
     if (tool !== 'select' && tool !== 'lasso' && tool !== 'pan') this.setSelection([]);
@@ -503,20 +686,47 @@ class App {
    */
   worldSize(screenPx) { return screenPx / (this.surface.cam.z || 1); }
 
-  /** Does the mouse draw, or does it only pan? */
+  /**
+   * Does the mouse draw, or does it only pan?
+   *
+   * By default it only pans. The two devices never do the same job: the pen
+   * inks, the mouse moves the canvas and drags objects, and both are live at
+   * the same moment - no mode, no detection, no switching. Choosing an ink tool
+   * changes what the PEN does; it never changes what the mouse does. This is
+   * what Whiteboard does, and it is what makes a pen and a mouse usable
+   * together without either one being put away first.
+   *
+   * The previous default decided for itself: the first time a stylus touched
+   * the tablet the mouse switched to panning for good, remembered across
+   * sessions. That was a trap - unplug the tablet and the pen tool silently
+   * stopped working. Deciding once, up front, and saying so in Settings beats
+   * deciding cleverly and being wrong in silence.
+   *
+   * "Always" is the opt-in for anyone drawing with a mouse and nothing else;
+   * "Auto" keeps the old guess for anyone who deliberately wants it, and is no
+   * longer remembered between sessions.
+   */
   get mouseInks() {
     const m = this.settings.inkWithMouse;
     if (m === 'yes') return true;
     if (m === 'no') return false;
-    return !this.settings.penSeen;          // auto
+    return !this.penSeenThisSession;         // 'auto' - the default
   }
 
-  /** Called the first time a stylus touches the tablet. */
+  /**
+   * Called the first time a stylus touches the tablet.
+   *
+   * Only 'auto' cares, and only for this session: a tablet that is plugged in
+   * today may be gone tomorrow, and a preference that outlives the hardware it
+   * was inferred from is a preference nobody chose. The toast fires on the
+   * transition alone - under the default the mouse was already panning, and
+   * announcing a change that did not happen is worse than saying nothing.
+   */
   notePenSeen() {
-    if (this.settings.penSeen) return;
-    this.settings.penSeen = true;
-    this.saveSettings();
-    if (!this.mouseInks) {
+    if (this.penSeenThisSession) return;
+    const wasInking = this.mouseInks;
+    this.penSeenThisSession = true;
+    if (wasInking && !this.mouseInks) {
       this.toast('Stylus detected — the mouse now pans instead of drawing', 'pen', 5000);
       this.surface.invalidate();
     }
@@ -1317,7 +1527,14 @@ class App {
         'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
         + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
         + 'and the scroll wheel works as usual.');
-      if (this.settings.updateCheck === null || this.settings.updateCheck === undefined) await this.askAboutUpdates();
+      if (this.settings.updateCheck === null || this.settings.updateCheck === undefined) {
+        // Dismissing the question means "not now", and not now should last
+        // longer than one launch. It used to come back every single time the app
+        // opened until it got a click, which is nagging, and easy to mistake for
+        // the app having forgotten an answer you did give.
+        const asked = this.settings.updateAskedAt || 0;
+        if (Date.now() - asked > App.ASK_AGAIN_AFTER) await this.askAboutUpdates();
+      }
       else if (this.settings.updateCheck) await this.checkForUpdates({ silent: true });
     } catch { /* an update check must never be able to break the app */ }
   }
@@ -1335,7 +1552,11 @@ class App {
     // Escape, or anything that is not a real answer, means "not now" - leave
     // the question unanswered so it is asked again rather than silently
     // recording a no that can never be revisited.
-    if (answer !== 'yes' && answer !== 'no') return;
+    if (answer !== 'yes' && answer !== 'no') {
+      this.settings.updateAskedAt = Date.now();   // asked, not answered
+      this.saveSettings();
+      return;
+    }
     this.settings.updateCheck = answer === 'yes';
     this.saveSettings();
     if (answer === 'yes') this.checkForUpdates({ silent: true });
@@ -1488,6 +1709,9 @@ class App {
       if (this.settings.autosave) this.persist();
     });
     window.board.onOpenFile((data) => {
+      // Set before the await, not after: restoreLastBoard is in flight and must
+      // see this the moment the file arrives, not once it has finished loading.
+      this.boardOpenedExplicitly = true;
       // fire-and-forget from the main process: nothing is waiting on it, so a
       // failure has to be reported here rather than escaping as a rejection
       this.loadBoard(data).catch(() => this.toast('Could not open that board'));

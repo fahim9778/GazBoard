@@ -56,6 +56,7 @@ export function createWebAdapter() {
     },
 
     readFile: (p) => files.readVirtualFile(p),
+    fileOrigin: (p) => files.fileOrigin(p),
     writeFile: (filePath, data) => files.writeVirtualFile(filePath, data),
     openDialog: (opts) => files.openFileDialog(opts),
     saveDialog: (opts) => files.saveFileDialog(opts),

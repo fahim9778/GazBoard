@@ -7,7 +7,7 @@ import { handlePositions, HANDLE, HANDLES, drawShape } from './render.js';
 import { translateObject, scaleObject, rotateObjectAround, normalizeRect, anchorFor, CURSORS } from './transform.js';
 import { recognize, fitError, MAX_FIT_ERROR } from './recognize.js';
 import { splitStroke } from './erase.js';
-import { inkCursor } from './cursors.js';
+import { inkCursor, inkGlyphUrl, inkGlyphHotspot } from './cursors.js';
 import { pageRects, pageIndexAt, pageIndexForBox, nearestPageIndex, offsetIntoRect, inRect } from './pages.js';
 
 const TAP_SLOP = 4;
@@ -45,7 +45,15 @@ export class Interaction {
     c.addEventListener('pointermove', (e) => this.onMove(e));
     c.addEventListener('pointerup', (e) => this.onUp(e));
     c.addEventListener('pointercancel', (e) => this.onUp(e));
-    c.addEventListener('pointerleave', (e) => { if (!this.action) { this.surface.hoverId = null; this.surface.invalidate(); } });
+    c.addEventListener('pointerleave', () => {
+      if (this.action) return;
+      this.surface.hoverId = null;
+      // a nib parked at the edge of the board, with the real pointer somewhere
+      // else entirely, is worse than no nib at all
+      this.hideInkPointer();
+      this.eraserCursor = null;
+      this.surface.invalidate();
+    });
     c.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     c.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     c.addEventListener('contextmenu', (e) => {
@@ -176,6 +184,13 @@ export class Interaction {
         // leave a selection behind: handles and the selection bar belong to
         // Select and Lasso, and having them appear around your handwriting
         // while the pen tool is active is just clutter you then have to clear.
+        //
+        // Say so, once. Someone with no stylus who picks the pen and drags the
+        // mouse gets a moving canvas and no ink, and there is nothing on screen
+        // to explain why. A silent no-op is the whole bug this rule replaced.
+        this.app.showHint('mouse-pans',
+          'The <b>pen</b> draws and the <b>mouse</b> moves the canvas — both at once. '
+          + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
         const hit = pick(this.store, wp, 8 / this.surface.cam.z);
         if (hit && !hit.locked) {
           const objs = withAttached(this.store, [hit.id])
@@ -246,7 +261,7 @@ export class Interaction {
     this.surface.cam.x = rp.cam.x + dx;
     this.surface.cam.y = rp.cam.y + dy;
     this.surface.clampCamera();
-    this.canvas.style.cursor = 'grabbing';
+    this.setCursor('grabbing');
     this.app.syncZoom();
     this.surface.invalidate();
     return true;
@@ -288,6 +303,11 @@ export class Interaction {
     // A palm sliding on the screen therefore dragged the pen's stroke over to
     // the palm - the ink jumped, or looked like it had simply gone missing.
     if (this.actionId != null && e.pointerId !== this.actionId) return;
+
+    // The drawn nib has to keep up with an ink stroke in flight. This is the
+    // case the CSS cursor could never cover: Windows hides the system pointer
+    // for exactly as long as the pen is down.
+    if (this.action.type === 'draw') this.showInkPointer(sp, this.tool, e.pointerType);
 
     this.lastMotion = { sp, mods: { shift: e.shiftKey, alt: e.altKey }, pressure: this.pressure(e) };
     this.applyMotion(sp, this.lastMotion.mods, e);
@@ -500,6 +520,13 @@ export class Interaction {
     }
     this.action = null;
     this.actionId = null;
+    // The stroke is over, so the system cursor is coming back: hand the pointer
+    // over now rather than waiting for a move that, on a pen just lifted off,
+    // may not arrive for some time. After `action` is cleared, so that
+    // showInkPointer sees a hover and picks the system cursor.
+    if (a.type === 'draw' && (this.tool === 'pen' || this.tool === 'highlighter')) {
+      this.showInkPointer(sp, this.tool, e.pointerType);
+    }
     this.app.syncUI();
     // The one moment a save cannot interrupt anything: the gesture is over and
     // the next has not begun.
@@ -915,12 +942,125 @@ export class Interaction {
    *   MOUSE, so a hovering stylus must not be dragged through it - otherwise
    *   every stroke the nib passes over lights up while you are writing.
    */
+  /**
+   * Set the canvas cursor, but only when it actually changes.
+   *
+   * updateHover runs on every pointermove, so the property was being written a
+   * hundred times a second while the pointer moved. The value is usually
+   * identical - inkCursor() caches its data: URL - so the browser was almost
+   * certainly discarding them, and this is hygiene rather than a fix for
+   * anything visible. It does make the writes countable, which is how the test
+   * beside it can tell a real cursor change from noise.
+   */
+  setCursor(value) {
+    if (this._cursor === value) return false;
+    this._cursor = value;
+    this.canvas.style.cursor = value;
+    return true;
+  }
+
   /** Re-tint the cursor after a colour change, without waiting for the pointer to move. */
   refreshInkCursor() {
     const t = this.tool;
     if ((t !== 'pen' && t !== 'highlighter') || !this.canvas) return;
-    if (!this.canvas.style.cursor.startsWith('url(')) return;   // mouse is pointing, not inking
-    this.canvas.style.cursor = this.inkCursor(t);
+    // Mid-stroke the layer is carrying the nib, so re-tint that; the rest of
+    // the time it is the system cursor, exactly as it always was.
+    if (this.inkPointer) { this.showInkPointer(this.inkPointer, t); return; }
+    if (!String(this._cursor || '').startsWith('url(')) return;   // mouse is pointing, not inking
+    this.setCursor(this.inkCursor(t));
+  }
+
+  /**
+   * Which pointer the ink tools show: 'nib', 'arrow' or 'crosshair'.
+   *
+   * 'nib' is the drawn one and the default. It falls back to the CSS cursor
+   * where Path2D is missing, so the nib is never simply absent.
+   */
+  inkPointerKind() {
+    const want = this.app.settings.inkPointer || 'nib';
+    // No layer to move (an older page, a stripped-down host) means the CSS
+    // cursor rather than no pointer at all.
+    if (want === 'nib' && !this.nibEl()) return 'css-nib';
+    return want;
+  }
+
+  /** The ink-pointer layer, looked up once and kept. */
+  nibEl() {
+    if (this._nibEl === undefined) this._nibEl = document.getElementById('inkNib') || null;
+    return this._nibEl;
+  }
+
+  /** Take the nib off screen without disturbing the board. */
+  hideInkPointer() {
+    this.inkPointer = null;
+    const el = this.nibEl();
+    if (el && !el.hidden) el.hidden = true;
+  }
+
+  /** The CSS cursor an ink tool should carry, given that choice. */
+  inkPointerCursor(t) {
+    const kind = this.inkPointerKind();
+    if (kind === 'arrow') return 'default';
+    if (kind === 'crosshair') return 'crosshair';
+    if (kind === 'css-nib') return this.inkCursor(t);
+    return 'none';                       // 'nib' - we draw it ourselves
+  }
+
+  /**
+   * Remember where the drawn nib goes, and make sure it gets drawn.
+   *
+   * Called from hover AND from an ink stroke in flight, which is the whole
+   * point: the CSS cursor is taken away by Windows the instant the pen lands,
+   * so the pointer used to disappear for exactly as long as you were writing.
+   */
+  showInkPointer(sp, t, deviceType = 'pen') {
+    /*
+     * Which nib: the system cursor, or our own layer?
+     *
+     * Windows only takes the pointer away while the pen is actually DOWN. While
+     * it hovers, the ordinary CSS cursor is there and is moved by the compositor
+     * at the rate the digitiser reports - far better than anything we can do,
+     * because our own nib can only move when we get a frame, and a pen reports
+     * two or three times as often as the screen refreshes. A nib that moves at
+     * frame rate while the hand moves at pen rate reads as lag, and it does so
+     * most while hovering, where there is no ink alongside it moving at the same
+     * frame rate to make it look right.
+     *
+     * So: the system cursor while hovering, our own layer only for the stroke
+     * itself, where the system has taken its cursor away and there is nothing to
+     * compare against. Same glyph, same hotspot, so the handover is invisible.
+     *
+     * A mouse never loses its cursor at all, so it keeps the system one always.
+     */
+    const drawing = !!(this.action && this.action.type === 'draw');
+    const chosen = this.inkPointerKind();
+    // Only the NIB falls back to the system cursor outside a stroke. Someone who
+    // asked for an arrow or a crosshair gets it whatever the pen is doing.
+    const kind = (chosen === 'nib' && (deviceType === 'mouse' || !drawing)) ? 'css-nib' : chosen;
+    if (kind !== 'nib') {
+      this.hideInkPointer();
+      this.setCursor(kind === 'css-nib' ? this.inkCursor(t) : this.inkPointerCursor(t));
+      return;
+    }
+    const el = this.nibEl();
+    if (!el) { this.setCursor(this.inkCursor(t)); return; }
+
+    this.setCursor('none');
+    this.inkPointer = sp;
+
+    const s = this.app.settings;
+    const hl = t === 'highlighter';
+    const url = inkGlyphUrl(hl ? 'highlighter' : 'pen', hl ? s.highlighterColor : s.penColor);
+    if (this._nibUrl !== url) { this._nibUrl = url; el.style.backgroundImage = url; }
+
+    // The one line that has to stay cheap. A transform on a promoted layer is
+    // handled by the compositor: no layout, no paint, and the board is not
+    // touched. Rounded to whole pixels so the glyph never lands half way across
+    // one and blurs.
+    const hot = inkGlyphHotspot(hl ? 'highlighter' : 'pen');
+    el.style.transform = 'translate3d(' + Math.round(sp.x - hot.x) + 'px,'
+      + Math.round(sp.y - hot.y) + 'px,0)';
+    if (el.hidden) el.hidden = false;
   }
 
   /** The pen/highlighter cursor, tinted with the colour the tool is loaded with. */
@@ -937,7 +1077,7 @@ export class Interaction {
     const mousePointer = deviceType === 'mouse' && !this.app.mouseInks && inkTool;
     if (this.spaceDown) cursor = 'grab';
     else if (mousePointer) cursor = 'grab';
-    else if (inkTool) cursor = this.inkCursor(t);
+    else if (inkTool) cursor = deviceType === 'mouse' ? this.inkCursor(t) : this.inkPointerCursor(t);
     else if (t === 'eraser') cursor = 'none';
     else if (t === 'shape' || t === 'text' || t === 'lasso') cursor = 'crosshair';
     else if (t === 'note') cursor = 'copy';
@@ -946,7 +1086,7 @@ export class Interaction {
     const overHandle = this.handleAt(sp);
     if (overHandle) {
       this.surface.hoverId = null;
-      this.canvas.style.cursor = CURSORS[overHandle] || 'pointer';
+      this.setCursor(CURSORS[overHandle] || 'pointer');
       return;
     }
 
@@ -955,19 +1095,19 @@ export class Interaction {
       // ink as you move over it is noise on a board full of handwriting
       const hit = pick(this.store, wp, 8 / this.surface.cam.z);
       this.surface.hoverId = null;
-      this.canvas.style.cursor = hit ? (hit.locked ? 'not-allowed' : 'move') : 'grab';
+      this.setCursor(hit ? (hit.locked ? 'not-allowed' : 'move') : 'grab');
       return;
     }
 
     if (inkTool) {                      // a hovering stylus just draws a nib
       this.surface.hoverId = null;
-      this.canvas.style.cursor = this.inkCursor(t);
+      this.showInkPointer(sp, t, deviceType);
       return;
     }
 
     if (t === 'laser') {                // a pointing tool wants a precise cursor
       this.surface.hoverId = null;
-      this.canvas.style.cursor = 'crosshair';
+      this.setCursor('crosshair');
       return;
     }
 
@@ -979,7 +1119,7 @@ export class Interaction {
 
     if (this.ruler.visible && this.rulerZone(sp)) cursor = this.rulerZone(sp) === 'rotate' ? 'grab' : 'move';
     if (t === 'eraser') { this.eraserCursor = sp; this.surface.invalidate(); }
-    this.canvas.style.cursor = cursor;
+    this.setCursor(cursor);
   }
 
   /**
@@ -1057,7 +1197,7 @@ export class Interaction {
    * ------------------------------------------------------------ */
   startSecondaryPan(e, sp) {
     this.secondaryPan = { id: e.pointerId, sp, cam: { x: this.surface.cam.x, y: this.surface.cam.y } };
-    this.canvas.style.cursor = 'grabbing';
+    this.setCursor('grabbing');
   }
 
   updateSecondaryPan(sp) {

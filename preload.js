@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld('board', {
   info: () => ipcRenderer.invoke('app:info'),
 
   readFile: (p) => ipcRenderer.invoke('fs:readFile', p),
+  // On the desktop the path names the file already; the web build has to work
+  // one out from the File itself. See claimLocalBoard().
+  fileOrigin: (p) => p,
   writeFile: (filePath, data) => ipcRenderer.invoke('fs:writeFile', { filePath, data }),
   openDialog: (opts) => ipcRenderer.invoke('dialog:open', opts),
   saveDialog: (opts) => ipcRenderer.invoke('dialog:save', opts),

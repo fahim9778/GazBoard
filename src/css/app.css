@@ -306,6 +306,25 @@ input, textarea { font: inherit; }
 .board-row .meta small { color: var(--text-2); font-size: 11.5px; }
 
 /* ---------------- text editing overlay ---------------- */
+/*
+ * The ink pointer.
+ *
+ * Its own layer, moved with a transform, for one reason: a pointer painted
+ * into the canvas means repainting the whole board on every pointer move, and
+ * while hovering there is no stroke in flight to reuse a cached frame from - so
+ * a busy board redrew itself from scratch a hundred times a second just to
+ * shift a nib a few pixels. A transform on a composited layer costs nothing and
+ * never touches the board at all.
+ *
+ * `will-change` promotes it once, up front, rather than on first move.
+ */
+#inkNib {
+  position: absolute; left: 0; top: 0; width: 26px; height: 26px;
+  pointer-events: none; z-index: 14;
+  background-repeat: no-repeat; background-size: 26px 26px;
+  will-change: transform;
+}
+
 #editLayer { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
 #editLayer textarea {
   position: absolute; pointer-events: auto; resize: none; border: 2px solid var(--accent-2);

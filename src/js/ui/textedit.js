@@ -201,10 +201,22 @@ export class TextEditor {
   cancel() {
     if (!this.el) return;
     const target = this.target;
-    this.el.remove();
+    const el = this.el;
+    /*
+     * Clear the fields BEFORE detaching the textarea.
+     *
+     * Removing a focused element fires `blur`, and the blur handler is
+     * commit(). With this.el still set, that commit ran for real - so
+     * cancelling an edit quietly SAVED it instead of throwing it away, the
+     * note-height rewind below never happened, and commit's own el.remove()
+     * then threw on a node that was already gone. Nulling first makes the
+     * blur-driven commit hit its own guard and return, which is what it
+     * should always have done.
+     */
+    this.el = null; this.target = null; this.cell = null;
+    el.remove();
     if (target && target.type === 'note' && this.startH != null) target.h = this.startH;
     this.startH = null;
-    this.el = null; this.target = null; this.cell = null;
     if (target && target.type === 'text' && !target.text) this.app.store.remove([target.id], 'remove empty text');
     this.app.afterTextEdit();
     this.app.surface.invalidate();

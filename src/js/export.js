@@ -296,6 +296,30 @@ ${body}
 /* ------------------------------------------------------------------ *
  *  .gazboard files
  * ------------------------------------------------------------------ */
+/**
+ * A picture whose file is missing is held in memory as an empty src plus the
+ * reference it could not resolve, so nothing tries to load a URL that is not
+ * there. Writing that empty src into a .gazboard file would throw the reference
+ * away and make the loss permanent - the file would carry an image object with
+ * no picture and no way to find one, even back on the machine that has it.
+ * Write the reference instead: put the file back and the picture returns.
+ *
+ * Exported so the suite can check it without driving a native save dialog.
+ */
+export function exportable(doc) {
+  if (!doc || !Array.isArray(doc.objects)) return doc;
+  // `origin` records where this copy was opened from on this machine. Sending
+  // "C:\\Users\\...\\Downloads\\board.gazboard" to whoever you share the file with
+  // is nobody's business but yours.
+  const { origin, ...doc2 } = doc;
+  doc = doc2;
+  return { ...doc, objects: doc.objects.map((o) => {
+    if (!o || o.type !== 'image' || !o.missing || !o.assetId) return o;
+    const { missing, ...rest } = o;          // a runtime marker, not board data
+    return { ...rest, src: 'asset:' + o.assetId, assetId: o.assetId };
+  }) };
+}
+
 export async function saveBoardFile(app) {
   const filePath = await window.board.saveDialog({
     title: 'Save a copy',
@@ -303,7 +327,7 @@ export async function saveBoardFile(app) {
     filters: [{ name: 'GazBoard file', extensions: ['gazboard'] }, { name: 'JSON', extensions: ['json'] }]
   });
   if (!filePath) return null;
-  const json = JSON.stringify(app.store.toJSON({ app: 'GazBoard', version: 1 }), null, 0);
+  const json = JSON.stringify(exportable(app.store.toJSON({ app: 'GazBoard', version: 1 })), null, 0);
   await window.board.writeFile(filePath, new TextEncoder().encode(json).buffer);
   app.toast('Saved ' + filePath.split(/[\\/]/).pop());
   return filePath;
@@ -318,6 +342,11 @@ export async function openBoardFile(app) {
   if (!paths.length) return;
   const buf = await window.board.readFile(paths[0]);
   const data = JSON.parse(new TextDecoder().decode(buf));
+  // Which file this is, so re-opening it returns to its own board instead of
+  // asking again and making another copy. See claimLocalBoard().
+  let origin = paths[0];
+  try { origin = (await window.board.fileOrigin?.(paths[0])) || paths[0]; } catch { /* keep the path */ }
+  data.origin = origin;
   await app.loadBoard(data, { asCopy: false });
   app.toast('Opened ' + (data.name || 'board'));
 }
