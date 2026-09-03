@@ -14,6 +14,11 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 
 ## ⏬ [**Download the latest stable version**](https://github.com/fahim9778/GazBoard/releases/latest)
 
+[![Downloads](https://img.shields.io/github/downloads/fahim9778/GazBoard/total?label=downloads&color=0078d4)](https://github.com/fahim9778/GazBoard/releases)
+[![Stars](https://img.shields.io/github/stars/fahim9778/GazBoard?style=flat)](https://github.com/fahim9778/GazBoard/stargazers)
+[![Latest release](https://img.shields.io/github/v/release/fahim9778/GazBoard?label=latest&color=107c10)](https://github.com/fahim9778/GazBoard/releases/latest)
+[![License](https://img.shields.io/github/license/fahim9778/GazBoard)](LICENSE)
+
 🌐 [**try it in your browser**](https://gazboard.fahim9778.workers.dev/) — no install
 
 </div>
