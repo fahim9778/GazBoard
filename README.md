@@ -64,6 +64,8 @@ Every warning below is about the missing signature, not about the app.
 
 **Windows** shows a blue **“Windows protected your PC”** box — click **More info → Run anyway**.
 
+### macOS first run workaround
+
 **macOS** refuses the first launch, and its wording is alarming: either *“the developer cannot be verified”* or ***“GazBoard is damaged and can’t be opened. You should move it to the Trash.”*** Nothing is damaged. Open **System Settings → Privacy & Security**, scroll down, click **Open Anyway**, and confirm. macOS remembers, so this is once per install. If it still refuses, clear the download flag your browser attached:
 
 ```sh
