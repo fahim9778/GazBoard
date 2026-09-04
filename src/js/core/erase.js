@@ -1,10 +1,16 @@
 // Partial (point) erasing: cut the eraser's swept capsule out of a stroke and
 // return the surviving runs of points.
 
-import { distToSegment, dist, bboxOfPoints, simplify, uid, rotatePoint } from './util.js';
+import { distToSegment, dist, bboxOfPoints, uid, rotatePoint } from './util.js';
 import { boundsOf } from './store.js';
 
-/** Insert interpolated points so a wide gap can't slip past the eraser. */
+/**
+ * Insert interpolated points so a wide gap can't slip past the eraser.
+ *
+ * These are PROBES, not ink. They are marked so they can be taken out again
+ * once the cut is made - see cutPoints(). They sit on the straight line between
+ * two real samples, so removing one puts the geometry back exactly as it was.
+ */
 function densify(pts, maxGap) {
   if (pts.length < 2) return pts.slice();
   const out = [pts[0]];
@@ -15,7 +21,8 @@ function densify(pts, maxGap) {
       const n = Math.min(64, Math.ceil(d / maxGap));
       for (let k = 1; k < n; k++) {
         const t = k / n;
-        out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p: (a.p ?? 0.5) + ((b.p ?? 0.5) - (a.p ?? 0.5)) * t });
+        out.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t,
+          p: (a.p ?? 0.5) + ((b.p ?? 0.5) - (a.p ?? 0.5)) * t, probe: true });
       }
     }
     out.push(b);
@@ -39,13 +46,32 @@ export function cutPoints(points, a, b, r) {
   }
   if (!touched) return null;
 
+  /*
+   * Take the probes back out.
+   *
+   * Only the two at the ends of a run earn their place: those are the new cut
+   * edges, and nothing else describes where the eraser stopped. Every other
+   * probe lies on a straight line between two real samples, so dropping it
+   * changes nothing about the shape - and KEEPING it, or worse simplifying the
+   * whole run afterwards, rewrites points the eraser never went near. That is
+   * what rounded off sharp corners the first time a stroke was erased: the ink
+   * renderer curves through the midpoints of the samples, so a corner is only
+   * as sharp as its neighbouring samples are close, and resampling moved them.
+   */
+  const finish = (run) => {
+    if (run.length < 2) return;
+    const kept = run.filter((p, i) => !p.probe || i === 0 || i === run.length - 1);
+    if (kept.length < 2) return;
+    runs.push(kept.map(({ probe, ...p }) => p));
+  };
+
   const runs = [];
   let cur = [];
   for (let i = 0; i < pts.length; i++) {
     if (keep[i]) cur.push(pts[i]);
-    else { if (cur.length > 1) runs.push(cur); cur = []; }
+    else { finish(cur); cur = []; }
   }
-  if (cur.length > 1) runs.push(cur);
+  finish(cur);
   return runs;
 }
 
@@ -65,14 +91,15 @@ export function bakedPoints(stroke) {
  * @returns {null | Array<object>} null when untouched, otherwise the
  *          replacement stroke objects (empty array = fully erased).
  */
-export function splitStroke(stroke, a, b, r, tolerance = 0.4) {
+export function splitStroke(stroke, a, b, r) {
   const points = bakedPoints(stroke);
   const runs = cutPoints(points, a, b, r);
   if (runs === null) return null;
 
   const minLength = Math.max(1.2, r * 0.25);
+  // No simplify pass. The runs already carry the original samples and nothing
+  // else, and thinning them would move the very points the shape is made of.
   return runs
-    .map((run) => simplify(run, tolerance))
     .filter((run) => run.length > 1 && pathLength(run) >= minLength)
     .map((run) => ({
       ...structuredClone(stroke),

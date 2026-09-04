@@ -1680,7 +1680,7 @@ async function run(win, app) {
     r.rescued = rescued.inkWithMouse;
     r.staleFlagDropped = !('penSeen' in rescued);
 
-    // the 'yes' and the 'no' that 2.4.3 development builds wrote by migration
+    // the 'yes' and the 'no' that pre-release builds wrote by migration
     // were ours, not choices anyone made - both go back, and their flags go too
     localStorage.setItem('gazboard.settings', JSON.stringify({ inkWithMouse: 'yes', mouseInkDefault3: true }));
     const undone = a.loadSettings();
@@ -4453,6 +4453,210 @@ module.exports.run = async (win, app) => {
     cancelEdit.crashed || '');
   check('and closes cleanly, twice over',
     cancelEdit.editorClosed === true && cancelEdit.doubleCancelSurvived === true);
+
+  /* ---- Escape and a click outside close whatever is on top ---- */
+  const dismiss = await js(`
+    const a = window.app, sf = a.surface;
+    a.newBoard(true);
+    const r = {};
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    const overlay = document.getElementById('overlay');
+    const panel = document.getElementById('panel');
+    const shown = () => overlay.classList.contains('show');
+    const panelShown = () => panel.classList.contains('open');
+    const esc = () => document.dispatchEvent(new KeyboardEvent('keydown',
+      { key: 'Escape', bubbles: true, cancelable: true }));
+    const pointerOn = (el) => el.dispatchEvent(new PointerEvent('pointerdown',
+      { bubbles: true, clientX: 5, clientY: 5 }));
+    // a real "somewhere else": the board itself
+    const clickBoard = () => sf.canvas.dispatchEvent(new PointerEvent('pointerdown',
+      { bubbles: true, clientX: 40, clientY: 40, pointerId: 77, pointerType: 'mouse', button: 0, buttons: 1 }));
+    const timed = (p, ms = 1500) => Promise.race([p, sleep(ms).then(() => 'TIMED OUT')]);
+
+    /* --- the shortcuts list: the one that had to be scrolled to be closed --- */
+    a.showShortcuts(); await sleep(20);
+    r.shortcutsOpen = shown();
+    esc(); await sleep(20);
+    r.shortcutsEsc = !shown();
+
+    a.showShortcuts(); await sleep(20);
+    pointerOn(document.getElementById('overlayCard'));
+    await sleep(20);
+    r.cardClickKeepsItOpen = shown();     // clicking the dialog is using it
+    pointerOn(overlay); await sleep(20);
+    r.backdropClickCloses = !shown();
+
+    /* --- About, same treatment --- */
+    await a.showAbout(); await sleep(30);
+    r.aboutOpen = shown();
+    esc(); await sleep(20);
+    r.aboutEsc = !shown();
+
+    /* --- a question must ANSWER when it is dismissed, not just disappear --- */
+    const q = a.choose('Sure?', 'Body', [{ id: 'go', label: 'Go', primary: true }]);
+    await sleep(20);
+    esc();
+    r.chooseEscape = await timed(q);              // null, never "TIMED OUT"
+
+    const q2 = a.choose('Sure?', 'Body', [{ id: 'go', label: 'Go', primary: true }]);
+    await sleep(20);
+    pointerOn(overlay);
+    r.chooseBackdrop = await timed(q2);
+
+    const c = a.confirm('Delete?', 'Body', 'Delete');
+    await sleep(20);
+    esc();
+    r.confirmEscape = await timed(c);             // false - the safe answer
+
+    /* --- a progress bar is not a question, so it cannot be waved away --- */
+    const prog = a.showProgress('Importing', 'page 1 of 40');
+    await sleep(20);
+    r.progressOpen = shown();
+    esc(); await sleep(20);
+    r.progressSurvivedEsc = shown();
+    pointerOn(overlay); await sleep(20);
+    r.progressSurvivedClick = shown();
+    prog.close(); await sleep(20);
+    r.progressClosedByItsOwner = !shown();
+
+    /* --- the slide-in panel --- */
+    a.panels.settings(); await sleep(20);
+    r.panelOpen = panelShown();
+    pointerOn(panel); await sleep(20);
+    r.insideKeepsItOpen = panelShown();
+    pointerOn(document.getElementById('toolbar')); await sleep(20);
+    r.toolbarKeepsItOpen = panelShown();          // its own button does the toggling
+    clickBoard(); await sleep(20);
+    r.boardClickCloses = !panelShown();
+
+    a.panels.settings(); await sleep(20);
+    esc(); await sleep(20);
+    r.panelEsc = !panelShown();
+
+    /* --- and with nothing layered, Escape still means "deselect" --- */
+    a.store.add({ id: 'b1', type: 'shape', kind: 'rect', x: 100, y: 100, w: 80, h: 60,
+      rotation: 0, stroke: '#000', fill: '#eee', lineWidth: 2 }, 'seed');
+    a.setSelection(['b1']);
+    r.hadSelection = sf.selection.size === 1;
+    esc(); await sleep(20);
+    r.escapeStillDeselects = sf.selection.size === 0;
+
+    // a dialog on top must NOT let Escape reach the board and clear a selection
+    a.setSelection(['b1']);
+    a.showShortcuts(); await sleep(20);
+    esc(); await sleep(20);
+    r.selectionSurvivedDialogEscape = sf.selection.size === 1;
+    a.setSelection([]);
+
+    a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+
+  check('the shortcuts list closes on Escape, instead of hunting for its button',
+    dismiss.shortcutsOpen && dismiss.shortcutsEsc);
+  check('and on a click outside it, while a click inside is left alone',
+    dismiss.cardClickKeepsItOpen && dismiss.backdropClickCloses);
+  check('About closes the same way', dismiss.aboutOpen && dismiss.aboutEsc);
+  check('a dismissed question answers rather than hanging the board',
+    dismiss.chooseEscape === null && dismiss.chooseBackdrop === null,
+    `Escape → ${JSON.stringify(dismiss.chooseEscape)}, click → ${JSON.stringify(dismiss.chooseBackdrop)}`);
+  check('and a confirm dismisses as "no", never as "yes"',
+    dismiss.confirmEscape === false, JSON.stringify(dismiss.confirmEscape));
+  check('a progress bar cannot be waved away while the work is still running',
+    dismiss.progressOpen && dismiss.progressSurvivedEsc && dismiss.progressSurvivedClick
+    && dismiss.progressClosedByItsOwner);
+  check('the panel closes on Escape and on a click on the board',
+    dismiss.panelOpen && dismiss.panelEsc && dismiss.boardClickCloses);
+  check('but not on a click inside it, nor on the toolbar that toggles it',
+    dismiss.insideKeepsItOpen && dismiss.toolbarKeepsItOpen);
+  check('with nothing layered, Escape still clears the selection',
+    dismiss.hadSelection && dismiss.escapeStillDeselects);
+  check('and Escape aimed at a dialog does not reach through and clear it',
+    dismiss.selectionSurvivedDialogEscape);
+
+  /* ---- erasing one end of a stroke must not round off the other ---- */
+  const sharpCorner = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const r = {};
+
+    // A stroke with a deliberate sharp corner at (400,200): down the left arm,
+    // hard turn, back up the right arm. Samples are spaced the way a hand
+    // moving at speed leaves them.
+    const pts = [];
+    for (let x = 200; x <= 400; x += 10) pts.push({ x, y: 400 - (x - 200), p: 0.5 });
+    for (let x = 410; x <= 600; x += 10) pts.push({ x, y: 200 + (x - 400), p: 0.5 });
+    a.store.add({ id: 'v', type: 'stroke', tool: 'pen', color: '#201f1e', width: 6,
+      effect: 'none', points: pts, bbox: { x: 200, y: 200, w: 400, h: 200 }, rotation: 0 }, 'seed');
+
+    /*
+     * How round the drawn corner is.
+     *
+     * centrelinePath curves through the MIDPOINTS of the samples, so the curve
+     * misses the corner vertex by |p - midpoint(prev, next)| / 4. Points close
+     * together either side of the corner keep it sharp; spread them out and the
+     * curve cuts it off. That quarter-distance IS the visible rounding.
+     */
+    const roundness = (points) => {
+      let worst = 0;
+      for (let i = 1; i < points.length - 1; i++) {
+        const p = points[i], q = points[i - 1], s = points[i + 1];
+        // only judge actual corners, not the straight runs
+        const a1 = Math.atan2(p.y - q.y, p.x - q.x), a2 = Math.atan2(s.y - p.y, s.x - p.x);
+        let turn = Math.abs(a2 - a1);
+        if (turn > Math.PI) turn = 2 * Math.PI - turn;
+        if (turn < 0.6) continue;
+        const mx = (q.x + s.x) / 2, my = (q.y + s.y) / 2;
+        worst = Math.max(worst, Math.hypot(p.x - mx, p.y - my) / 4);
+      }
+      return Math.round(worst * 100) / 100;
+    };
+
+    r.before = roundness(a.store.get('v').points);
+    r.pointsBefore = a.store.get('v').points.length;
+
+    // erase a bite out of the FAR end of the right arm - nowhere near the corner
+    a.setTool('eraser');
+    a.settings.eraserMode = 'partial';
+    a.settings.eraserSize = 30;
+    const rect = sf.canvas.getBoundingClientRect();
+    const ev = (x, y, b) => ({ pointerId: 4, pointerType: 'pen', button: 0, buttons: b,
+      clientX: rect.left + x, clientY: rect.top + y, pressure: 0.5, shiftKey: false, altKey: false,
+      preventDefault(){}, stopPropagation(){}, target:{setPointerCapture(){},releasePointerCapture(){}} });
+    it.onDown(ev(560, 360, 1));
+    it.onMove(ev(560, 380, 1));
+    it.onUp(ev(560, 380, 0));
+    it.action = null; it.pointers.clear();
+
+    const left = a.store.objects.filter(o => o.type === 'stroke');
+    r.piecesAfter = left.length;
+    // the piece that still owns the corner is the one reaching back to x=200
+    const withCorner = left.find(o => o.points.some(p => p.x <= 210));
+    r.after = withCorner ? roundness(withCorner.points) : null;
+    r.pointsAfter = withCorner ? withCorner.points.length : null;
+
+    // and the corner vertex itself must still be a sample, exactly where it was
+    r.cornerKept = !!withCorner && withCorner.points.some(p =>
+      Math.abs(p.x - 400) < 0.02 && Math.abs(p.y - 200) < 0.02);
+
+    // the untouched left arm must come back point for point
+    const beforeLeft = pts.filter(p => p.x <= 400).map(p => p.x + ',' + p.y).join(' ');
+    const afterLeft = withCorner ? withCorner.points.filter(p => p.x <= 400)
+      .map(p => p.x + ',' + p.y).join(' ') : '';
+    r.leftArmIdentical = beforeLeft === afterLeft;
+
+    a.setTool('select'); a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+
+  check('erasing far from a corner leaves the corner as sharp as it was',
+    sharpCorner.after !== null && sharpCorner.after <= sharpCorner.before,
+    `roundness ${sharpCorner.before} before, ${sharpCorner.after} after`);
+  check('the corner sample itself survives, exactly where it was drawn',
+    sharpCorner.cornerKept);
+  check('and the whole untouched arm comes back point for point',
+    sharpCorner.leftArmIdentical,
+    `${sharpCorner.pointsBefore} points before, ${sharpCorner.pointsAfter} on the piece that kept the corner`);
 
   /* ---- moving the nib must not cost a repaint of the board ---- */
   const nibCost = await js(`

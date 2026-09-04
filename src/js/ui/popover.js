@@ -15,6 +15,9 @@ export function closePopover() {
 
 export function isOpen(key) { return current?.key === key; }
 
+/** Is any popover on screen at all? Used to decide what Escape closes first. */
+export function popoverOpen() { return !!current; }
+
 /**
  * @param {HTMLElement|{x:number,y:number}} anchor
  * @param {HTMLElement} content

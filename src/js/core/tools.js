@@ -820,7 +820,7 @@ export class Interaction {
       const isFragment = a.fragments.has(o.id);
 
       if (partial) {
-        const parts = splitStroke(o, from, to, r, Math.max(0.35, 0.7 / this.surface.cam.z));
+        const parts = splitStroke(o, from, to, r);
         if (parts === null) continue;                       // eraser missed the ink itself
         const index = store.rawRemove(o.id);
         if (isFragment) a.fragments.delete(o.id);

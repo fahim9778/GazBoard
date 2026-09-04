@@ -13,7 +13,7 @@ import { TextEditor } from './ui/textedit.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
-import { closePopover, h } from './ui/popover.js';
+import { closePopover, popoverOpen, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS } from './ui/palettes.js';
 import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile } from './export.js';
@@ -100,6 +100,7 @@ class App {
 
     initToolbar(this);
     this.wireGlobalEvents();
+    this.initDismissal();
     this.wireStore();
     this.restoreLastBoard();
     // after the board is up, never before: the first thing anyone sees should
@@ -126,7 +127,7 @@ class App {
        * dropped here and never written again.
        */
       if (!s.mouseInkDefault5) {
-        // Two defaults were tried during 2.4.3 development and neither shipped:
+        // Two defaults were tried while 2.5.0 was being built and neither shipped:
         // a flat 'yes', then a flat 'no'. Both were ours rather than anyone's
         // choice, so both go back to 'auto'. A 'yes' or 'no' somebody picked by
         // hand is left exactly as it is; the flags are what tell them apart.
@@ -1120,6 +1121,78 @@ class App {
   showContextMenu(e) { showContextMenu(this, e); }
   hideMenus() { closePopover(); }
 
+  /*
+   * Getting rid of whatever is on top.
+   *
+   * Every layer used to look after itself, and most of them forgot. A dialog
+   * could only be closed by finding its Close button - on the shortcuts list
+   * that meant scrolling past forty rows to reach it - and the slide-in panel
+   * ignored clicks on the board behind it. Escape and a click outside are what
+   * anyone tries first, so they are wired once, here, for every layer.
+   *
+   * Order matters: the topmost thing goes first, and nothing underneath reacts.
+   * Escape with a dialog up must not also clear your selection.
+   */
+  initDismissal() {
+    const overlay = document.getElementById('overlay');
+
+    if (overlay) {
+      overlay.addEventListener('pointerdown', (e) => {
+        // Only the dark backdrop. A click inside the card is someone using it.
+        if (e.target !== overlay) return;
+        e.preventDefault();
+        this.dismissOverlay();
+      });
+    }
+
+    // Capture, so this runs before the board's own key handling and can stop it.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (this.dismissOverlay()) { e.preventDefault(); e.stopPropagation(); return; }
+      if (popoverOpen()) { closePopover(); e.preventDefault(); e.stopPropagation(); return; }
+      if (this.panels.open) { this.panels.close(); e.preventDefault(); e.stopPropagation(); }
+    }, true);
+
+    document.addEventListener('pointerdown', (e) => {
+      if (!this.panels.open) return;
+      const el = e.target instanceof Element ? e.target : null;
+      // The toolbar button that opened it toggles it shut by itself; closing
+      // here as well would shut and immediately reopen the panel. A popover or
+      // a dialog belongs to the panel, or sits above it, so neither counts as
+      // outside.
+      if (el && el.closest('#panel, #toolbar, #overlay, #ctxbar, .pop')) return;
+      this.panels.close();
+    }, true);
+  }
+
+  /**
+   * Take the dialog off the screen and tell whoever opened it.
+   *
+   * The telling is the part that matters: choose() and confirm() are waiting on
+   * a promise, and a dialog that vanished without answering would leave the
+   * board waiting for ever. Whatever opened it decides what a dismissal MEANS,
+   * and it is always the answer that changes nothing.
+   */
+  dismissOverlay() {
+    const overlay = document.getElementById('overlay');
+    if (!overlay || !overlay.classList.contains('show')) return false;
+    // A progress bar is not a question. Escape cannot cancel the import behind
+    // it, so taking it off the screen would only hide work that is still going.
+    if (this._overlayLocked) return false;
+    overlay.classList.remove('show');
+    const onDismiss = this._overlayDismiss;
+    this._overlayDismiss = null;
+    if (onDismiss) onDismiss();
+    return true;
+  }
+
+  /** Put a dialog up, saying what Escape and a click outside should mean. */
+  showOverlay(onDismiss = null, { dismissible = true } = {}) {
+    this._overlayDismiss = onDismiss;
+    this._overlayLocked = !dismissible;
+    document.getElementById('overlay').classList.add('show');
+  }
+
   /* ---------------- notifications & dialogs ---------------- */
   toast(message, iconName = 'check', ms = 2600) {
     const host = document.getElementById('toasts');
@@ -1452,10 +1525,10 @@ class App {
     card.appendChild(h('h3', {}, title));
     card.appendChild(label);
     card.appendChild(bar);
-    overlay.classList.add('show');
+    this.showOverlay(null, { dismissible: false });
     return {
       update: (frac, msg) => { bar.firstChild.style.width = Math.round(clamp(frac, 0, 1) * 100) + '%'; if (msg) label.textContent = msg; },
-      close: () => overlay.classList.remove('show')
+      close: () => { this._overlayLocked = false; overlay.classList.remove('show'); }
     };
   }
 
@@ -1476,9 +1549,9 @@ class App {
       const overlay = document.getElementById('overlay');
       const card = document.getElementById('overlayCard');
       card.innerHTML = '';
-      const done = (v) => { overlay.classList.remove('show'); document.removeEventListener('keydown', onKey, true); resolve(v); };
-      const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); done(null); } };
-      document.addEventListener('keydown', onKey, true);
+      // Clearing the handler first stops a dismissal firing on the way out and
+      // resolving the same promise twice.
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
       card.appendChild(h('h3', {}, title));
       card.appendChild(h('p', {}, text));
       const row = h('div', { class: 'actions', style: 'flex-wrap:wrap;gap:8px' });
@@ -1487,7 +1560,8 @@ class App {
         row.appendChild(h('button', { class: 'btn' + (c.primary ? ' primary' : ''), onclick: () => done(c.id) }, c.label));
       }
       card.appendChild(row);
-      overlay.classList.add('show');
+      // Escape or a click outside means the answer that changes nothing.
+      this.showOverlay(() => resolve(null));
     });
   }
 
@@ -1496,13 +1570,14 @@ class App {
       const overlay = document.getElementById('overlay');
       const card = document.getElementById('overlayCard');
       card.innerHTML = '';
-      const done = (v) => { overlay.classList.remove('show'); resolve(v); };
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
       card.appendChild(h('h3', {}, title));
       card.appendChild(h('p', {}, text));
       card.appendChild(h('div', { class: 'actions' },
         h('button', { class: 'btn', onclick: () => done(false) }, 'Cancel'),
         h('button', { class: 'btn primary', onclick: () => done(true) }, confirmLabel)));
-      overlay.classList.add('show');
+      // A dialog that asks before doing something dismisses as "do not".
+      this.showOverlay(() => resolve(false));
     });
   }
 
@@ -1642,8 +1717,8 @@ class App {
     card.appendChild(h('h3', {}, 'Keyboard shortcuts'));
     card.appendChild(grid);
     card.appendChild(h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', onclick: () => overlay.classList.remove('show') }, 'Close')));
-    overlay.classList.add('show');
+      h('button', { class: 'btn primary', onclick: () => this.dismissOverlay() }, 'Close')));
+    this.showOverlay();
   }
 
   async showAbout() {
@@ -1677,13 +1752,13 @@ class App {
     check.addEventListener('click', async () => {
       check.textContent = 'Checking…';
       check.setAttribute('disabled', '');
-      overlay.classList.remove('show');
+      this.dismissOverlay();
       await this.checkForUpdates({ force: true });
     });
     card.appendChild(h('div', { class: 'actions' },
       check,
-      h('button', { class: 'btn primary', onclick: () => overlay.classList.remove('show') }, 'Close')));
-    overlay.classList.add('show');
+      h('button', { class: 'btn primary', onclick: () => this.dismissOverlay() }, 'Close')));
+    this.showOverlay();
   }
 
   /* ---------------- global events ---------------- */
@@ -1822,8 +1897,11 @@ class App {
     switch (e.key) {
       case 'Delete': case 'Backspace': e.preventDefault(); this.command('edit.delete'); return;
       case 'Escape':
-        if (this.panels.open) this.panels.close();
-        else { closePopover(); this.setSelection([]); }
+        // A dialog, a popover or the panel is dealt with in initDismissal(),
+        // which stops the event before it reaches here. Getting this far means
+        // nothing is layered over the board, so Escape means "never mind" about
+        // whatever is selected.
+        this.setSelection([]);
         return;
       case 'F2': {
         const o = this.selected[0];
