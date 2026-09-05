@@ -1186,6 +1186,55 @@ async function runTests() {
     check('SHA-256 fallback regression tests failed', false, e.message);
   }
 
+  /* ---------------- Sharing on the network is desktop-only ----------------
+   *
+   * The browser cannot bind a listening socket or answer one, so LAN sharing
+   * has no meaning here. What matters is that the web build does not merely
+   * fail at it quietly but never offers it: no folder of transport code in the
+   * bundle, no bridge to call, and no section in Settings promising something
+   * this runtime cannot do.
+   */
+  try {
+    const adapter = fs.readFileSync(path.join(SRC, 'js/platform/web-adapter.js'), 'utf8');
+    // `async` contains "sync", so this looks for the property, not the word.
+    check('the web build exposes no sync bridge at all',
+      !/\bsync\s*:/.test(adapter) && !/board\.sync\s*=/.test(adapter));
+
+    const shipped = [];
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full); else shipped.push(full);
+      }
+    };
+    if (fs.existsSync(DIST)) walk(DIST);
+
+    // None of the transport ships. It is main-process CommonJS that the
+    // renderer never imports, so it cannot arrive here by accident - but a
+    // build script that started copying the repo wholesale would change that.
+    const transport = shipped.filter((f) => /[\\/]sync[\\/]/.test(f)
+      || /(protocol|firewall)\.js$/.test(path.basename(f)));
+    check('and none of the transport code is in the bundle',
+      transport.length === 0, transport.map((f) => path.relative(DIST, f)).join(', '));
+
+    const bundle = shipped.filter((f) => f.endsWith('.js'))
+      .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+    check('nothing in the web bundle can open a socket or announce this browser',
+      !/createSyncNode|dgram|setBroadcast|X25519/.test(bundle));
+
+    // The Settings section is behind a guard rather than absent from the file,
+    // so the guard itself is the thing worth pinning.
+    const panels = fs.readFileSync(path.join(SRC, 'js/ui/panels.js'), 'utf8');
+    check('Settings only offers sharing when there is a bridge to do it with',
+      /\(window\.board && window\.board\.sync\) \? h\('div'/.test(panels));
+
+    const app = fs.readFileSync(path.join(SRC, 'js/app.js'), 'utf8');
+    check('and start-up gives up on sharing before touching anything',
+      /if \(!window\.board \|\| !window\.board\.sync\) return;/.test(app));
+  } catch (e) {
+    check('desktop-only sharing checks failed', false, e.message);
+  }
+
   /* ---------------- Results Summary ---------------- */
   console.log(`\n========================================`);
   console.log(`  Web/PWA Test Suite: ${pass} passed, ${fail} failed`);

@@ -530,6 +530,72 @@ function printHtmlToPdf(html, { widthIn, heightIn, landscape = false }) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  LAN sync
+ *
+ *  Off unless switched on. Nothing below runs, binds a port or sends a packet
+ *  until the renderer asks it to, so an installed copy whose owner never visits
+ *  Settings behaves exactly as it did before any of this existed.
+ * ------------------------------------------------------------------ */
+let syncService = null;
+
+/**
+ * Boards waiting on an answer from the window, by ticket.
+ *
+ * This used to register an ipcMain handler per ticket and remove it when the
+ * question was settled, which had one bad edge. A question that timed out took
+ * its channel away with it - so answering a dialog somebody had left on screen
+ * for five minutes invoked a channel that no longer existed, which Electron
+ * logs as an error and the renderer sees as a rejection. Nobody was at fault
+ * there; a person took their time, which is allowed.
+ *
+ * One permanent handler and a map has no such edge: a ticket nobody is waiting
+ * for is answered with `false` and forgotten, quietly, and the caller can tell
+ * the person that the sender has already given up.
+ */
+const asking = new Map();
+
+/**
+ * Answer a pending question, once.
+ * @returns {boolean} false when nothing was waiting - already answered, timed
+ *   out, or from a build that never asked. Never an error.
+ */
+function settleAsk(ticket, outcome) {
+  const entry = asking.get(ticket);
+  if (!entry) return false;
+  asking.delete(ticket);
+  clearTimeout(entry.timer);
+  entry.resolve(outcome);
+  return true;
+}
+
+/** Everyone still waiting is declined. What stopping and quitting both mean. */
+function declineAllPending() {
+  for (const ticket of [...asking.keys()]) settleAsk(ticket, null);
+}
+
+function sync() {
+  if (syncService) return syncService;
+  const { createSyncService } = require('./sync/desktop.js');
+  syncService = createSyncService({
+    userDataDir: app.getPath('userData'),
+    onPeers: (peers) => send('sync:peers', peers),
+    // A board that has arrived is a question for the person, not a decision for
+    // the main process. This hands it to the window and waits for an answer;
+    // no window, no answer, and the transfer is declined.
+    askAboutBoard: ({ board, from }) => new Promise((resolve) => {
+      if (!mainWindow || mainWindow.isDestroyed()) { resolve(null); return; }
+      const ticket = 'ask' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      // A dialog nobody answers must not hold the sending machine for ever.
+      const timer = setTimeout(() => settleAsk(ticket, null), 5 * 60 * 1000);
+      asking.set(ticket, { resolve, timer });
+      try { send('sync:incoming', { ticket, board, from }); }
+      catch { settleAsk(ticket, null); }
+    })
+  });
+  return syncService;
+}
+
+/* ------------------------------------------------------------------ *
  *  IPC
  * ------------------------------------------------------------------ */
 function ipc() {
@@ -633,12 +699,23 @@ function ipc() {
     const board = (payload && typeof payload.json === 'string')
       ? { id: payload.id, json: payload.json }
       : { id: payload.id, json: JSON.stringify(payload) };
+    /*
+     * Saving normally means "this is what I am working on", so it also moves
+     * the pointer that decides what reopens next time.
+     *
+     * setLast:false is for a board written on somebody else's behalf - one
+     * that arrived over the network and was filed without being opened. That
+     * must not become the board GazBoard shows on the next launch, or
+     * accepting a student's doodle in the background would quietly replace
+     * what the teacher was working on.
+     */
+    const moveLast = !(payload && payload.setLast === false);
     // the board and the "last open" pointer are two separate files; there is no
     // ordering between them, so they go out together rather than one after the
     // other
     await Promise.all([
       writeAtomic(path.join(dataDir(), board.id + '.json'), board.json),
-      setLastBoard(board.id)
+      moveLast ? setLastBoard(board.id) : Promise.resolve()
     ]);
     return true;
   });
@@ -680,6 +757,101 @@ function ipc() {
       try { await fsp.access(path.join(assetsDir(), id)); out[id] = true; } catch { out[id] = false; }
     }
     return out;
+  });
+
+  /* --- LAN sync. Every one of these is inert until sync:start is called. --- */
+  ipcMain.handle('sync:state', () => (syncService ? syncService.state() : {
+    running: false, deviceName: '', deviceId: '', port: 0, unusualPort: false,
+    expectedPort: 0, error: null, peers: [], paired: []
+  }));
+  ipcMain.handle('sync:start', () => sync().start());
+  ipcMain.handle('sync:stop', async () => {
+    // Switching sharing off with a question still on screen would leave the
+    // sender holding a socket open on an answer that can no longer come.
+    declineAllPending();
+    return syncService ? syncService.stop() : null;
+  });
+  /**
+   * The renderer's answer to "somebody is sending you a board".
+   *
+   * One channel for every question, rather than one per question - see the
+   * note on `asking`. Returns false when nothing was waiting, which is a
+   * normal outcome rather than a fault, so it is reported rather than thrown.
+   */
+  ipcMain.handle('sync:answer', (_e, msg) => {
+    const { ticket, outcome } = msg || {};
+    return settleAsk(ticket, outcome || null);
+  });
+  ipcMain.handle('sync:setName', (_e, name) => sync().setDeviceName(name));
+  ipcMain.handle('sync:beginPairing', (_e, opts) => sync().beginPairing(opts || {}));
+  ipcMain.handle('sync:cancelPairing', () => { sync().cancelPairing(); return true; });
+  ipcMain.handle('sync:pairWith', async (_e, { peer, code }) => {
+    try { return { ok: true, device: await sync().pairWith(peer, code) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('sync:send', async (_e, { peer, board }) => {
+    /*
+     * A board of imported pages is tens of megabytes on the wire, and on
+     * classroom wifi that is a real wait. Reporting bytes as they go is the
+     * difference between "it is working" and "it has hung" - and the two look
+     * identical without it.
+     */
+    let last = 0;
+    const onProgress = (sent, total) => {
+      // Throttled: a 40 MB board is 160 chunks, and the window does not need
+      // every one of them.
+      const now = Date.now();
+      if (sent < total && now - last < 120) return;
+      last = now;
+      try { send('sync:sendProgress', { sent, total }); } catch {}
+    };
+    try { return { ok: true, result: await sync().send(peer, board, onProgress) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('sync:addByAddress', async (_e, address) => {
+    try { return { ok: true, peer: await sync().addByAddress(address) }; }
+    catch (e) { return { ok: false, error: e.message }; }
+  });
+  // Resolves to whether the other machine was actually told. Forgetting here
+  // has happened either way by the time this returns.
+  ipcMain.handle('sync:unpair', async (_e, deviceId) => {
+    try { return { ok: true, told: await sync().unpair(deviceId) }; }
+    catch (e) { return { ok: true, told: false, error: e.message }; }
+  });
+  ipcMain.handle('sync:endSession', () => sync().endSession());
+
+  /*
+   * The firewall. Reading is free and quiet; the other two raise a UAC prompt
+   * and therefore only ever run because somebody pressed a button. Loaded on
+   * demand so a machine that never shares a board never loads it at all.
+   */
+  const firewall = () => require('./sync/firewall.js');
+  ipcMain.handle('sync:firewall:check', async () => {
+    try { return await firewall().inspect(); }
+    catch (e) { return { supported: false, state: 'unknown', detail: e.message }; }
+  });
+  ipcMain.handle('sync:firewall:repair', async () => {
+    try { return await firewall().repair(); }
+    catch (e) { return { ok: false, reason: 'failed', detail: e.message }; }
+  });
+  ipcMain.handle('sync:firewall:remove', async () => {
+    try { return await firewall().remove(); }
+    catch (e) { return { ok: false, reason: 'failed', detail: e.message }; }
+  });
+  /*
+   * The commands for THIS machine: PowerShell on Windows, socketfilterfw on
+   * macOS, ufw or firewall-cmd on Linux depending on which one is actually in
+   * charge there. Handing somebody the wrong platform's commands would be
+   * worse than handing them none, so which firewall is running is looked up
+   * first rather than assumed.
+   */
+  ipcMain.handle('sync:firewall:commands', async () => {
+    try {
+      const fw = firewall();
+      if (!fw.supported()) return [];
+      const info = await fw.inspect();
+      return fw.manualCommands(process.execPath, process.platform, info && info.tool);
+    } catch { return []; }
   });
 
   ipcMain.handle('boards:last', () => getLastBoard());
@@ -808,6 +980,13 @@ app.on('before-quit', (e) => {
   const timer = setTimeout(finish, 2000);
   ipcMain.once('app:flushed', () => { clearTimeout(timer); finish(); });
   try { mainWindow.webContents.send('app:flush'); } catch { clearTimeout(timer); finish(); }
+});
+
+// A listening socket must not outlive the window that opened it, and pairings
+// made "just for now" are forgotten here rather than lingering until a crash.
+app.on('will-quit', () => {
+  declineAllPending();
+  if (syncService) { try { syncService.stop(); } catch {} }
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

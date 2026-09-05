@@ -1,7 +1,7 @@
 {
   "name": "gazboard",
   "productName": "GazBoard",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "A free-form digital whiteboard - offline replica of the classic Microsoft Whiteboard 21.x experience, with Word / PowerPoint / PDF import.",
   "main": "main.js",
   "scripts": {
@@ -20,7 +20,12 @@
     "serve:web": "node scripts/serve-web.js",
     "dev:web": "node scripts/serve-web.js",
     "test:web": "npm run build:web && node test/web-pwa.test.js",
-    "test": "npm run smoke"
+    "test": "npm run smoke",
+    "test:sync": "node test/sync.test.js",
+    "sync:receive": "node scripts/sync-demo.js receive",
+    "sync:send": "node scripts/sync-demo.js send",
+    "sync:discover": "node scripts/sync-demo.js discover",
+    "build:sync-demo": "node scripts/build-sync-demo.js"
   },
   "author": {
     "name": "theBoringCodes",
@@ -53,6 +58,7 @@
       "preload.js",
       "src/**/*",
       "!src/package.json",
+      "sync/**/*",
       "package.json",
       "!test/out/**"
     ],

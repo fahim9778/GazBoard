@@ -16,7 +16,8 @@ import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
 import { closePopover, popoverOpen, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS } from './ui/palettes.js';
-import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile } from './export.js';
+import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportable } from './export.js';
+import { boardThumb } from './ui/thumb.js';
 import {
   pickAndInsertDocument, pickAndInsertImage, insertDocument,
   insertImagesFromPaths, insertImageFiles, dropOrigin, isImagePath, isDocPath
@@ -41,7 +42,17 @@ const DEFAULT_SETTINGS = {
   inkWithMouse: 'auto',
   // What you see while inking: 'nib' (drawn by us, so Windows cannot hide it
   // mid-stroke), 'arrow' or 'crosshair'. See inkPointerKind() in tools.js.
-  inkPointer: 'nib'
+  inkPointer: 'nib',
+  // Sharing boards over the local network. Off, and off for everyone who
+  // upgrades: nothing binds a port, announces itself or listens for anything
+  // until this is switched on by hand. See initSync().
+  sync: false,
+  // What happens to a board once you have accepted it. True puts it in front of
+  // you, which is what you want between your own two machines; false files it
+  // in My boards and leaves you where you are, which is what you want when a
+  // class is handing work in. Set from the checkbox on the arrival dialog as
+  // readily as from Settings - the two are the same switch.
+  syncOpenOnArrival: true
 };
 
 /**
@@ -102,6 +113,7 @@ class App {
     this.wireGlobalEvents();
     this.initDismissal();
     this.wireStore();
+    this.initSync();
     this.restoreLastBoard();
     // after the board is up, never before: the first thing anyone sees should
     // be their work, not a question
@@ -565,7 +577,10 @@ class App {
     if (!opts.startup) this.boardOpenedExplicitly = true;
     // A board arriving from a file has to be given its own place to live before
     // anything is written, or the first autosave lands on somebody else's board.
-    if (!opts.startup && data && data.origin) data = await this.claimLocalBoard(data);
+    // `claimed` means the caller has already decided which board on this
+    // machine this one is - the sync accept dialog does that itself, so that
+    // arriving from another computer asks ONE question rather than two.
+    if (!opts.startup && !opts.claimed && data && data.origin) data = await this.claimLocalBoard(data);
     this.textEditor.cancel();
     data = await this.resolveAssets(data);
     this.store.load(data);
@@ -1731,9 +1746,22 @@ class App {
       style: 'margin:0 0 14px;font-size:13px;color:var(--text-2);letter-spacing:.02em',
       html: 'by <b style="color:var(--accent)">theBoringCodes</b>'
     }));
+    /*
+     * This paragraph is a promise, so it has to keep being true.
+     *
+     * It said "runs entirely on this computer" full stop, which stopped being
+     * the whole story the day sharing over the wifi arrived. Rather than drop
+     * the claim - it is still the point of the app - it now says exactly where
+     * the edge is, and that the edge is off until somebody moves it.
+     */
     card.appendChild(h('p', { html:
-      `A free-form digital whiteboard for pen, sticky notes, shapes, text, images and documents.` +
-      `<br><br>Runs entirely on this computer — no account, no sign-in, no cloud.` }));
+      'A free-form digital whiteboard for pen, sticky notes, shapes, text, images and documents.'
+      + '<br><br>Runs on this computer — no account, no sign-in, no cloud. Your boards are files in a '
+      + 'folder here, and nothing about you or your work is ever uploaded.'
+      + '<br><br>The one exception is <b>sharing on your own network</b>, which is off until you switch '
+      + 'it on in Settings. With it on, you can hand a board straight to another GazBoard on the same '
+      + 'wifi — encrypted, device to device, never through anybody\'s server. Nothing is saved without '
+      + 'you being asked first.' }));
     card.appendChild(h('div', {
       style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12.5px;line-height:1.8;color:var(--text-2)',
       html:
@@ -1755,6 +1783,31 @@ class App {
       this.dismissOverlay();
       await this.checkForUpdates({ force: true });
     });
+    /*
+     * Where the boards actually live, and a way in.
+     *
+     * "Your boards are files in a folder here" is a much better sentence when
+     * the folder is one click away - it turns a reassurance into something the
+     * person can check for themselves. The Boards panel has had this for a
+     * while; About is where people go looking when they want to back the whole
+     * lot up or move to another machine.
+     */
+    if (i.userData) {
+      const where = h('div', {
+        style: 'margin-top:12px;padding-top:12px;border-top:1px solid var(--stroke);'
+          + 'font-size:11.5px;color:var(--text-2);line-height:1.7'
+      }, h('div', {}, i.electron ? 'Your boards are saved on this computer at:' : 'Your boards are stored in:'),
+      h('code', { style: 'font-size:11px;display:block;margin:4px 0 0;word-break:break-all' },
+        i.userData + (i.electron ? '/boards' : '')));
+      if (i.electron) {
+        const openIt = h('button', { class: 'btn' }, 'Open that folder');
+        openIt.style.cssText += 'margin-top:8px;padding:4px 10px;font-size:12.5px';
+        openIt.addEventListener('click', () => window.board.showItem(i.userData + '/boards'));
+        where.appendChild(openIt);
+      }
+      card.appendChild(where);
+    }
+
     card.appendChild(h('div', { class: 'actions' },
       check,
       h('button', { class: 'btn primary', onclick: () => this.dismissOverlay() }, 'Close')));
@@ -1949,6 +2002,592 @@ class App {
     const keyTool = { v: 'select', l: 'lasso', p: 'pen', h: 'highlighter', e: 'eraser', n: 'note', t: 'text', s: 'shape', x: 'laser', g: 'pan' }[e.key.toLowerCase()];
     if (keyTool) { this.setTool(keyTool); return; }
     if (e.key === '?') this.showShortcuts();
+  }
+
+  /* ================================================================= *
+   *  Sharing boards over the local network
+   *
+   *  GazBoard is an offline app and stays one. This is the single place
+   *  where it will talk to another machine, and it is off until somebody
+   *  switches it on: with settings.sync false, nothing below opens a socket,
+   *  answers a packet or announces that this computer exists. There is still
+   *  no account, no server and nothing leaves the room - two GazBoards on the
+   *  same wifi hand a board straight to each other.
+   *
+   *  Everything that arrives is a question, never an action. A board that
+   *  turns up is shown to the person - name, size and a small picture of it -
+   *  and nothing is written until they say yes.
+   * ================================================================= */
+
+  initSync() {
+    // The web build has no sync at all; the preload that provides it is the
+    // desktop one. Absent is normal, not an error.
+    if (!window.board || !window.board.sync) return;
+    this.syncPeers = [];
+    this.syncStatus = null;
+    this._incoming = [];
+    this._incomingBusy = false;
+
+    window.board.sync.onPeers((peers) => {
+      this.syncPeers = Array.isArray(peers) ? peers : [];
+      this.panels.syncChanged();
+    });
+    window.board.sync.onIncoming((msg) => this.queueIncomingBoard(msg));
+    // Routed through a field rather than wired per send, because listeners
+    // registered on a preload bridge cannot be taken off again.
+    this._onSendBytes = null;
+    if (window.board.sync.onSendProgress) {
+      window.board.sync.onSendProgress((p) => { if (this._onSendBytes) this._onSendBytes(p); });
+    }
+
+    if (!this.settings.sync) return;
+    // Switched on last time: bring it back up quietly. A failure here is worth
+    // saying out loud, because the symptom otherwise is a device list that
+    // simply never fills in.
+    this.startSync().catch(() => {});
+  }
+
+  /**
+   * Bring sharing up, and remember it if it will not come.
+   *
+   * The failure worth designing for is not a busy port - it is the service
+   * failing to load at all, which is what a build missing a file does. The
+   * panel asks the main process for its state, gets back an honest "not
+   * running, no error" (because nothing ever started), and sits on "Starting…"
+   * for ever. Keeping the reason here is what lets it say what went wrong
+   * instead of pretending it is still trying.
+   *
+   * @returns {Promise<boolean>} whether it is now running
+   */
+  async startSync() {
+    this.syncStartError = null;
+    let st = null;
+    try { st = await window.board.sync.start(); }
+    catch (e) { st = { error: e && e.message ? e.message : String(e) }; }
+
+    this.syncStatus = st;
+    this.syncPeers = (st && st.peers) || [];
+    if (st && st.running) { this.panels.syncChanged(); return true; }
+
+    this.syncStartError = (st && st.error) || 'it did not start, and gave no reason';
+    this.toast('Sharing on this network could not start: ' + this.syncStartError, 'help', 8000);
+    this.panels.syncChanged();
+    return false;
+  }
+
+  /** Latest state from the main process, cached for the settings panel. */
+  async refreshSyncStatus() {
+    if (!window.board || !window.board.sync) return null;
+    try {
+      this.syncStatus = await window.board.sync.state();
+      this.syncPeers = (this.syncStatus && this.syncStatus.peers) || [];
+    } catch { this.syncStatus = null; }
+    return this.syncStatus;
+  }
+
+  /**
+   * Boards arrive one at a time, however many are sent at once.
+   *
+   * Thirty students pressing send together is the case this is for. Without a
+   * queue the second dialog would paint over the first, and the first sender
+   * would sit waiting on a question nobody can answer any more.
+   */
+  queueIncomingBoard(msg) {
+    if (!msg || !msg.ticket) return;
+    this._incoming.push(msg);
+    if (!this._incomingBusy) this.drainIncomingBoards();
+  }
+
+  async drainIncomingBoards() {
+    this._incomingBusy = true;
+    try {
+      while (this._incoming.length) {
+        const msg = this._incoming.shift();
+        try { await this.handleIncomingBoard(msg); }
+        catch { try { window.board.sync.answer(msg.ticket, null); } catch {} }
+      }
+    } finally { this._incomingBusy = false; }
+  }
+
+  async handleIncomingBoard({ ticket, board, from }) {
+    /*
+     * The sending machine is holding a socket open waiting for this, and gives
+     * up after five minutes. Somebody who wanders back to a dialog they left on
+     * screen is therefore answering a question nobody is listening to any more,
+     * which is allowed - it just means the answer lands nowhere. false says so.
+     *
+     * @returns {Promise<boolean>} whether anyone was still waiting for it
+     */
+    const reply = async (outcome) => {
+      try { return await window.board.sync.answer(ticket, outcome); }
+      catch { return false; }
+    };
+    if (!board || typeof board !== 'object' || !Array.isArray(board.objects)) { reply(null); return; }
+
+    const who = (from && from.name) || 'another computer';
+    /*
+     * Where this copy came from, in the same slot a file's path goes in. That
+     * is deliberate: it makes "the same board sent again" behave exactly like
+     * "the same file opened again" - it updates the copy it made last time
+     * instead of piling up a new board every lesson. See claimLocalBoard().
+     */
+    const origin = 'sync:' + ((from && from.deviceId) || 'unknown') + '/' + (board.id || 'board');
+
+    let list = [];
+    try { list = (await window.board.boards.list()) || []; } catch { list = []; }
+    // Sent before from this machine, or a board here that shares its identity.
+    const mine = list.find((b) => b.origin && b.origin === origin)
+      || list.find((b) => b.id === board.id) || null;
+
+    const answer = await this.askAboutIncomingBoard({ board, who, mine, waiting: this._incoming.length });
+    if (!answer) {
+      await reply(null);
+      this.toast('Declined the board from ' + who, 'help');
+      return;
+    }
+
+    const base = board.name && board.name !== 'Untitled board'
+      ? board.name
+      : 'Board from ' + who;
+
+    let data;
+    if (mine && answer === 'replace') data = { ...board, origin, id: mine.id, name: base };
+    else if (mine) data = { ...board, origin, id: uid('b'), name: uniqueBoardName(base, list), created: Date.now() };
+    else data = { ...board, origin, name: uniqueBoardName(base, list) };
+
+    /*
+     * Replacing the board that is open right now is not a preference - it MUST
+     * be reloaded.
+     *
+     * The replacement is written to disk under the same id, but the editor is
+     * still holding the old objects in memory. Leave it there and the next
+     * autosave writes the old board straight back over the new one: the person
+     * watches "Replace my copy" succeed and then silently undo itself, with the
+     * sender's work gone and nothing to show what ate it. So this one case
+     * ignores the setting entirely.
+     */
+    const replacingWhatIsOpen = !!mine && answer === 'replace' && this.store.doc.id === mine.id;
+
+    /*
+     * Otherwise the habit decides - except when more boards are queued behind
+     * this one. Opening each of five arrivals in turn is four boards flashing
+     * past on the way to the fifth, so a backlog files quietly and only the
+     * last one lands on screen.
+     */
+    const open = replacingWhatIsOpen
+      || (this.settings.syncOpenOnArrival !== false && this._incoming.length === 0);
+
+    const saved = await this.saveIncomingBoard(data, open);
+    if (!saved) {
+      await reply(null);
+      this.toast('Could not save the board from ' + who, 'help', 6000);
+      return;
+    }
+    const delivered = await reply(answer === 'replace' ? 'replaced' : 'kept-both');
+
+    if (open) await this.loadBoard(data, { claimed: true, silent: true });
+    // The board is safely here either way. Whether the sender ever heard about
+    // it is a separate fact, and worth saying: their screen will say declined.
+    if (!delivered) {
+      this.toast('Kept “' + data.name + '”, but ' + who + ' had already stopped waiting - '
+        + 'their screen will say it was declined', 'help', 8000);
+    } else if (replacingWhatIsOpen) {
+      this.toast('“' + data.name + '” has been replaced with the copy from ' + who, 'board', 5000);
+    } else {
+      this.toast(open
+        ? 'Opened “' + data.name + '” from ' + who
+        : 'Saved “' + data.name + '” - open it from Boards', 'board', 5000);
+    }
+  }
+
+  /**
+   * Write an arriving board into this machine's own store.
+   *
+   * The pictures on it came inline, because the sending machine's assets
+   * folder did not travel with it. Filing them here is what makes them
+   * survive the board being closed and opened again - the same step the
+   * editor takes on every save.
+   */
+  async saveIncomingBoard(data, open) {
+    let doc = data;
+    try { doc = await this.externaliseAssets(data); } catch { doc = data; }
+    try {
+      await window.board.boards.save({
+        id: doc.id,
+        json: JSON.stringify(doc),
+        // Only a board somebody chose to open becomes the one that reopens
+        // next time. Accepting a doodle in the background must not quietly
+        // change what GazBoard shows on Monday morning.
+        setLast: !!open
+      });
+      return true;
+    } catch { return false; }
+  }
+
+  /**
+   * Show what is arriving and wait for an answer.
+   *
+   * The picture is the point. "Untitled board, 41 items" tells a presenter
+   * nothing about whether they want it on the projector behind them; a small
+   * thumbnail tells them at a glance, without the room getting a good look
+   * first. See ui/thumb.js for why it is that size.
+   *
+   * @returns {Promise<'open'|'save'|'both'|'replace'|null>} null means decline
+   */
+  askAboutIncomingBoard({ board, who, mine, waiting }) {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('overlay');
+      const card = document.getElementById('overlayCard');
+      card.innerHTML = '';
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
+
+      const count = Array.isArray(board.objects) ? board.objects.length : 0;
+      let kb = 0;
+      try { kb = Math.max(1, Math.round(JSON.stringify(board).length / 1024)); } catch { kb = 0; }
+
+      card.appendChild(h('h3', {}, who + ' is sending you a board'));
+      card.appendChild(h('div', { style: 'display:flex;gap:14px;align-items:flex-start;margin:0 0 12px' },
+        boardThumb(board.objects, 168, 106),
+        h('div', { style: 'font-size:13px;line-height:1.7;min-width:0;flex:1' },
+          h('div', { style: 'font-weight:600;overflow-wrap:anywhere' }, board.name || 'Untitled board'),
+          h('div', { style: 'color:var(--text-2)' },
+            `${count} item${count === 1 ? '' : 's'}${kb ? ' · ' + kb + ' KB' : ''}`),
+          waiting
+            ? h('div', { style: 'color:var(--text-2);margin-top:4px' },
+              waiting === 1 ? 'One more is waiting behind this' : waiting + ' more are waiting behind this')
+            : null)));
+
+      card.appendChild(h('p', {}, mine
+        ? `You already have “${mine.name}”, which came from this same board. Keeping both leaves your copy `
+          + 'untouched and files this one beside it. Replacing writes this over your copy, and anything you '
+          + 'have added to yours since would be gone.'
+        : 'Nothing is written until you choose.'));
+
+      /*
+       * Two questions were tangled together here, and untangling them is the
+       * point of this checkbox.
+       *
+       * WHICH COPY is a decision about this particular board, and it belongs on
+       * the buttons. WHETHER TO OPEN IT is a habit - your own two machines, you
+       * want the board in front of you; a class handing in thirty doodles, you
+       * do not want each one taking over the screen. Putting that on the
+       * buttons meant four of them on the collision path, and leaving it off
+       * meant "Keep both" filed the board somewhere you then had to go looking
+       * for, which is how a board appears to vanish.
+       *
+       * So it is a checkbox that remembers. Set it once and every later arrival
+       * follows it; Settings has the same switch for anyone who wants to find
+       * it there.
+       */
+      const openBox = h('input', { type: 'checkbox' });
+      openBox.checked = this.settings.syncOpenOnArrival !== false;
+      openBox.style.cssText = 'width:15px;height:15px;margin:0;flex:none';
+      openBox.addEventListener('change', () => {
+        this.settings.syncOpenOnArrival = openBox.checked;
+        this.saveSettings();
+      });
+      card.appendChild(h('label', {
+        style: 'display:flex;align-items:center;gap:9px;font-size:13px;cursor:pointer;'
+          + 'padding:9px 11px;border:1px solid var(--stroke);border-radius:6px;margin:0 0 12px'
+      }, openBox, h('span', {}, 'Open it straight away',
+        h('span', { style: 'display:block;font-size:11.5px;color:var(--text-2);margin-top:1px' },
+          'Off files it in My boards and leaves you where you are'))));
+
+      const row = h('div', { class: 'actions', style: 'flex-wrap:wrap;gap:8px' });
+      row.appendChild(h('button', { class: 'btn', onclick: () => done(null) }, 'Decline'));
+      if (mine) {
+        row.appendChild(h('button', { class: 'btn primary', onclick: () => done('both') }, 'Keep both'));
+        row.appendChild(h('button', { class: 'btn', onclick: () => done('replace') }, 'Replace my copy'));
+      } else {
+        row.appendChild(h('button', { class: 'btn primary', onclick: () => done('save') }, 'Save it'));
+      }
+      card.appendChild(row);
+
+      // Escape, or a click outside, declines. A board that lands on somebody's
+      // machine because they brushed a key is exactly what this dialog exists
+      // to prevent.
+      this.showOverlay(() => resolve(null));
+    });
+  }
+
+  /**
+   * A dialog with one thing to type in.
+   *
+   * @returns {Promise<string|null>} what was typed, or null if it was dismissed
+   */
+  promptText(title, text, { placeholder = '', confirmLabel = 'OK', uppercase = false, value = '' } = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('overlay');
+      const card = document.getElementById('overlayCard');
+      card.innerHTML = '';
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
+
+      const input = h('input', {
+        type: 'text', placeholder, value,
+        style: 'width:100%;padding:9px 11px;font-size:15px;border:1px solid var(--stroke);'
+          + 'border-radius:6px;background:var(--bg);color:var(--text);box-sizing:border-box'
+          + (uppercase ? ';letter-spacing:3px;text-transform:uppercase;font-weight:600' : '')
+      });
+      const submit = () => { const v = input.value.trim(); if (v) done(v); };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+      card.appendChild(h('h3', {}, title));
+      if (text) card.appendChild(h('p', {}, text));
+      card.appendChild(h('div', { style: 'margin:4px 0 6px' }, input));
+      card.appendChild(h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: submit }, confirmLabel)));
+
+      this.showOverlay(() => resolve(null));
+      setTimeout(() => input.focus(), 30);
+    });
+  }
+
+  /**
+   * The commands, for when the app is not allowed to run them itself.
+   *
+   * A university lab machine may refuse elevation outright, and on one of those
+   * the useful thing to hand somebody is not an apology - it is the two lines
+   * their IT person needs, ready to copy.
+   */
+  async showFirewallHelp(reason) {
+    let cmds = [];
+    try { cmds = (await window.board.sync.firewall.commands()) || []; } catch { cmds = []; }
+
+    const overlay = document.getElementById('overlay');
+    const card = document.getElementById('overlayCard');
+    card.innerHTML = '';
+    const done = () => { this._overlayDismiss = null; overlay.classList.remove('show'); };
+
+    card.appendChild(h('h3', {}, 'Letting GazBoard through the firewall by hand'));
+    card.appendChild(h('p', {}, reason === 'cancelled'
+      ? 'Nothing was changed. If you would rather not give GazBoard permission to do this, '
+        + 'these are the two commands that do the same thing - run them in Windows PowerShell '
+        + 'started as Administrator.'
+      : 'GazBoard could not change the firewall on this computer, which usually means the '
+        + 'machine is managed and will not allow it. These are the two commands that do it - '
+        + 'run them in Windows PowerShell started as Administrator, or pass them to whoever '
+        + 'looks after the machine.'));
+
+    const text = cmds.join('\n\n');
+    card.appendChild(h('pre', {
+      style: 'font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all;'
+        + 'background:var(--bg-2, rgba(127,127,127,.08));border:1px solid var(--stroke);'
+        + 'border-radius:6px;padding:10px;max-height:190px;overflow:auto;margin:0 0 4px'
+    }, text || 'This computer does not run Windows Firewall.'));
+
+    card.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
+      'They allow this one program to be reached on your own private and work networks, '
+      + 'and nowhere else. If your wifi is marked Public in Windows, change it to Private '
+      + 'first, or these will have no effect.'));
+
+    const row = h('div', { class: 'actions' });
+    if (text) {
+      row.appendChild(h('button', {
+        class: 'btn',
+        onclick: async () => {
+          try { await navigator.clipboard.writeText(text); this.toast('Commands copied'); }
+          catch { this.toast('Could not reach the clipboard - select the text instead', 'help'); }
+        }
+      }, 'Copy'));
+    }
+    row.appendChild(h('button', { class: 'btn primary', onclick: done }, 'Close'));
+    card.appendChild(row);
+    this.showOverlay(done);
+  }
+
+  /**
+   * Put a pairing code on the screen and keep a live one there.
+   *
+   * A code lasts five minutes, which is right for a classroom and wrong for a
+   * dialog somebody leaves open while thirty people find the setting. When one
+   * runs out this quietly starts another, so the number on the screen is
+   * always the number that works. Closing the dialog ends pairing outright -
+   * a code nobody can see must not still let a stranger in.
+   */
+  async showPairingCode() {
+    if (!window.board || !window.board.sync) return;
+    const overlay = document.getElementById('overlay');
+    const card = document.getElementById('overlayCard');
+    let remember = false;
+    let session = null;
+    let timer = null;
+
+    const stop = () => {
+      clearInterval(timer);
+      try { Promise.resolve(window.board.sync.cancelPairing()).catch(() => {}); } catch {}
+      this._overlayDismiss = null;
+      overlay.classList.remove('show');
+      this.panels.syncChanged();
+    };
+
+    const draw = () => {
+      card.innerHTML = '';
+      card.appendChild(h('h3', {}, 'Pairing code'));
+      card.appendChild(h('p', {},
+        'On the other computer, switch on sharing, find this computer in its list and press Pair. '
+        + 'It will ask for this code.'));
+
+      card.appendChild(h('div', {
+        style: 'font-size:34px;font-weight:700;letter-spacing:6px;text-align:center;'
+          + 'padding:14px 0;font-variant-numeric:tabular-nums'
+      }, session ? session.code : '····'));
+
+      const left = session ? Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000)) : 0;
+      card.appendChild(h('div', {
+        id: 'pairCountdown',
+        style: 'text-align:center;font-size:12.5px;color:var(--text-2);margin:-6px 0 14px'
+      }, `Good for another ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} - a fresh code appears here when it runs out`));
+
+      const opt = (value, label, hint) => {
+        const b = h('button', {
+          class: 'btn' + (remember === value ? ' primary' : ''),
+          style: 'width:100%;text-align:left;margin-bottom:6px;padding:9px 12px;height:auto'
+        }, h('div', {}, h('div', { style: 'font-weight:600' }, label),
+          h('div', { style: 'font-size:11.5px;opacity:.8;font-weight:400;margin-top:2px' }, hint)));
+        b.addEventListener('click', async () => {
+          if (remember === value) return;
+          remember = value;
+          session = await window.board.sync.beginPairing({ remember });
+          draw();
+        });
+        return b;
+      };
+      card.appendChild(opt(false, 'Just for now',
+        'Whoever pairs with this code is forgotten when GazBoard closes. Right for a class or a meeting.'));
+      card.appendChild(opt(true, 'Remember these computers',
+        'They stay paired and can send you a board any time - and you will still be asked before anything is saved. Right for your own machines.'));
+
+      card.appendChild(h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', onclick: stop }, 'Done')));
+    };
+
+    try { session = await window.board.sync.beginPairing({ remember }); }
+    catch { this.toast('Sharing is not running', 'help'); return; }
+
+    draw();
+    this.showOverlay(stop);
+    let tick = 0;
+    timer = setInterval(() => {
+      if (!session) return;
+      /*
+       * Somebody pairing WITH this machine changes its device list, and that
+       * change happens down in the main process without a discovery packet to
+       * announce it - so the panel behind this dialog would go on saying "not
+       * paired yet" about a computer that just paired. Nudge it while the code
+       * is up, which is exactly the window in which that can happen.
+       */
+      if (++tick % 3 === 0) this.panels.syncChanged();
+      if (Date.now() > session.expiresAt - 1000) {
+        window.board.sync.beginPairing({ remember }).then((s) => { session = s; draw(); }).catch(() => {});
+        return;
+      }
+      const el = document.getElementById('pairCountdown');
+      if (!el) { clearInterval(timer); return; }
+      const left = Math.max(0, Math.round((session.expiresAt - Date.now()) / 1000));
+      el.textContent = `Good for another ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
+        + ' - a fresh code appears here when it runs out';
+    }, 1000);
+  }
+
+  /**
+   * A progress dialog for a send, which can be got rid of.
+   *
+   * Two phases, and they matter separately. While bytes are moving there is a
+   * real number to show. Once they have all gone the wait is on a PERSON at the
+   * other machine looking at the "do you want this?" dialog, and pretending
+   * that has a percentage would be a lie - so the bar fills, and the words
+   * change to say who is being waited for.
+   *
+   * Dismissible on purpose: closing it hides the dialog and lets the transfer
+   * carry on, with the result arriving as a toast. Somebody who has to sit and
+   * watch a bar because there is no way out will resent the feature.
+   */
+  showSendProgress(who, boardName, totalBytes) {
+    const overlay = document.getElementById('overlay');
+    const card = document.getElementById('overlayCard');
+    const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+    card.innerHTML = '';
+    card.appendChild(h('h3', {}, 'Sending to ' + who));
+    const label = h('p', {}, `“${boardName}” — ${mb(totalBytes)}`);
+    card.appendChild(label);
+    const bar = h('div', { class: 'bar' }, h('i', {}));
+    card.appendChild(bar);
+    const note = h('p', { style: 'font-size:12px;color:var(--text-2);margin:8px 0 0' },
+      'You can close this — it carries on, and the answer will appear as a message.');
+    card.appendChild(note);
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      this._overlayDismiss = null;
+      overlay.classList.remove('show');
+    };
+    card.appendChild(h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: close }, 'Close')));
+    this.showOverlay(close);
+    return {
+      update: (sent, total) => {
+        if (closed) return;
+        const frac = total ? clamp(sent / total, 0, 1) : 0;
+        bar.firstChild.style.width = Math.round(frac * 100) + '%';
+        label.textContent = sent >= total
+          // Everything is out; from here it is somebody reading a dialog.
+          ? `Sent. Waiting for ${who} to answer…`
+          : `“${boardName}” — ${mb(sent)} of ${mb(total)}`;
+      },
+      close
+    };
+  }
+
+  /** Hand the board that is open right now to a paired device. */
+  async sendCurrentBoardTo(peer) {
+    if (!peer || !peer.deviceId) return false;
+    let doc;
+    try { doc = exportable(this.store.toJSON({ app: 'GazBoard', version: 1 })); }
+    catch { this.toast('Could not read this board to send it', 'help', 6000); return false; }
+
+    // Pictures travel inside the board, because the other machine has no copy
+    // of this one's assets folder. A board of imported pages can therefore be
+    // large, and the far end refuses anything over 64 MB outright.
+    let bytes = 0;
+    try { bytes = JSON.stringify(doc).length; } catch { bytes = 0; }
+    if (bytes > 60 * 1024 * 1024) {
+      this.toast('This board is too big to send over the network - save a copy and carry it instead', 'help', 8000);
+      return false;
+    }
+
+    /*
+     * A dialog rather than a toast, because a toast fades after four seconds
+     * and a board of imported pages does not.
+     *
+     * On the wire a board is roughly 1.8x the size of the pictures on it - the
+     * data: URLs are base64 once and the sealed envelope is base64 again - so
+     * tens of megabytes over classroom wifi is a genuine wait, and a faded
+     * toast makes it look like nothing happened. It can be dismissed: the send
+     * carries on in the background and the outcome still arrives as a toast,
+     * because trapping somebody behind a progress bar with no way out is worse
+     * than not showing one.
+     */
+    const sending = this.showSendProgress(peer.name, doc.name || 'board', bytes);
+    this._onSendBytes = ({ sent, total }) => sending.update(sent, total);
+
+    let r = null;
+    try { r = await window.board.sync.send(peer, doc); } catch (e) { r = { ok: false, error: e.message }; }
+    this._onSendBytes = null;
+    sending.close();
+    if (!r || !r.ok) {
+      this.toast('Could not send it: ' + ((r && r.error) || 'no answer from that computer'), 'help', 8000);
+      return false;
+    }
+    if (!r.result || !r.result.accepted) {
+      this.toast(peer.name + ' declined it', 'help');
+      return false;
+    }
+    this.toast(r.result.outcome === 'replaced'
+      ? peer.name + ' accepted it, replacing their copy'
+      : peer.name + ' accepted it');
+    return true;
   }
 }
 

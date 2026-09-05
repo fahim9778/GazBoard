@@ -1836,8 +1836,21 @@ async function run(win, app) {
     // CI runner that can be one frame a second instead of sixty. Waiting a set
     // 260ms therefore read as "auto-pan is broken" on a slow runner and as
     // "auto-pan works" on a fast one. Wait for the camera to move instead.
+    /*
+     * Wait for movement, not for an amount.
+     *
+     * The earlier version waited for more than 20px and reported failure below
+     * that. But the loop scrolls once per animation frame, and every desktop OS
+     * throttles those hard when a window is occluded or minimised - one frame a
+     * second instead of sixty. So the number reached says how busy the machine
+     * was, not whether auto-pan works, and a suite that fails because a window
+     * was behind another window teaches people to ignore it.
+     *
+     * What is actually being tested is that the canvas moves at all, in the
+     * right direction, while the stroke keeps growing. Zero means broken.
+     */
     let scrolled = 0;
-    for (let i = 0; i < 40 && scrolled <= 20; i++) {
+    for (let i = 0; i < 60 && scrolled <= 20; i++) {
       await new Promise(r => setTimeout(r, 50));
       scrolled = Math.round(sf.cam.x - camX0);
     }
@@ -1920,7 +1933,10 @@ async function run(win, app) {
   check('two touch pointers still pinch-zoom', pan.touchPinches);
   check('no auto-pan away from the edges', pan.middleVel === null);
   check('edge velocity points inward', pan.leftDir > 0 && pan.rightDir < 0, `left ${pan.leftDir}, right ${pan.rightDir}`);
-  check('auto-pan scrolls the canvas while drawing', pan.armed && pan.scrolled > 20 && pan.pointsWhileScrolling > 1, `${pan.scrolled}px, ${pan.pointsWhileScrolling} points`);
+  check('auto-pan scrolls the canvas while drawing',
+    pan.armed && pan.scrolled > 0 && pan.pointsWhileScrolling > 1,
+    `${pan.scrolled}px, ${pan.pointsWhileScrolling} points`
+      + (pan.scrolled > 0 && pan.scrolled <= 20 ? ' — few animation frames; window was probably not on top' : ''));
   check('auto-pan stops on pointer up', pan.stopped);
   check('auto-pan does not cancel a right-button drag under it', pan.rightDragSurvivedAutoPan);
   check('the barrel button does not take the pen away mid-stroke',
@@ -4454,6 +4470,42 @@ module.exports.run = async (win, app) => {
   check('and closes cleanly, twice over',
     cancelEdit.editorClosed === true && cancelEdit.doubleCancelSurvived === true);
 
+  /* ---- sync is off until somebody switches it on ---- */
+  {
+    const net = require('node:net');
+    const listening = (port) => new Promise((resolve) => {
+      const sock = net.connect({ host: '127.0.0.1', port, timeout: 1200 });
+      sock.on('connect', () => { sock.destroy(); resolve(true); });
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+      sock.on('error', () => resolve(false));
+    });
+
+    // The app has been running for the whole suite by now. If turning sync on
+    // were needed for anything else to work, or if it started itself, this is
+    // where it would show.
+    const before = await listening(53318);
+    check('nothing is listening on the sync port until sync is turned on',
+      before === false, before ? 'something answered on 53318' : 'port closed');
+
+    const state = await js(`return await window.board.sync.state();`);
+    check('and the app agrees it is not running',
+      state && state.running === false && state.port === 0,
+      JSON.stringify(state && { running: state.running, port: state.port }));
+
+    check('the sync bridge exists but has done nothing',
+      await js(`return typeof window.board.sync.start === 'function'
+                  && typeof window.board.sync.send === 'function';`));
+
+    // and asking it to do anything while off is refused rather than silently
+    // starting it
+    const refused = await js(`
+      const r = await window.board.sync.send({ deviceId: 'nobody' }, { id: 'x', objects: [] });
+      return r;
+    `);
+    check('sending while sync is off is refused, not quietly allowed',
+      refused && refused.ok === false, JSON.stringify(refused));
+  }
+
   /* ---- Escape and a click outside close whatever is on top ---- */
   const dismiss = await js(`
     const a = window.app, sf = a.surface;
@@ -5330,6 +5382,313 @@ module.exports.run = async (win, app) => {
   check('it does come back after a week, rather than never', nag.dueAgainAfterAWeek);
   check('an actual answer is still kept for good', nag.answerSticks);
 
+  /* ================================================================= *
+   *  Sharing on the local network
+   *
+   *  The point of these is that the feature stays invisible until it is asked
+   *  for, and that nothing an arriving board does can happen without somebody
+   *  pressing a button. GazBoard's promise is that it is offline; this is
+   *  where that promise is checked rather than asserted.
+   * ================================================================= */
+
+  const syncOff = await js(`
+    const st = await window.board.sync.state();
+    return { setting: window.app.settings.sync, running: st.running, peers: (st.peers || []).length,
+             paired: (st.paired || []).length, port: st.port };
+  `);
+  check('sharing on the network is off on a fresh install', syncOff.setting === false);
+  check('and with it off nothing is listening', syncOff.running === false && syncOff.port === 0,
+    `running: ${syncOff.running}, port: ${syncOff.port}`);
+  check('nothing has been announced and nobody is paired',
+    syncOff.peers === 0 && syncOff.paired === 0);
+
+  await js(`window.app.panels.settings();`);
+  await sleep(300);
+  const syncPanel = await js(`
+    const body = document.getElementById('panelBody');
+    const heads = [...body.querySelectorAll('h5')].map((e) => e.textContent);
+    const sec = [...body.querySelectorAll('.section')].find((s) => {
+      const t = s.querySelector('h5');
+      return t && t.textContent === 'Share on this network';
+    });
+    const box = sec ? sec.querySelector('input[type=checkbox]') : null;
+    return { heads, present: !!sec, checked: box ? box.checked : null,
+             text: sec ? sec.textContent : '' };
+  `);
+  check('Settings offers sharing on this network', syncPanel.present, syncPanel.heads.join(' | '));
+  check('and its switch is off, so opening Settings changes nothing', syncPanel.checked === false);
+  check('the switch says plainly what it turns on',
+    /asked/i.test(syncPanel.text) && /firewall/i.test(syncPanel.text));
+  await js(`window.app.panels.close();`);
+  await sleep(150);
+
+  // A board arriving from another machine. handleIncomingBoard is the whole
+  // receiving path: it asks, and only then writes.
+  const incoming = (name, id, ticket) => `
+    window.__inc = window.app.handleIncomingBoard({
+      ticket: ${JSON.stringify(ticket)},
+      from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, schema: 2,
+        pages: [], camera: { x: 0, y: 0, z: 1 },
+        objects: [{ id: 'ink-in', type: 'stroke', tool: 'pen', color: '#0078d4', width: 5, effect: 'none',
+          points: [{ x: 0, y: 0, p: .5 }, { x: 40, y: 30, p: .5 }, { x: 90, y: 10, p: .5 }],
+          bbox: { x: 0, y: 0, w: 90, h: 30 }, rotation: 0 }] }
+    });
+    return true;`;
+
+  /*
+   * The tickets below belong to no real sender, which is deliberate: it is the
+   * same shape as somebody answering a dialog they left on screen past the five
+   * minutes the sending machine waits. That has to be quiet. It used to be a
+   * handler registered per ticket and torn down on timeout, so a late answer
+   * invoked a channel that had gone - logged as an error in the main process
+   * and rejected in the renderer, for a case where nobody did anything wrong.
+   */
+  const stale = await js(`return await window.board.sync.answer('no-such-ticket', 'kept-both');`);
+  check('answering a question nobody is waiting for is quiet, not an error',
+    stale === false, String(stale));
+
+  const boardsBefore = await js(`return (await window.board.boards.list()).length;`);
+  const lastBefore = await js(`return await window.board.boards.last();`);
+
+  await js(incoming('Group 4 doodle', 'in-b1', 't1'));
+  await sleep(450);
+  const ask = await js(`
+    const c = document.getElementById('overlayCard');
+    const img = c.querySelector('img');
+    return {
+      shown: document.getElementById('overlay').classList.contains('show'),
+      title: c.querySelector('h3') ? c.querySelector('h3').textContent : '',
+      thumb: !!img && (img.getAttribute('src') || '').startsWith('data:image'),
+      buttons: [...c.querySelectorAll('button')].map((b) => b.textContent),
+      openBox: c.querySelector('input[type=checkbox]') ? c.querySelector('input[type=checkbox]').checked : null,
+      text: c.textContent
+    };`);
+  const during = await js(`return (await window.board.boards.list()).length;`);
+  check('a board arriving from another computer asks first', ask.shown && /Classroom PC/.test(ask.title), ask.title);
+  check('and shows a picture of it, not just its name', ask.thumb);
+  check('with the item count, so an empty board cannot pose as work', /1 item/.test(ask.text));
+  check('nothing is written while the question is on screen', during === boardsBefore,
+    `${boardsBefore} board(s) before, ${during} during`);
+  check('the answers offered are Decline and Save it',
+    JSON.stringify(ask.buttons) === JSON.stringify(['Decline', 'Save it']), ask.buttons.join(' | '));
+  // Which copy to keep and whether to open it are two different questions, and
+  // the second is a habit rather than a decision about this board - so it sits
+  // on a checkbox that remembers, not on another pair of buttons.
+  check('and whether to open it is a checkbox, ticked by default',
+    ask.openBox === true && /Open it straight away/.test(ask.text), String(ask.openBox));
+  await shot(win, '22-incoming-board');
+
+  // Escape must mean no. A board landing on somebody's machine because they
+  // brushed a key is the failure this dialog exists to prevent.
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));`);
+  await js(`await window.__inc;`);
+  const afterEscape = await js(`return (await window.board.boards.list()).length;`);
+  check('Escape declines it, and nothing is saved', afterEscape === boardsBefore, `${afterEscape} board(s)`);
+
+  /*
+   * And the Decline button itself, which is a different code path from Escape
+   * and deserves its own proof. "Declined" has to mean the board never touched
+   * this machine at all: no row in the boards list, no file on disk under its
+   * id, and no picture filed in the asset store on its way past.
+   */
+  await js(incoming('Refused doodle', 'in-refused', 't1b'));
+  await sleep(450);
+  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Decline').click();`);
+  await js(`await window.__inc;`);
+  await sleep(250);
+  const refused = await js(`
+    const list = await window.board.boards.list();
+    return {
+      count: list.length,
+      byName: list.some((b) => b.name === 'Refused doodle'),
+      byOrigin: list.some((b) => b.origin === 'sync:dev-classroom/in-refused'),
+      onDisk: !!(await window.board.boards.load('in-refused')),
+      openNow: window.app.store.doc.name
+    };`);
+  check('pressing Decline leaves no board behind either',
+    refused.count === boardsBefore && !refused.byName && !refused.byOrigin,
+    `${refused.count} board(s)`);
+  check('and nothing under its id on disk, not even a stub', refused.onDisk === false);
+  check('and what you were working on is untouched', refused.openNow !== 'Refused doodle', refused.openNow);
+
+  // With the box unticked, accepting files the board and leaves you alone.
+  // This is the classroom: thirty doodles must not each take over the screen.
+  await js(`window.app.settings.syncOpenOnArrival = false; window.app.saveSettings();`);
+  await js(incoming('Group 4 doodle', 'in-b1', 't2'));
+  await sleep(450);
+  const boxOff = await js(`const b = document.getElementById('overlayCard').querySelector('input[type=checkbox]');
+    return b ? b.checked : null;`);
+  check('unticking it is remembered for the next board that arrives', boxOff === false, String(boxOff));
+  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Save it').click();`);
+  await js(`await window.__inc;`);
+  await sleep(250);
+  const filed = await js(`
+    const list = await window.board.boards.list();
+    const b = list.find((x) => x.name === 'Group 4 doodle');
+    return { count: list.length, found: !!b, origin: b ? b.origin : null,
+             last: await window.board.boards.last(), openNow: window.app.store.doc.name };
+  `);
+  check('"Save it" files the board with the others', filed.found && filed.count === boardsBefore + 1,
+    `${filed.count} board(s)`);
+  check('and does not open it over what you were working on', filed.openNow !== 'Group 4 doodle', filed.openNow);
+  check('nor change which board reopens next time', filed.last === lastBefore,
+    `last was ${lastBefore}, now ${filed.last}`);
+  check('it records which computer sent it, and no file path',
+    filed.origin === 'sync:dev-classroom/in-b1', filed.origin);
+
+  // Ticked, it opens. Which is the whole point: a board that arrives and is
+  // only findable by going to Boards and hunting for it looks like a board
+  // that vanished.
+  await js(`window.app.settings.syncOpenOnArrival = true; window.app.saveSettings();`);
+  await js(incoming('Straight to the front', 'in-b2', 't2b'));
+  await sleep(450);
+  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Save it').click();`);
+  await js(`await window.__inc;`);
+  await sleep(400);
+  const opened = await js(`return { openNow: window.app.store.doc.name,
+    title: document.getElementById('boardTitle').value };`);
+  check('with "Open it" on, an accepted board lands in front of you',
+    opened.openNow === 'Straight to the front', opened.openNow);
+  check('and the title bar says so rather than still naming the old one',
+    opened.title === 'Straight to the front', opened.title);
+
+  // The same board again from the same machine. This is "opening the same file
+  // twice" wearing different clothes, and it behaves the same way: it asks,
+  // and it never quietly overwrites.
+  await js(incoming('Group 4 doodle', 'in-b1', 't3'));
+  await sleep(450);
+  const again = await js(`
+    const c = document.getElementById('overlayCard');
+    return { buttons: [...c.querySelectorAll('button')].map((b) => b.textContent), text: c.textContent };`);
+  check('the same board sent again warns before it can overwrite',
+    JSON.stringify(again.buttons) === JSON.stringify(['Decline', 'Keep both', 'Replace my copy']),
+    again.buttons.join(' | '));
+  check('and says in plain words what replacing would cost', /would be gone/.test(again.text));
+
+  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Keep both').click();`);
+  await js(`await window.__inc;`);
+  await sleep(250);
+  const kept = await js(`
+    const list = await window.board.boards.list();
+    const mine = list.filter((b) => /^Group 4 doodle/.test(b.name));
+    return { names: mine.map((b) => b.name), ids: mine.map((b) => b.id) };
+  `);
+  check('"Keep both" leaves the first copy alone', kept.names.length === 2, kept.names.join(' / '));
+  check('and gives the second its own identity rather than the first one\'s',
+    kept.ids.length === 2 && kept.ids[0] !== kept.ids[1], kept.ids.join(' / '));
+
+  /*
+   * Replacing the board that is OPEN.
+   *
+   * The replacement goes to disk under the same id while the editor is still
+   * holding the old objects in memory - so unless it is reloaded, the next
+   * autosave writes the old board straight back over the new one. The person
+   * watches "Replace my copy" succeed and then silently undo itself, and the
+   * sender's work is gone with nothing to show what ate it.
+   *
+   * "Just file it" is deliberately left on here: this must reload anyway. It
+   * is the one case that is not a preference.
+   */
+  await js(`
+    window.app.settings.syncOpenOnArrival = false;
+    window.app.saveSettings();
+    const list = await window.board.boards.list();
+    const b = list.find((x) => x.origin === 'sync:dev-classroom/in-b1');
+    const data = await window.board.boards.load(b.id);
+    await window.app.loadBoard(data, { claimed: true, silent: true });
+    return true;
+  `);
+  await sleep(300);
+  const beingEdited = await js(`return { id: window.app.store.doc.id, objects: window.app.store.count };`);
+
+  // The same board back again, visibly different: three strokes, not one.
+  await js(`
+    window.__inc = window.app.handleIncomingBoard({
+      ticket: 't4',
+      from: { deviceId: 'dev-classroom', name: 'Classroom PC' },
+      board: { id: 'in-b1', name: 'Group 4 doodle', schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 },
+        objects: [0, 1, 2].map((n) => ({ id: 'redo' + n, type: 'stroke', tool: 'pen',
+          color: '#107c10', width: 5, effect: 'none',
+          points: [{ x: n * 60, y: 0, p: .5 }, { x: n * 60 + 40, y: 40, p: .5 }],
+          bbox: { x: n * 60, y: 0, w: 40, h: 40 }, rotation: 0 })) }
+    });
+    return true;`);
+  await sleep(450);
+  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Replace my copy').click();`);
+  await js(`await window.__inc;`);
+  await sleep(400);
+  const afterReplace = await js(`return { id: window.app.store.doc.id, objects: window.app.store.count };`);
+  check('replacing the board you have open reloads it, whatever the setting says',
+    afterReplace.objects === 3 && afterReplace.id === beingEdited.id,
+    `was ${beingEdited.objects} item(s), now ${afterReplace.objects}`);
+
+  // And what is on disk has to agree, or the next autosave undoes the replace.
+  await js(`await window.app.persist({ force: true }); return true;`);
+  await sleep(300);
+  const onDisk = await js(`
+    const d = await window.board.boards.load(${JSON.stringify(beingEdited.id)});
+    return d ? (d.objects || []).length : -1;`);
+  check('and the copy on disk is the new one, not the one it replaced',
+    onDisk === 3, `${onDisk} item(s) on disk`);
+
+  await js(`window.app.settings.syncOpenOnArrival = true; window.app.saveSettings();`);
+
+  /*
+   * The firewall repair, which is the one part of sync that answers differently
+   * depending on the machine it is running on - so the assertions have to as
+   * well. On Windows this is a live read of the real firewall; everywhere else
+   * the only correct answer is "not my department".
+   *
+   * The program path is reported either way, because it is the thing that
+   * explains a surprising verdict: `npm start` runs electron.exe out of
+   * node_modules, and a rule somebody added for the INSTALLED GazBoard.exe -
+   * or for node.exe while testing - says nothing about that one. Two different
+   * programs, two different rules, and the path is how you tell.
+   */
+  const onWindows = process.platform === 'win32';
+  const fwCheck = await js(`
+    const has = !!(window.board.sync && window.board.sync.firewall);
+    const r = has ? await window.board.sync.firewall.check() : null;
+    const cmds = has ? await window.board.sync.firewall.commands() : null;
+    return { has, state: r && r.state, supported: r && r.supported,
+             program: r && r.program, networks: r && r.networks,
+             tool: r && r.tool, repairable: r && r.repairable, cmds };
+  `);
+  check('the app can ask the firewall why nobody can reach it', fwCheck.has);
+
+  if (onWindows) {
+    // Any of these four is a real answer. 'unknown' is included on purpose: a
+    // machine where PowerShell is locked down cannot be read, and saying so is
+    // the correct outcome rather than a failure to fix.
+    const states = ['allowed', 'no-rule', 'blocked', 'unknown'];
+    check('and on Windows it reads the actual rules instead of guessing',
+      fwCheck.supported === true && states.includes(fwCheck.state),
+      `${fwCheck.state} for ${fwCheck.program || '(no program)'}`
+      + (fwCheck.networks ? ` on ${[].concat(fwCheck.networks).join(', ') || 'no network'}` : ''));
+    check('with the commands ready for a machine that will not let it do the job itself',
+      Array.isArray(fwCheck.cmds) && fwCheck.cmds.length === 2);
+  } else {
+    // macOS and Linux read the firewall too - they just will not change it from
+    // in here, which is a decision rather than a gap, and one the result states.
+    const states = ['allowed', 'no-rule', 'blocked', 'off', 'unknown'];
+    check('and on this machine it reads the local firewall rather than shrugging',
+      fwCheck.supported === true && states.includes(fwCheck.state),
+      `${fwCheck.state} via ${fwCheck.tool || 'no tool'}`);
+    check('while saying plainly that it will not change it without your say-so',
+      fwCheck.repairable === false);
+    check('and the commands it offers are this platform\'s, not PowerShell',
+      Array.isArray(fwCheck.cmds) && fwCheck.cmds.length > 0
+      && !fwCheck.cmds.some((c) => /New-NetFirewallRule/.test(c)),
+      (fwCheck.cmds || []).join(' ; ').slice(0, 120));
+  }
+
+  // None of the above should have started the service.
+  const stillOff = await js(`const st = await window.board.sync.state();
+    return { running: st.running, setting: window.app.settings.sync };`);
+  check('none of that switched sharing on behind your back',
+    stillOff.running === false && stillOff.setting === false);
+
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
   await js(`await window.app.showAbout();`);
@@ -5341,6 +5700,31 @@ module.exports.run = async (win, app) => {
   check('About credits the developer and a way to reach him',
     about.html.includes('MD. Fakhruddin Gazzali') && about.html.includes('mailto:fahim9778@gmail.com'));
   check('About says how it was built', about.html.includes('Claude Cowork'));
+
+  /*
+   * About is a promise about what this app does with your work, so it has to
+   * keep being true. It claimed "runs entirely on this computer" full stop,
+   * which stopped being the whole story the day sharing arrived - and a stale
+   * privacy claim is worse than none, because people rely on it.
+   */
+  check('About still promises no account, no sign-in and no cloud',
+    /no account/i.test(about.html) && /no sign-in/i.test(about.html) && /no cloud/i.test(about.html));
+  check('and names sharing as the one exception, saying it is off until switched on',
+    /sharing on your own network/i.test(about.html)
+    && /off until you switch it on/i.test(about.html));
+  check('and that a shared board never passes through anybody\'s server',
+    /never through anybody/i.test(about.html) && /encrypted/i.test(about.html));
+
+  // Where the boards live, and a way in - a reassurance you can check beats
+  // one you have to take on faith.
+  const aboutFolder = await js(`
+    const c = document.getElementById('overlayCard');
+    const codes = [...c.querySelectorAll('code')].map((e) => e.textContent);
+    return { codes, hasButton: [...c.querySelectorAll('button')].some((b) => b.textContent === 'Open that folder') };
+  `);
+  check('About says where the boards are kept', aboutFolder.codes.some((t) => /boards$/.test(t)),
+    aboutFolder.codes.join(' | '));
+  check('and offers to open that folder', aboutFolder.hasButton);
   check('the window still answers to the new name', document_title.includes('GazBoard'), document_title);
   await shot(win, '21-about');
   await js(`document.getElementById('overlay').classList.remove('show');`);
