@@ -251,6 +251,70 @@ it; it will not greet you with a blank canvas while your boards sit on disk.
 
 ---
 
+# Sharing on your own network
+
+**Settings → Share on this network** is off by default. While off, GazBoard does not open ports, advertise itself, or accept connections.
+
+When enabled, GazBoards on the same Wi-Fi can discover each other and send boards directly. Pair once using a code shown on the receiving computer, then choose **Send this board**.
+
+Transfers are device-to-device, with no server or third-party dependencies, using X25519 and AES-256-GCM through Node's built-in crypto.
+
+GazBoard normally uses:
+
+- **TCP 53318** for transfers
+- **UDP 53319** for discovery
+
+If the TCP port is busy, GazBoard chooses another free port and shows it. UDP discovery cannot change ports, so if 53319 is unavailable, automatic discovery stops but **Add a computer by address** still works.
+
+### Pairing
+
+There are two pairing modes:
+
+- **Just for now** — pairing disappears when GazBoard closes. Useful for classrooms or shared computers.
+- **Remember these computers** — pairing survives restarts. Useful for your own devices.
+
+### Receiving boards
+
+Nothing is accepted automatically. Before saving, GazBoard shows the sender, board name, size, and a small preview.
+
+If the board already exists, you can **Keep both** or **Replace my copy**. Escape declines the transfer.
+
+A separate checkbox controls whether accepted boards open immediately. It is on by default and remembers your choice.
+
+If several boards arrive together, only the last opens. Replacing the board currently open always reloads it to avoid autosaving an older copy over the replacement.
+
+### Firewall checks
+
+If another computer cannot reach GazBoard, the firewall is usually the cause. GazBoard checks firewall rules without administrator rights and reports what it finds, including the exact executable being checked.
+
+**Windows:** GazBoard can repair the rules. It removes blocking rules first, then allows the current program on Private and Domain/Work networks only. This requires one UAC prompt. It will not open the port on a network marked Public.
+
+**macOS and Linux:** GazBoard detects the active firewall and explains the required fix, but does not change it.
+
+It checks `socketfilterfw` on macOS and firewalld or ufw on Linux. Where permission prevents a reliable check, GazBoard says so instead of guessing.
+
+### Transfers
+
+Large boards can take time because image data expands during encoding and encryption.
+
+GazBoard shows real byte-transfer progress. Once uploading finishes, it says which computer it is waiting for instead of showing a fake percentage while the recipient decides.
+
+The progress dialog can be closed without cancelling the transfer.
+
+### Forgetting computers
+
+Choosing **Forget** removes the pairing locally first, then tells the other computer to forget it too.
+
+If that computer is offline, it removes the pairing the next time it tries to connect.
+
+### Scope
+
+GazBoard sharing is a deliberate file-style handoff, not live collaboration. 
+
+None of this is live collaboration, and it is not meant to be. There are no presence cursors and no shared editing session; a board is a thing you hand over, once, on purpose.
+
+---
+
 ## Keyboard shortcuts
 
 | | |
