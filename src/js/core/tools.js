@@ -993,8 +993,38 @@ export class Interaction {
   /** Take the nib off screen without disturbing the board. */
   hideInkPointer() {
     this.inkPointer = null;
+    this.cancelNibHide();
     const el = this.nibEl();
     if (el && !el.hidden) el.hidden = true;
+  }
+
+  /**
+   * Hide the nib layer one frame from now, rather than this instant.
+   *
+   * See the handover note in showInkPointer(): this exists so the system
+   * cursor has a frame to arrive before our own copy goes away. Where there is
+   * no requestAnimationFrame to wait for, hide at once - late is better than
+   * never, and a stray nib is worse than a blink.
+   */
+  hideInkPointerNextFrame() {
+    this.inkPointer = null;
+    const el = this.nibEl();
+    if (!el || el.hidden) return;
+    if (typeof requestAnimationFrame !== 'function') { el.hidden = true; return; }
+    if (this._nibHideRaf) return;                 // one pending hide is enough
+    this._nibHideRaf = requestAnimationFrame(() => {
+      this._nibHideRaf = 0;
+      // A new stroke may have begun inside that frame. It owns the layer now,
+      // and inkPointer is how we can tell.
+      if (!this.inkPointer && !el.hidden) el.hidden = true;
+    });
+  }
+
+  /** Drop a pending deferred hide - the layer is wanted again. */
+  cancelNibHide() {
+    if (!this._nibHideRaf) return;
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(this._nibHideRaf);
+    this._nibHideRaf = 0;
   }
 
   /** The CSS cursor an ink tool should carry, given that choice. */
@@ -1038,13 +1068,32 @@ export class Interaction {
     // asked for an arrow or a crosshair gets it whatever the pen is doing.
     const kind = (chosen === 'nib' && (deviceType === 'mouse' || !drawing)) ? 'css-nib' : chosen;
     if (kind !== 'nib') {
-      this.hideInkPointer();
+      /*
+       * The order of these two lines is the whole fix, and it used to be the
+       * wrong way round.
+       *
+       * Hiding our layer and asking for the system cursor are not the same kind
+       * of act. The cursor appears when Windows gets round to it; the layer
+       * disappears at the next composited frame. Hiding first therefore opened a
+       * window with NO nib on screen at all - one frame on an idle machine,
+       * several when something like a screen recorder is eating the frame
+       * budget. That was the blink at the end of every stroke, and it only ever
+       * showed up under a stylus: a mouse never hands over, because Windows only
+       * takes its pointer away for a pen.
+       *
+       * Cursor first, layer a frame later. For that one frame both nibs are up -
+       * same glyph, same hotspot, one exactly on top of the other, which is to
+       * say invisible. An overlap costs nothing. A gap is the bug.
+       */
       this.setCursor(kind === 'css-nib' ? this.inkCursor(t) : this.inkPointerCursor(t));
+      this.hideInkPointerNextFrame();
       return;
     }
     const el = this.nibEl();
     if (!el) { this.setCursor(this.inkCursor(t)); return; }
 
+    // A hide left pending by the last stroke must not fire into this one.
+    this.cancelNibHide();
     this.setCursor('none');
     this.inkPointer = sp;
 

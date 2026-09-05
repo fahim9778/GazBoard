@@ -2065,6 +2065,52 @@ async function run(win, app) {
   check('but a real mouse move still shows what a click will do',
     afterLift.realMouseStillGrabs, afterLift.real);
 
+  /* ---- the handover at the end of a stroke overlaps, it does not gap ---- */
+  //
+  // The nib is two things that trade places: the system cursor while the pen
+  // hovers, our own layer while it draws. Windows only takes its pointer away
+  // for a pen, which is why a mouse never sees any of this and never flickered.
+  //
+  // The layer must stay up until the system cursor has had a frame to arrive.
+  // Both nibs at once is invisible - same glyph, same hotspot. Neither nib is
+  // the blink, and under a screen recorder that frame is long enough to see.
+  const handover = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const el = document.getElementById('inkNib');
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.setTool('pen'); a.notePenSeen();
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const X = (v) => rect.left + v, Y = (v) => rect.top + v;
+    const mk = (x, y, type, buttons) => ({ pointerId: type === 'mouse' ? 3 : 1, pointerType: type,
+      button: 0, buttons, clientX: x, clientY: y, shiftKey: false, altKey: false, pressure: 0.5 });
+
+    it.onDown(mk(X(300), Y(300), 'pen', 1));
+    it.onMove(mk(X(304), Y(302), 'pen', 1));
+    const layerDrawsTheStroke = !el.hidden;      // ours, while the pen is down
+
+    it.onUp(mk(X(304), Y(302), 'pen', 0));
+    // Same task as the lift: the system cursor is already asked for, and our
+    // copy is deliberately still up. This is the overlap.
+    const cursorBack = (sf.canvas.style.cursor || '').startsWith('url(');
+    const stillOverlapping = !el.hidden;
+
+    // One frame later it has served its purpose and goes.
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const goneAfterAFrame = el.hidden;
+
+    a.store.clear(); it.action = null; it.pointers.clear(); a.penSeenThisSession = false;
+    return { layerDrawsTheStroke, cursorBack, stillOverlapping, goneAfterAFrame };
+  `);
+  check('our own nib carries the stroke while the pen is down',
+    handover.layerDrawsTheStroke);
+  check('the system cursor is handed the nib back the instant the pen lifts',
+    handover.cursorBack);
+  check('and our copy stays up over it for that frame, so there is never a gap',
+    handover.stillOverlapping);
+  check('then goes, once the system cursor has had a frame to arrive',
+    handover.goneAfterAFrame);
+
   /* ---- what a busy board costs while you write on it ---- */
   const busy = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
@@ -4821,11 +4867,17 @@ module.exports.run = async (win, app) => {
     r.keptUp = seen[seen.length - 1] === 400;
     r.cursorStayedOff = sf.canvas.style.cursor === 'none';
 
+    const nibEl2 = document.getElementById('inkNib');
     it.onUp(mk(400, 300, 0));
     it.pointers.clear();
     r.afterLift = it.inkPointer ? Math.round(it.inkPointer.x) : null;
     r.systemCursorBack = String(sf.canvas.style.cursor).startsWith('url(');
-    const nibEl2 = document.getElementById('inkNib');
+    // Our copy is deliberately still up at this instant. The system cursor has
+    // been asked for but Windows has not necessarily drawn it yet, and both
+    // nibs at once is invisible while neither is a visible blink - see the
+    // handover note in showInkPointer().
+    r.overlappedForAFrame = !!nibEl2 && !nibEl2.hidden;
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
     r.layerPutAway = !nibEl2 || nibEl2.hidden;
 
     // leaving the board takes it away rather than stranding it at the edge
@@ -4844,8 +4896,11 @@ module.exports.run = async (win, app) => {
   check('it keeps up with the pen rather than lagging behind it',
     nibDuringStroke.keptUp);
   check('and the system cursor takes it back the moment the pen lifts',
-    nibDuringStroke.systemCursorBack && nibDuringStroke.layerPutAway && nibDuringStroke.afterLift === null,
+    nibDuringStroke.systemCursorBack && nibDuringStroke.afterLift === null,
     `layer at ${nibDuringStroke.afterLift}`);
+  check('with our copy held over it for a frame, so the nib never blinks out',
+    nibDuringStroke.overlappedForAFrame && nibDuringStroke.layerPutAway,
+    `overlap ${nibDuringStroke.overlappedForAFrame}, put away ${nibDuringStroke.layerPutAway}`);
   check('but it goes away when the pointer leaves the board',
     nibDuringStroke.goneOnLeave);
 
@@ -5753,6 +5808,25 @@ module.exports.run = async (win, app) => {
   check('the window still answers to the new name', document_title.includes('GazBoard'), document_title);
   await shot(win, '21-about');
   await js(`document.getElementById('overlay').classList.remove('show');`);
+
+  /* ---- the board never throttles itself because it looks covered up ---- */
+  //
+  // Windows tells Chromium when a window is hidden behind another so it can
+  // stop drawing it and save the battery, and it gets that wrong whenever a
+  // screen recorder puts a see-through sharing bar on top. The board is in
+  // front of the person teaching, the app decides nobody is looking, and the
+  // ink starts lagging the pen. These three settings turn the guess off; the
+  // switches only take effect if they were set before the app came up, which
+  // is why they are checked here on the live app rather than read from source.
+  const throttling = win.webContents.backgroundThrottling;
+  check('drawing is not slowed down when the window looks covered up',
+    throttling === false, `backgroundThrottling=${throttling}`);
+  check('and the window is not backgrounded for looking covered up',
+    app.commandLine.hasSwitch('disable-backgrounding-occluded-windows'));
+  check('and the guess that decides it is covered up is off',
+    String(app.commandLine.getSwitchValue('disable-features') || '')
+      .includes('CalculateNativeWinOcclusion'),
+    app.commandLine.getSwitchValue('disable-features'));
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);
