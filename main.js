@@ -11,6 +11,26 @@ const crypto = require('node:crypto');
 const SRC = path.join(__dirname, 'src');
 const isDev = process.argv.includes('--dev');
 
+/*
+ * Keep drawing at full speed while a screen recorder is running.
+ *
+ * Windows tells Chromium when a window is covered up, so it can stop drawing
+ * one nobody is looking at and save the battery. Sound in principle; wrong in
+ * practice the moment Zoom, Teams or OBS puts a floating sharing bar on screen.
+ * Those bars are see-through windows that sit above everything, and they are
+ * routinely mistaken for something covering the board. The board is right in
+ * front of the person teaching, and the app has quietly throttled itself: ink
+ * lags the pen, and the drawn nib stutters where the system cursor does not.
+ *
+ * These two switches turn that guess off. The cost is a window genuinely buried
+ * behind others still drawing at full rate - a little more battery in a case
+ * that barely happens to a whiteboard, which is open because it is being used.
+ *
+ * Both must be set before the app is ready; Chromium reads them once at startup.
+ */
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 // The one place the app knows about the internet, and it only looks.
 const RELEASES_URL = 'https://github.com/fahim9778/GazBoard/releases';
 // Overridable so the suite can serve a known reply from localhost and test the
@@ -298,7 +318,10 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      spellcheck: true
+      spellcheck: true,
+      // The renderer's half of the switches above: never slow the board's
+      // drawing down because something appears to be covering it.
+      backgroundThrottling: false
     }
   });
   Menu.setApplicationMenu(buildMenu());
