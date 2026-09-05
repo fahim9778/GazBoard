@@ -174,12 +174,17 @@ async function winInspect(exe) {
   if (!info || typeof info.blocked !== 'number') {
     // PowerShell missing, disabled by policy, or the cmdlets absent (they need
     // Windows 8 or Server 2012 upwards). Nothing is broken; we simply cannot see.
-    return { supported: true, state: 'unknown', program: exe, detail: (r.err || '').trim().slice(0, 300) };
+    return { supported: true, tool: 'Windows Firewall', state: 'unknown', program: exe,
+      detail: (r.err || '').trim().slice(0, 300) };
   }
 
   const networks = asArray(info.networks).filter(Boolean);
   const base = {
     supported: true,
+    // Named here rather than left for the UI to infer. A renderer that has to
+    // guess which firewall it is looking at will guess wrong on the platform
+    // nobody tested, and say "Windows Firewall" to somebody on Ubuntu.
+    tool: 'Windows Firewall',
     program: exe,
     networks,
     blocked: info.blocked,

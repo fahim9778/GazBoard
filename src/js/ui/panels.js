@@ -221,23 +221,42 @@ export function createPanels(app) {
     // Whose firewall, in the words the person's own machine uses. The advice is
     // the same everywhere; the noun is not, and calling firewalld "Windows
     // Firewall" would make the whole banner untrustworthy.
-    const named = fw.tool === 'ufw' ? 'ufw'
-      : fw.tool === 'firewalld' ? 'firewalld'
-        : fw.tool === 'macOS firewall' ? 'the macOS firewall'
-          : 'Windows Firewall';
+    /*
+     * The name has to be the one on the person's own machine, and the fallback
+     * has to be generic.
+     *
+     * This used to end `: 'Windows Firewall'`, so every tool it did not have a
+     * case for - nftables, iptables, a machine with no firewall at all - was
+     * announced to its owner as Windows Firewall. On Ubuntu that produced
+     * "GazBoard could not read Windows Firewall on this computer. This machine
+     * uses nftables directly", which contradicts itself inside two sentences
+     * and tells the reader the whole panel was written by someone who never
+     * ran it. Defaulting to the generic word is always merely vague; defaulting
+     * to a product name is wrong.
+     */
+    const named = {
+      'Windows Firewall': 'Windows Firewall',
+      'macOS firewall': 'the macOS firewall',
+      firewalld: 'firewalld',
+      ufw: 'ufw',
+      nftables: 'nftables',
+      iptables: 'iptables'
+    }[fw.tool] || 'the firewall';
     // Only Windows can be repaired from in here, and the answer comes from the
     // main process rather than being inferred from which fields turned up.
     const canFix = fw.repairable === true;
 
-    const showHelp = () => app.showFirewallHelp('failed');
+    const showHelp = () => app.showFirewallHelp('failed', fw);
 
     if (fw.state === 'unknown') {
       return h('div', {},
-        banner('warn', `GazBoard could not read ${named} on this computer, so it cannot say whether other `
-          + 'machines can reach you.'
-          + (fw.detail ? ' ' + fw.detail.charAt(0).toUpperCase() + fw.detail.slice(1) + '.' : '')
-          + ' If nobody can, the commands to open the way are here.',
-        smallBtn('Show the commands', showHelp, true)),
+        banner('warn',
+          (fw.detail
+            ? fw.detail.charAt(0).toUpperCase() + fw.detail.slice(1) + '. '
+            : `GazBoard could not read ${named} on this computer. `)
+          + 'So it cannot say whether other machines can reach you. If nobody can, the commands '
+          + 'to open the way are here.',
+          smallBtn('Show the commands', showHelp, true)),
         programLine(fw),
         h('div', {}, smallBtn('Check again', () => checkFirewall(host))));
     }
@@ -249,8 +268,8 @@ export function createPanels(app) {
       catch (e) { r = { ok: false, reason: 'failed', detail: e.message }; }
       fwInfo = (r && r.after) || fwInfo;
       if (r && r.ok) app.toast('Other computers can reach GazBoard now');
-      else if (r && r.reason === 'cancelled') app.showFirewallHelp('cancelled');
-      else app.showFirewallHelp('failed');
+      else if (r && r.reason === 'cancelled') app.showFirewallHelp('cancelled', fwInfo);
+      else app.showFirewallHelp('failed', fwInfo);
       if (host.isConnected) renderSync(host);
     };
 
@@ -683,9 +702,11 @@ export function createPanels(app) {
             }
             rerender();
           }),
+            // "Windows may ask once" was here, on all three platforms. The
+            // firewall banner below names the real one; this stays neutral.
             'Off unless you switch it on. When it is on, this computer says hello to other GazBoards on the '
             + 'same wifi so you can hand a board straight across - no account, no internet, nothing leaves the '
-            + 'room. Windows may ask once whether to allow it through the firewall; say yes for private '
+            + 'room. Your computer may ask once whether to allow it through the firewall; say yes for private '
             + 'networks or nobody will be able to reach you. Nothing is ever saved without you being asked first.'),
           row('When a board arrives', mkChoice(
             [[true, 'Open it'], [false, 'Just file it']],

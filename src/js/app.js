@@ -2350,9 +2350,27 @@ class App {
    * the useful thing to hand somebody is not an apology - it is the two lines
    * their IT person needs, ready to copy.
    */
-  async showFirewallHelp(reason) {
+  async showFirewallHelp(reason, fw = null) {
     let cmds = [];
     try { cmds = (await window.board.sync.firewall.commands()) || []; } catch { cmds = []; }
+
+    /*
+     * Where to type them, in the words of the machine they will be typed on.
+     *
+     * This dialog said "run them in Windows PowerShell started as
+     * Administrator" on every platform, so a Mac user asking how to open their
+     * firewall was told to open PowerShell. The commands themselves were right
+     * for their machine; only the sentence around them was written by somebody
+     * who had one operating system in mind.
+     */
+    let info = fw;
+    if (!info) { try { info = await window.board.sync.firewall.check(); } catch { info = null; } }
+    const tool = info && info.tool;
+    const onWindows = tool === 'Windows Firewall' || !tool;
+    const onMac = tool === 'macOS firewall';
+    const where = onWindows ? 'Windows PowerShell started as Administrator'
+      : onMac ? 'Terminal - it will ask for your password'
+        : 'a terminal - it will ask for your password';
 
     const overlay = document.getElementById('overlay');
     const card = document.getElementById('overlayCard');
@@ -2362,24 +2380,27 @@ class App {
     card.appendChild(h('h3', {}, 'Letting GazBoard through the firewall by hand'));
     card.appendChild(h('p', {}, reason === 'cancelled'
       ? 'Nothing was changed. If you would rather not give GazBoard permission to do this, '
-        + 'these are the two commands that do the same thing - run them in Windows PowerShell '
-        + 'started as Administrator.'
+        + `these are the commands that do the same thing - run them in ${where}.`
       : 'GazBoard could not change the firewall on this computer, which usually means the '
-        + 'machine is managed and will not allow it. These are the two commands that do it - '
-        + 'run them in Windows PowerShell started as Administrator, or pass them to whoever '
-        + 'looks after the machine.'));
+        + 'machine is managed and will not allow it. These are the commands that do it - '
+        + `run them in ${where}, or pass them to whoever looks after the machine.`));
 
     const text = cmds.join('\n\n');
     card.appendChild(h('pre', {
       style: 'font-size:11px;line-height:1.6;white-space:pre-wrap;word-break:break-all;'
         + 'background:var(--bg-2, rgba(127,127,127,.08));border:1px solid var(--stroke);'
         + 'border-radius:6px;padding:10px;max-height:190px;overflow:auto;margin:0 0 4px'
-    }, text || 'This computer does not run Windows Firewall.'));
+    }, text || 'There is no firewall on this computer that GazBoard knows how to open.'));
 
     card.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
-      'They allow this one program to be reached on your own private and work networks, '
-      + 'and nowhere else. If your wifi is marked Public in Windows, change it to Private '
-      + 'first, or these will have no effect.'));
+      onWindows
+        ? 'They allow this one program to be reached on your own private and work networks, '
+          + 'and nowhere else. If your wifi is marked Public in Windows, change it to Private '
+          + 'first, or these will have no effect.'
+        : onMac
+          ? 'They add GazBoard to the list of apps allowed to accept incoming connections, and '
+            + 'unblock it - being on that list is not the same as being allowed.'
+          : 'They open the two ports GazBoard listens on, and nothing else.'));
 
     const row = h('div', { class: 'actions' });
     if (text) {

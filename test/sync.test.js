@@ -497,6 +497,153 @@ async function run() {
       manual.length === 2 && manual.every((c) => c.includes(exe) && c.startsWith('New-NetFirewallRule')));
   });
 
+  /* ---------------- Windows to Mac to Linux ----------------
+   *
+   * The wire has to mean the same thing on all three, and the parts most
+   * likely to differ are the boring ones: text encoding, and paths.
+   *
+   * Every byte is JSON and base64 over TCP, built from Node's own crypto and
+   * http, so the transport itself cannot diverge. What CAN diverge is content.
+   * A Bengali board name, an emoji in a sticky note, a Windows path typed into
+   * a text box - and, worst of all, the `origin` field, which on a Windows
+   * machine holds C:\Users\<real name>\... and has no business travelling to
+   * anybody.
+   */
+
+  await section('a board crossing between operating systems', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      const rec = await t.A.pairWith(t.peerB, showing.code);
+      t.peerB.deviceId = rec.deviceId;
+
+      const awkward = {
+        id: 'b-cross',
+        name: 'পদার্থবিজ্ঞান — Lecture 4 ✏️',
+        schema: 2, pages: [], camera: { x: 0, y: 0, z: 1 },
+        objects: [
+          { id: 'x1', type: 'text', x: 0, y: 0, w: 400, h: 40,
+            text: 'C:\\Users\\Gazzali\\Desktop\\notes.gazboard — “curly” quotes, ২৩৪',
+            fontSize: 20, color: '#201f1e', align: 'left', valign: 'top',
+            rotation: 0, font: 'hand', background: 'none' },
+          { id: 'x2', type: 'note', x: 0, y: 80, w: 200, h: 200, color: '#ffd94a',
+            text: 'ঠিক আছে\\nline two\\ttab', fontSize: 20, rotation: 0, font: 'hand' }
+        ]
+      };
+
+      const result = await t.A.send(t.peerB, awkward);
+      const got = t.arrivals[t.arrivals.length - 1].board;
+      check('a board with Bengali, an emoji and an em dash in its name arrives intact',
+        result.accepted === true && got.name === awkward.name, got.name);
+      check('and every character of its text survives byte for byte',
+        got.objects[0].text === awkward.objects[0].text
+        && got.objects[1].text === awkward.objects[1].text);
+      check('including backslashes, which are a path on one machine and nothing on another',
+        got.objects[0].text.includes('C:\\Users\\Gazzali'), 'backslashes preserved');
+    } finally { await t.stop(); }
+  });
+
+  await section('what a board must never carry to another machine', async () => {
+    /*
+     * `origin` records where a board was opened FROM on this machine - a full
+     * path on Windows, with the person's account name in it. It is stripped
+     * before a board is written to a file, and the same function is what sync
+     * sends, so the same protection applies. Checked at the source, because a
+     * regression here leaks somebody's name and folder layout to a classroom.
+     */
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const exp = fs.readFileSync(path.join(__dirname, '..', 'src/js/export.js'), 'utf8');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'src/js/app.js'), 'utf8');
+
+    check('exportable() strips the path a board was opened from',
+      /const \{ origin, \.\.\.doc2 \} = doc;/.test(exp));
+    check('and sync sends exactly what a saved file would contain, not the live doc',
+      /exportable\(this\.store\.toJSON\(/.test(app),
+      (app.match(/exportable\(this\.store\.toJSON\([^)]*\)[^)]*\)/) || ['MISSING'])[0]);
+
+    // The receiving side writes its own origin, and it must be an identifier
+    // rather than anything resembling a path from the sender.
+    check('the origin written on arrival names the sending device, not a folder',
+      /'sync:' \+ \(\(from && from\.deviceId\) \|\| 'unknown'\) \+ '\/' \+ \(board\.id \|\| 'board'\)/.test(app));
+  });
+
+  /* ---------------- calling the firewall by its own name ----------------
+   *
+   * The banner has to use the word the person's own machine uses. It ended
+   * `: 'Windows Firewall'`, so every tool without an explicit case - nftables,
+   * iptables, a machine with no firewall at all - was announced to its owner as
+   * Windows Firewall. On Ubuntu that read "GazBoard could not read Windows
+   * Firewall on this computer. This machine uses nftables directly", which
+   * contradicts itself inside two sentences and tells the reader nobody ever
+   * ran it there.
+   *
+   * Checked in the source rather than in a browser, because the point is the
+   * fallback: the failure only appears on the platform nobody thought to open.
+   */
+
+  await section('the firewall is called what it is called', async () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const panels = fs.readFileSync(
+      path.join(__dirname, '..', 'src/js/ui/panels.js'), 'utf8');
+    const firewall = fs.readFileSync(
+      path.join(__dirname, '..', 'sync/firewall.js'), 'utf8');
+
+    const map = panels.slice(panels.indexOf('const named = {'), panels.indexOf("}[fw.tool]"));
+    check('the banner has a name for every firewall it can meet',
+      ['Windows Firewall', 'macOS firewall', 'firewalld', 'ufw', 'nftables', 'iptables']
+        .every((t) => map.includes(t)),
+      map ? 'mapping found' : 'no mapping');
+
+    // The fallback is the whole bug. Generic is merely vague; a product name
+    // is wrong, and wrong on the machine of somebody who cannot tell you.
+    const fallback = panels.slice(panels.indexOf("}[fw.tool] ||"), panels.indexOf("}[fw.tool] ||") + 60);
+    check('and falls back to a generic word, never to one platform\'s product',
+      /\|\| 'the firewall'/.test(fallback)
+      && !/\|\| 'Windows Firewall'/.test(fallback) && !/\|\| 'the macOS/.test(fallback),
+      fallback.split('\n')[0]);
+
+    // Windows says its own name rather than being the thing left over.
+    check('Windows names its own firewall instead of being the default',
+      /tool: 'Windows Firewall'/.test(firewall));
+
+    /*
+     * And nothing outside a Windows-only branch may say "Windows" at the
+     * person. The sharing description said "Windows may ask once whether to
+     * allow it through the firewall" to every Mac and Linux user alive.
+     */
+    const shared = panels.slice(panels.indexOf('Off unless you switch it on'),
+      panels.indexOf('Nothing is ever saved without you being asked first'));
+    check('the switch describes itself without naming somebody else\'s operating system',
+      !/Windows/.test(shared), (shared.match(/Windows[^.]*/) || ['clean'])[0]);
+
+    /*
+     * The same trap in the dialog that hands over the commands. It told every
+     * Mac and Linux user to "run them in Windows PowerShell started as
+     * Administrator" - the commands underneath were right for their machine,
+     * only the sentence around them was written with one OS in mind.
+     */
+    const app = fs.readFileSync(path.join(__dirname, '..', 'src/js/app.js'), 'utf8');
+    const help = app.slice(app.indexOf('async showFirewallHelp'),
+      app.indexOf('async showFirewallHelp') + 3200);
+    check('the commands dialog says where to type them, per machine',
+      /Windows PowerShell started as Administrator/.test(help)
+      && /Terminal/.test(help) && /a terminal/.test(help), 'three wordings present');
+    check('and picks between them rather than assuming',
+      /onWindows \?/.test(help) && /onMac \?/.test(help));
+    /*
+     * Named exactly, rather than regex-hunting every string literal. Parsing JS
+     * strings with a regex trips over the apostrophe in "computer's" and starts
+     * reporting fragments, which is a test that fails for its own reasons
+     * instead of the code's - worse than no test.
+     */
+    check('and the old one-OS wording is gone rather than merely joined',
+      !/run them in Windows PowerShell started as Administrator\.'/.test(help)
+      && !/This computer does not run Windows Firewall/.test(app),
+      'no unconditional Windows instruction');
+  });
+
   /* ---------------- a big board, and a person who takes their time ----------------
    *
    * Two things that only appear once a board stops being a scribble.

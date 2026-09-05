@@ -2565,22 +2565,47 @@ async function run(win, app) {
     resumedWithEmpty.board && resumedWithEmpty.board.name);
   await fs.rm(path.join(boardsDir, 'zz-empty.json'), { force: true });
 
+  /*
+   * Waited for rather than slept through.
+   *
+   * Autosave deliberately backs off according to how long the LAST write cost:
+   * `Math.min(4000, Math.max(700, saveCost * 4))`, so on a slow disk, or with
+   * an antivirus watching the boards folder, or simply by this point in a suite
+   * that has made two dozen boards, the pause before writing can be four
+   * seconds. A fixed 900ms sleep here asserted a deadline the app never
+   * promised, and failed on exactly the machines the backoff exists for.
+   *
+   * So: poll until it appears, with a ceiling well past the 4s maximum. Fast
+   * machines still finish in about a second, because it returns the moment the
+   * board is on disk.
+   */
   const litter = await js(`
     const a = window.app;
-    const before = (await window.board.boards.list()).length;
+    const count = async () => (await window.board.boards.list()).length;
+    const before = await count();
     a.newBoard(true);                       // a fresh board nobody has drawn on
-    await new Promise(r => setTimeout(r, 900));
-    const after = (await window.board.boards.list()).length;
+
+    // A generous pause on this one: it is proving something did NOT happen, and
+    // waiting longer only makes that stronger.
+    await new Promise(r => setTimeout(r, 1500));
+    const after = await count();
+
     a.store.add({ id: 'proof', type: 'shape', kind: 'rect', x: 0, y: 0, w: 10, h: 10,
                   rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 });
-    await new Promise(r => setTimeout(r, 900));
-    const afterDrawing = (await window.board.boards.list()).length;
-    return { before, after, afterDrawing };
+    let afterDrawing = after;
+    let waited = 0;
+    while (afterDrawing === after && waited < 12000) {
+      await new Promise(r => setTimeout(r, 200));
+      waited += 200;
+      afterDrawing = await count();
+    }
+    return { before, after, afterDrawing, waited };
   `);
   check('an untouched new board is not written to disk',
     litter.after === litter.before, `${litter.before} -> ${litter.after}`);
-  check('but it is saved the moment something is drawn on it',
-    litter.afterDrawing === litter.before + 1, `${litter.before} -> ${litter.afterDrawing}`);
+  check('but it is saved once something is drawn on it',
+    litter.afterDrawing === litter.before + 1,
+    `${litter.before} -> ${litter.afterDrawing} after ${litter.waited}ms`);
 
   await js(`window.app.newBoard(true); window.app.store.clear();`);
 
