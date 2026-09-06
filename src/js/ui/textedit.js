@@ -2,7 +2,7 @@
 
 import { boundsOf } from '../core/store.js';
 import { fitFontSize, readableText, wrapText, clamp } from '../core/util.js';
-import { faceOf } from '../core/render.js';
+import { faceOf, noteTypeRange } from '../core/render.js';
 
 export class TextEditor {
   constructor(app) {
@@ -91,26 +91,43 @@ export class TextEditor {
     } else box = boundsOf(o);
 
     if (o.type === 'note' && !this.cell) {
-      const grown = this.noteHeight(o, this.el.value);
-      if (grown > o.h) { o.h = grown; box = boundsOf(o); }
+      /*
+       * Grows AND shrinks. It used to only grow, so a note that had swollen to
+       * hold a paragraph stayed that size no matter how much of it you deleted
+       * - you could empty the thing completely and still be looking at a note
+       * four lines tall.
+       *
+       * The floor is the height the note had when this edit began, never
+       * smaller: a note somebody sized by hand keeps the size they gave it.
+       * And the measuring is done against that same fixed height rather than
+       * the live one, because the automatic font size is chosen to fit the
+       * height - measure against a height that is itself changing and the two
+       * chase each other.
+       */
+      const base = this.startH != null ? this.startH : o.h;
+      const want = Math.max(base, this.noteHeight(o, this.el.value, base));
+      if (want !== o.h) { o.h = want; box = boundsOf(o); }
     }
 
     /*
-     * A text box grows as you type, instead of scrolling.
+     * A text box is exactly as tall as its words, as you type them.
      *
-     * A note has always done this. A text box did not: it kept the height it
-     * was created with, so the moment the text ran past one line the box
-     * started scrolling inside itself and the first line went out of sight.
-     * You were typing the third line of something whose first two lines had
-     * vanished, in a box that would silently resize the instant you clicked
-     * away. Nothing on a page behaves like that.
+     * It used to keep the height it was created with, so the moment the text
+     * ran past one line the box scrolled inside itself and the first line went
+     * out of sight. Then I made it grow but not shrink, on the theory that
+     * resizing on every backspace would make the frame flinch. That was wrong
+     * twice over: deleting a paragraph left a tall empty box, and the box then
+     * snapped smaller anyway the instant you clicked away, because that is what
+     * commit() has always done. A jump at the end is worse than movement while
+     * typing, and this way there is no jump at all - what you are looking at
+     * while you type is already the finished size.
      *
-     * It only ever grows here. Shrinking as you delete would make the frame
-     * flinch on every backspace; commit() does the exact fit once at the end.
+     * Nothing here can oscillate: the width is fixed while editing, so the
+     * number of lines depends on the words alone and never on the height.
      */
     if (o.type === 'text' && !this.cell && o.autoSize !== false) {
-      const grown = this.fitBox(o, this.el.value).h;
-      if (grown > o.h) { o.h = grown; box = boundsOf(o); }
+      const want = this.fitBox(o, this.el.value).h;
+      if (want !== o.h) { o.h = want; box = boundsOf(o); }
     }
 
     const pad = o.type === 'note' ? Math.max(10, o.w * 0.08) : o.type === 'shape' ? 10 : 0;
@@ -123,7 +140,10 @@ export class TextEditor {
     const face = faceOf(o.font);
     if (!size) {
       this.measure.font = `16px ${face}`;
-      size = fitFontSize(this.measure, this.el.value || ' ', ww, wh, face, '400', o.type === 'note' ? 46 : 72, 10);
+      // A note's type range comes from its own width, so it is the same on
+      // screen whatever zoom the note was made at - see noteTypeRange().
+      const range = o.type === 'note' ? noteTypeRange(o) : { max: 72, min: 10 };
+      size = fitFontSize(this.measure, this.el.value || ' ', ww, wh, face, '400', range.max, range.min);
     }
     const s = this.el.style;
     s.left = p.x + 'px';
@@ -195,11 +215,13 @@ export class TextEditor {
         Object.assign(patch, this.fitBox(target, value));
       }
       if (target.type === 'note') {
-        // rewind the live growth so update() records the height it had before
-        // this edit, then ask for the height the finished text needs
+        // Rewind the live resizing so update() records the height the note had
+        // before this edit, then ask for the height the finished text needs -
+        // never below where it started.
         if (this.startH != null) target.h = this.startH;
-        const grown = this.noteHeight(target, value);
-        if (grown > target.h) patch.h = grown;
+        const base = target.h;
+        const want = Math.max(base, this.noteHeight(target, value, base));
+        if (want !== target.h) patch.h = want;
       }
       store.update(target.id, patch, 'edit text');
       // an empty brand-new text box is not worth keeping
@@ -244,19 +266,25 @@ export class TextEditor {
    * smaller than the note already is, so a note the user sized by hand keeps
    * the size they gave it.
    */
-  noteHeight(o, value) {
+  noteHeight(o, value, baseH = o.h) {
     const pad = Math.max(10, o.w * 0.08);
     const innerW = Math.max(8, o.w - pad * 2);
     const face = faceOf(o.font);
     const weight = o.bold ? '600' : '400';
     let size = o.fontSize;
     if (!size) {
+      // Against baseH, not the live height. The automatic size is picked to fit
+      // the box, and the box is about to be sized to fit the text: measuring
+      // against a height that is itself moving sets the two chasing each other.
       this.measure.font = `${weight} 16px ${face}`;
-      size = fitFontSize(this.measure, value || ' ', innerW, Math.max(8, o.h - pad * 2), face, weight, 46, 10);
+      const range = noteTypeRange(o);
+      size = fitFontSize(this.measure, value || ' ', innerW, Math.max(8, baseH - pad * 2), face, weight, range.max, range.min);
     }
     this.measure.font = `${weight} ${size}px ${face}`;
     const lines = wrapText(this.measure, value || ' ', innerW);
-    return Math.max(o.h, Math.ceil(lines.length * size * 1.28 + pad * 2));
+    // What the text NEEDS. Whether the note is allowed to become that small is
+    // the caller's business, and the answer is never below the size it started.
+    return Math.ceil(lines.length * size * 1.28 + pad * 2);
   }
 
   cancel() {

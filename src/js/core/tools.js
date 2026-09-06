@@ -1050,10 +1050,14 @@ export class Interaction {
    * no requestAnimationFrame to wait for, hide at once - late is better than
    * never, and a stray nib is worse than a blink.
    */
-  hideInkPointerNextFrame() {
+  hideInkPointerNextFrame(sp = null, t = this.tool) {
     this.inkPointer = null;
     const el = this.nibEl();
     if (!el || el.hidden) return;
+    // Drag it along on the way out. Every hover move between the pen lifting
+    // and this hide actually landing comes through here, so on a slow frame the
+    // copy tracks the pointer rather than marking where the stroke stopped.
+    if (sp) this.placeNib(el, sp, t);
     if (typeof requestAnimationFrame !== 'function') { el.hidden = true; return; }
     if (this._nibHideRaf) return;                 // one pending hide is enough
     this._nibHideRaf = requestAnimationFrame(() => {
@@ -1125,12 +1129,23 @@ export class Interaction {
        * showed up under a stylus: a mouse never hands over, because Windows only
        * takes its pointer away for a pen.
        *
-       * Cursor first, layer a frame later. For that one frame both nibs are up -
-       * same glyph, same hotspot, one exactly on top of the other, which is to
-       * say invisible. An overlap costs nothing. A gap is the bug.
+       * Cursor first, layer a frame later. Both nibs are up for that frame -
+       * same glyph, same hotspot - and the layer is MOVED to the pointer on the
+       * way out, which is the part that makes the overlap invisible instead of
+       * merely brief.
+       *
+       * Leaving it parked where the stroke ended was wrong, and only wrong when
+       * a frame is slow. On an idle machine the hide lands in sixteen
+       * milliseconds and nobody could see the stale copy. Put a screen recorder
+       * on the machine and that frame stretches to a tenth of a second, during
+       * which the hand has moved on and there are visibly TWO nibs: the system
+       * cursor under the pen where it belongs, and ours still sitting back at
+       * the last full stop. It reads as the nib reappearing in the wrong place
+       * after every stroke and then catching up - which is exactly what someone
+       * writing Bengali on a Wacom under Zoom reported, and they were right.
        */
       this.setCursor(kind === 'css-nib' ? this.inkCursor(t) : this.inkPointerCursor(t));
-      this.hideInkPointerNextFrame();
+      this.hideInkPointerNextFrame(sp, t);
       return;
     }
     const el = this.nibEl();
@@ -1141,19 +1156,26 @@ export class Interaction {
     this.setCursor('none');
     this.inkPointer = sp;
 
+    this.placeNib(el, sp, t);
+    if (el.hidden) el.hidden = false;
+  }
+
+  /**
+   * Put the nib layer under a screen point, tinted for the tool.
+   *
+   * The one thing here that has to stay cheap is the transform. On a promoted
+   * layer the compositor handles it: no layout, no paint, and the board is not
+   * touched. Rounded to whole pixels so the glyph never lands half way across
+   * one and blurs.
+   */
+  placeNib(el, sp, t) {
     const s = this.app.settings;
     const hl = t === 'highlighter';
     const url = inkGlyphUrl(hl ? 'highlighter' : 'pen', hl ? s.highlighterColor : s.penColor);
     if (this._nibUrl !== url) { this._nibUrl = url; el.style.backgroundImage = url; }
-
-    // The one line that has to stay cheap. A transform on a promoted layer is
-    // handled by the compositor: no layout, no paint, and the board is not
-    // touched. Rounded to whole pixels so the glyph never lands half way across
-    // one and blurs.
     const hot = inkGlyphHotspot(hl ? 'highlighter' : 'pen');
     el.style.transform = 'translate3d(' + Math.round(sp.x - hot.x) + 'px,'
       + Math.round(sp.y - hot.y) + 'px,0)';
-    if (el.hidden) el.hidden = false;
   }
 
   /** The pen/highlighter cursor, tinted with the colour the tool is loaded with. */

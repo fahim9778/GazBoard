@@ -2727,6 +2727,116 @@ async function run(win, app) {
   check('it grows as you write instead of scrolling the first line out of sight',
     textBox.grewWhileTyping && textBox.notScrolled);
   check('and keeps that size once you stop', textBox.keptTheGrowth);
+
+  /*
+   * And it has to come back down. Growing but not shrinking left a tall empty
+   * box after you deleted a paragraph - and the box snapped smaller anyway the
+   * moment you clicked away, because that is what commit has always done. A
+   * jump at the end is worse than movement while typing.
+   */
+  const shrink = await js(`
+    const a = window.app, te = a.textEditor;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const r = {};
+
+    // ---- a text box ----
+    a.addTextAt({ x: 1200, y: 400 });
+    const box = a.store.objects.filter((o) => o.type === 'text').pop();
+    const oneLine = box.h;
+    a.beginTextEdit(box);
+    te.el.value = 'One two three four five six seven eight nine ten eleven twelve thirteen '
+      + 'fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one';
+    te.place();
+    r.textGrew = box.h > oneLine;
+    const tall = box.h;
+    te.el.value = 'One two';                      // backspace it all away
+    te.place();
+    r.textShrank = box.h < tall;
+    r.textBackToOneLine = Math.abs(box.h - oneLine) < 1.5;
+    te.commit();
+    r.textNoJumpOnCommit = Math.abs(box.h - oneLine) < 1.5;
+
+    // ---- a sticky note ----
+    a.addNoteAt({ x: 1600, y: 400 });
+    const note = a.store.objects.filter((o) => o.type === 'note').pop();
+    const noteStart = note.h;
+    // A note shrinks its TEXT first and only grows when even the smallest type
+    // will not fit, so this has to be genuinely long to make the note itself move.
+    te.el.value = ('A paragraph long enough that even the smallest type will not fit it '
+      + 'inside the square this note started as. ').repeat(30);
+    te.place();
+    r.noteGrew = note.h > noteStart;
+    te.el.value = 'short';
+    te.place();
+    r.noteShrank = note.h === noteStart;          // back to where it began
+    te.el.value = '';
+    te.place();
+    r.noteNeverSmallerThanItWas = note.h === noteStart;
+    te.cancel();
+
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setTool('select');
+    return r;
+  `);
+  check('a text box comes back down when you delete the text again',
+    shrink.textGrew && shrink.textShrank && shrink.textBackToOneLine);
+  check('and does not jump to a different size when you click away',
+    shrink.textNoJumpOnCommit);
+  check('a sticky note shrinks back too, but never below the size it started at',
+    shrink.noteGrew && shrink.noteShrank && shrink.noteNeverSmallerThanItWas,
+    `grew ${shrink.noteGrew}, shrank ${shrink.noteShrank}, floor ${shrink.noteNeverSmallerThanItWas}`);
+
+  /*
+   * A note made while the board is zoomed out has to look like a note made at
+   * 100%, type included.
+   *
+   * Its SIZE always did: the size is chosen in screen pixels and converted to
+   * board units, so at 50% it is twice as many units across and comes out the
+   * same on screen. The type inside it was capped at a flat 46 board units,
+   * which is not a screen measure at all - so the same note with the same words
+   * carried type that changed size with whatever zoom it happened to be made at.
+   */
+  const noteType = await js(`
+    const a = window.app, sf = a.surface;
+    const { noteTypeRange, faceOf } = await import('app://board/js/core/render.js');
+    const { fitFontSize } = await import('app://board/js/core/util.js');
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const probe = document.createElement('canvas').getContext('2d');
+    const made = [];
+    // 0.05 is the furthest the board zooms out and 8 the furthest in.
+    for (const z of [0.05, 0.1, 0.25, 0.5, 1, 1.1, 2, 8]) {
+      sf.cam.z = z;
+      a.addNoteAt({ x: 30000 + made.length * 9000, y: 30000 });
+      const n = a.store.objects.filter((o) => o.type === 'note').pop();
+      a.textEditor.el.value = 'Sticky note';
+      a.textEditor.commit();
+      // Exactly what the renderer will choose for it, put back into screen
+      // pixels - which is the only place a person can judge type size.
+      const pad = Math.max(10, n.w * 0.08);
+      const range = noteTypeRange(n);
+      const size = fitFontSize(probe, n.text, n.w - pad * 2, n.h - pad * 2,
+        faceOf(n.font), '400', range.max, range.min);
+      made.push({ z, onScreen: Math.round(size * z * 10) / 10, wide: Math.round(n.w * z) });
+    }
+    sf.cam.z = 1;
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setTool('select');
+    const at1 = made.find((m) => m.z === 1);
+    return {
+      // Within a tenth. Font sizes are whole board units, so at the extremes of
+      // zoom one unit is worth several screen pixels and the answer can only
+      // land on a nearby step - 6 units at 8x is 48 screen pixels, not 46.
+      sameType: made.every((m) => Math.abs(m.onScreen - at1.onScreen) <= at1.onScreen * 0.1),
+      sameSize: made.every((m) => Math.abs(m.wide - at1.wide) <= 2),
+      at100: at1.onScreen,
+      seen: made.map((m) => m.z + 'x:' + m.onScreen).join('  ')
+    };
+  `);
+  check('a sticky note carries the same size type whatever the board zoom was',
+    noteType.sameType, noteType.seen);
+  check('and is still the same size on screen too', noteType.sameSize);
+  check('with a note made at 100% left exactly as it was',
+    noteType.at100 >= 30, `${noteType.at100}px on screen`);
   check('coming back to edit it later grows it the same way',
     textBox.reopened && textBox.grewWhileEditing && textBox.notScrolledOnEdit);
   check('and one undo puts back the size it had before that edit',

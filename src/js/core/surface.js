@@ -55,6 +55,13 @@ export class Surface {
     };
     try { arm(); } catch { /* older engines: the per-frame check still covers it */ }
   }
+  /**
+   * The object whose text is being typed into right now, as { id, cell }.
+   * Set by the text editor. Its text is left off the canvas while the textarea
+   * is showing the same words in the same place - see drawObject().
+   */
+  editing = null;
+
   invalidate() { this.dirty = true; }
 
   /**
@@ -166,7 +173,7 @@ export class Surface {
     }
 
     if (!pages.length) {
-      for (const o of visible) drawObject(ctx, o, onload);
+      for (const o of visible) drawObject(ctx, o, onload, this.editing);
       return;
     }
 
@@ -182,7 +189,7 @@ export class Surface {
       const i = pageIndexForBoxIn(rects, boundsOf(o));
       if (i >= 0) buckets[i].push(o); else loose.push(o);
     }
-    for (const o of loose) drawObject(ctx, o, onload);
+    for (const o of loose) drawObject(ctx, o, onload, this.editing);
     for (let i = 0; i < rects.length; i++) {
       if (!buckets[i].length) continue;
       const r = rects[i];
@@ -190,7 +197,7 @@ export class Surface {
       ctx.beginPath();
       ctx.rect(r.x, r.y, r.w, r.h);
       ctx.clip();
-      for (const o of buckets[i]) drawObject(ctx, o, onload);
+      for (const o of buckets[i]) drawObject(ctx, o, onload, this.editing);
       ctx.restore();
     }
   }

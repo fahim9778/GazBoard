@@ -288,7 +288,7 @@ function arrowHead(ctx, from, to, size, color) {
   ctx.restore();
 }
 
-export function drawShape(ctx, o) {
+export function drawShape(ctx, o, hideText = false) {
   const { x, y, w, h } = o;
   ctx.save();
   if (o.fill && o.fill !== 'none') {
@@ -311,7 +311,7 @@ export function drawShape(ctx, o) {
       if (o.kind === 'doubleArrow') arrowHead(ctx, { x: x + w, y: y + h }, { x, y }, size, o.stroke);
     }
   }
-  if (o.text) {
+  if (o.text && !hideText) {
     const pad = 10;
     drawTextBlock(ctx, o.text, x + pad, y + pad, w - pad * 2, h - pad * 2, {
       color: o.textColor || '#201f1e', size: o.fontSize || 0, align: 'center', valign: 'middle',
@@ -330,7 +330,7 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
   const weight = opt.weight || '400';
   const italic = opt.italic ? 'italic ' : '';
   let size = opt.size;
-  if (!size) size = fitFontSize(ctx, text, w, h, family, weight, opt.maxSize || 72, 10);
+  if (!size) size = fitFontSize(ctx, text, w, h, family, weight, opt.maxSize || 72, opt.minSize || 10);
   ctx.save();
   ctx.font = `${italic}${weight} ${size}px ${family}`;
   ctx.fillStyle = opt.color || '#201f1e';
@@ -361,7 +361,27 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
 /* =================================================================== *
  *  Notes / text / images / tables
  * =================================================================== */
-export function drawNote(ctx, o) {
+/*
+ * How big a note is allowed to set its own type.
+ *
+ * A note's SIZE is chosen in screen pixels and converted to board units, so a
+ * new note looks the same whatever the board is zoomed to - at 50% it is twice
+ * as many board units across, and comes out the same size on screen. The type
+ * inside it was capped at a flat 46 board units, which is not a screen measure
+ * at all: at 50% that cap is 23 screen pixels inside a note that still looks
+ * 200 wide, and at 200% it is 92. Same note, same words, type that changed size
+ * with the zoom the note happened to be made at.
+ *
+ * Tying the cap to the note's own width fixes that, because the width is where
+ * the zoom already went. The ratios are the old numbers at the old default
+ * size, so a note made at 100% is unchanged to the pixel.
+ */
+export function noteTypeRange(o) {
+  const w = Math.max(40, o.w || 200);
+  return { max: Math.max(12, w * (46 / 200)), min: Math.max(6, w * (10 / 200)) };
+}
+
+export function drawNote(ctx, o, hideText = false) {
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.22)';
   ctx.shadowBlur = 10;
@@ -382,9 +402,10 @@ export function drawNote(ctx, o) {
   ctx.fill();
 
   const pad = Math.max(10, o.w * 0.08);
-  drawTextBlock(ctx, o.text, o.x + pad, o.y + pad, o.w - pad * 2, o.h - pad * 2, {
+  const type = noteTypeRange(o);
+  drawTextBlock(ctx, hideText ? '' : o.text, o.x + pad, o.y + pad, o.w - pad * 2, o.h - pad * 2, {
     color: o.textColor || readableText(o.color || '#ffd94a'),
-    size: o.fontSize || 0, maxSize: 46,
+    size: o.fontSize || 0, maxSize: type.max, minSize: type.min,
     align: o.align || 'center', valign: 'middle',
     family: faceOf(o.font),
     weight: o.bold ? '600' : '400', italic: o.italic, underline: o.underline
@@ -392,7 +413,7 @@ export function drawNote(ctx, o) {
   ctx.restore();
 }
 
-export function drawText(ctx, o) {
+export function drawText(ctx, o, hideText = false) {
   if (o.background && o.background !== 'none') {
     ctx.save();
     ctx.fillStyle = o.background;
@@ -401,7 +422,7 @@ export function drawText(ctx, o) {
     ctx.fill();
     ctx.restore();
   }
-  drawTextBlock(ctx, o.text, o.x, o.y, o.w, o.h, {
+  drawTextBlock(ctx, hideText ? '' : o.text, o.x, o.y, o.w, o.h, {
     color: o.color || '#201f1e', size: o.fontSize || 24,
     align: o.align || 'left', valign: o.valign || 'top',
     family: faceOf(o.font),
@@ -459,7 +480,7 @@ export function drawImage(ctx, o, onload) {
   ctx.restore();
 }
 
-export function drawTable(ctx, o) {
+export function drawTable(ctx, o, hideCell = null) {
   const cols = o.cols || 3, rows = o.rows || 3;
   const cw = o.w / cols, ch = o.h / rows;
   ctx.save();
@@ -477,8 +498,9 @@ export function drawTable(ctx, o) {
   ctx.stroke();
   const cells = o.cells || {};
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const t = cells[r + ',' + c];
-    if (!t) continue;
+    const key = r + ',' + c;
+    const t = cells[key];
+    if (!t || key === hideCell) continue;
     drawTextBlock(ctx, t, o.x + c * cw + 6, o.y + r * ch + 6, cw - 12, ch - 12, {
       color: o.textColor || '#201f1e', size: o.fontSize || 0, maxSize: 26,
       align: 'center', valign: 'middle', family: FONT, weight: o.headerRow && r === 0 ? '600' : '400'
@@ -490,8 +512,20 @@ export function drawTable(ctx, o) {
 /* =================================================================== *
  *  Dispatch
  * =================================================================== */
-export function drawObject(ctx, o, onload) {
+/**
+ * @param {object|null} editing  the object whose text is currently being typed
+ *   into, as { id, cell }. Its text is left OFF the canvas, because a textarea
+ *   is showing the same words in the same place at the same size - and two
+ *   copies a pixel or two apart read as a smeared double image. This used to be
+ *   hidden by accident: the editor was an opaque white panel, so the canvas
+ *   copy underneath was simply covered up. Making the panel see-through, which
+ *   is what a text box should be, uncovered it.
+ */
+export function drawObject(ctx, o, onload, editing = null) {
   if (o.hidden) return;
+  const mine = !!editing && editing.id === o.id;
+  const hideText = mine && !editing.cell;
+  const hideCell = mine ? (editing.cell || null) : null;
   ctx.save();
   ctx.globalAlpha *= o.alpha ?? 1;
   if (o.rotation) {
@@ -502,11 +536,11 @@ export function drawObject(ctx, o, onload) {
   }
   switch (o.type) {
     case 'stroke': drawStroke(ctx, o); break;
-    case 'shape': drawShape(ctx, o); break;
-    case 'note': drawNote(ctx, o); break;
-    case 'text': drawText(ctx, o); break;
+    case 'shape': drawShape(ctx, o, hideText); break;
+    case 'note': drawNote(ctx, o, hideText); break;
+    case 'text': drawText(ctx, o, hideText); break;
     case 'image': drawImage(ctx, o, onload); break;
-    case 'table': drawTable(ctx, o); break;
+    case 'table': drawTable(ctx, o, hideCell); break;
   }
   ctx.restore();
 }
