@@ -81,6 +81,19 @@ export class Interaction {
     c.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      /*
+       * A right-click idea, on a device with no right button.
+       *
+       * Android raises contextmenu after about half a second of holding - the
+       * same half second that now means "pick this up". Both fired, so every
+       * attempt to move a note ended with the menu covering the note. Two
+       * gestures, one press, and the wrong one won.
+       *
+       * A finger gets the pick-up; a mouse or a pen keeps the menu. Nothing is
+       * out of reach either way: the bar that floats above a selection has the
+       * same actions, and on a touch device it carries a "..." for the rest.
+       */
+      if (this._lastDownType === 'touch') return;
       // A right-DRAG panned the canvas, so it is not a right-CLICK: swallow the
       // menu this once. A plain right-click never sets this and is unaffected.
       if (this._eatNextMenu) { this._eatNextMenu = false; return; }
@@ -140,6 +153,7 @@ export class Interaction {
       return;
     }
     try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* synthetic or already-released pointer */ }
+    this._lastDownType = e.pointerType;
     if (e.pointerType === 'pen') this._penAt = performance.now();
     // A button went down under a mouse, so the mouse is unambiguously in
     // somebody's hand. Stop watching for a ghost that cannot now arrive.

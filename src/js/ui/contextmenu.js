@@ -141,6 +141,18 @@ export function updateSelectionBar(app) {
   bar.appendChild(mk(sel.every((o) => o.locked) ? 'Unlock' : 'Lock', sel.every((o) => o.locked) ? 'unlock' : 'lock', () => app.command('edit.lock')));
   bar.appendChild(mk('Delete (Del)', 'trash', () => app.command('edit.delete')));
 
+  /*
+   * On a touch device the long press means "pick this up", so the menu it used
+   * to open has to arrive some other way. A visible button beats a hidden
+   * gesture anyway - nobody has ever discovered a long press by looking.
+   */
+  if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+    bar.appendChild(mk('More actions', 'more', () => {
+      const r = bar.getBoundingClientRect();
+      showContextMenu(app, { clientX: r.left + r.width - 12, clientY: r.bottom + 4 });
+    }));
+  }
+
   placeBar(bar, box);
 }
 

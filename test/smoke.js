@@ -2592,6 +2592,48 @@ async function run(win, app) {
   check('and a stylus held still is someone about to write, not to move',
     held.penNeverPicksUp);
 
+  /*
+   * Android raises a contextmenu event after about half a second of holding -
+   * the same half second that now means "pick this up". Both fired, so every
+   * attempt to move a note ended with the menu sitting on top of the note.
+   * A finger gets the pick-up; a mouse or a pen keeps the menu.
+   */
+  const menus = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.store.add({ id: 'menu-note', type: 'note', x: 9000, y: 9000, w: 200, h: 200,
+      color: '#ffd94a', text: 'menu', rotation: 0, align: 'center', font: 'ui' });
+    a.setSelection(['menu-note']);
+    const rect = sf.canvas.getBoundingClientRect();
+    const p = sf.cam.toScreen(9100, 9100);
+    const menuUp = () => {
+      const m = document.querySelector('.pop, #contextMenu, .menu');
+      return !!m && m.isConnected;
+    };
+    const fire = (type) => {
+      it._lastDownType = type;
+      sf.canvas.dispatchEvent(new MouseEvent('contextmenu',
+        { bubbles: true, cancelable: true, clientX: rect.left + p.x, clientY: rect.top + p.y }));
+    };
+    a.hideMenus();
+    fire('touch');
+    await new Promise((r) => setTimeout(r, 80));
+    const afterFinger = menuUp();
+    a.hideMenus();
+    fire('mouse');
+    await new Promise((r) => setTimeout(r, 80));
+    const afterMouse = menuUp();
+    a.hideMenus();
+
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setSelection([]);
+    return { afterFinger, afterMouse };
+  `);
+  check('a finger holding still does not also raise the right-click menu',
+    menus.afterFinger === false);
+  check('while a mouse still gets it, because that is what a right-click is for',
+    menus.afterMouse === true);
+
   /* ---- ruler ---- */
   await js(`window.app.command('ruler'); window.app.ruler.angle = 0.35;`);
   check('ruler toggles', await js(`return window.app.ruler.visible;`));
