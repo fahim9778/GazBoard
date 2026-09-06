@@ -6,6 +6,31 @@ import { TEMPLATES, templateThumb } from '../templates.js';
 import { PAPER, paperForPage } from './pdfdialog.js';
 import { BOARD_COLORS, PATTERNS } from './palettes.js';
 
+/**
+ * How a paired computer that is NOT currently visible should be shown.
+ *
+ * It gets its last known address on the row, because that is useful, and it
+ * does NOT get a Send button, because it is not there. A blue "Send this board"
+ * under a heading that says the machine is not showing up is a promise the app
+ * cannot keep - and with GazBoard closed on the other end it can only ever end
+ * in a failure the person did not need to be walked into.
+ *
+ * The address earns its keep another way: renderSync quietly knocks on it, and
+ * a computer that answers moves up into the live list by itself, with an
+ * ordinary Send button, within a few seconds. So a machine that really is
+ * reachable but never announces itself still becomes usable - which is the
+ * whole point - without anybody being offered a button to nowhere.
+ */
+export function awayRow(rec) {
+  return {
+    ...rec,
+    paired: true,
+    offline: true,
+    address: rec.lastAddress || null,
+    lastKnown: !!rec.lastAddress
+  };
+}
+
 export function createPanels(app) {
   const panel = document.getElementById('panel');
   const title = document.getElementById('panelTitle');
@@ -539,25 +564,10 @@ export function createPanels(app) {
 
     if (away.length) {
       host.appendChild(h('h5', { style: 'margin:16px 0 8px' }, 'Paired, but not showing up right now'));
-      for (const r of away) {
-        /*
-         * "Not switched on right now" is a guess, and on some networks a wrong
-         * one. Announcements do not have to travel both ways - a firewall on
-         * one machine, or a wifi that keeps its clients apart, leaves this
-         * computer seeing nothing while the other sees it perfectly well.
-         *
-         * So a computer that has actually reached us before keeps its address,
-         * and keeps a Send button with it. Pressing it either works or says
-         * plainly what went wrong, which beats no button and no explanation.
-         */
-        host.appendChild(deviceRow({
-          ...r, paired: true,
-          offline: !r.lastAddress,
-          address: r.lastAddress || null,
-          port: r.lastPort || null,
-          lastKnown: !!r.lastAddress
-        }, host));
-      }
+      for (const r of away) host.appendChild(deviceRow(awayRow(r), host));
+      // ...and see whether any of them is actually there. One that answers
+      // appears in the live list above on the next redraw.
+      knockOnAway(away, host);
     }
 
     host.appendChild(h('button', {
@@ -590,6 +600,34 @@ export function createPanels(app) {
         }
       }, `End this session (forget ${temporary.length} temporary pairing${temporary.length === 1 ? '' : 's'})`));
       host.appendChild(dim('Closing GazBoard does this by itself.'));
+    }
+  }
+
+  /*
+   * Announcements do not have to travel both ways. A firewall on one machine,
+   * a wifi that keeps its clients apart, two subnets that carry no broadcasts
+   * between them - any of these leaves this computer seeing nothing while the
+   * other sees it perfectly well, and the one that sees nothing can neither
+   * find nor send to a machine that is sitting right there.
+   *
+   * So for any paired computer we have an address for, try the address. It is
+   * one small request that either answers or does not; answering puts it in
+   * the visible list, where it behaves like any other computer on the network.
+   * Throttled per device, because this block redraws on every heartbeat and
+   * nobody needs their switched-off desktop knocked on twice a second.
+   */
+  const knocked = new Map();
+  const KNOCK_EVERY_MS = 15000;
+
+  function knockOnAway(list, host) {
+    const now = Date.now();
+    for (const rec of list) {
+      if (!rec.lastAddress) continue;
+      if (now - (knocked.get(rec.deviceId) || 0) < KNOCK_EVERY_MS) continue;
+      knocked.set(rec.deviceId, now);
+      Promise.resolve(window.board.sync.addByAddress(rec.lastAddress))
+        .then((r) => { if (r && r.ok && host.isConnected) renderSync(host); })
+        .catch(() => { /* not there; the row stays where it is */ });
     }
   }
 
