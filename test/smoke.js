@@ -1113,7 +1113,9 @@ async function run(win, app) {
     a.settings.inkPointer = 'nib';
 
     a.setTool('select');
-    it._penAt = 0;        // the probes above were pen hovers; clear the pen-ghost guard
+    // The probes above were pen hovers, so the pen-ghost guard is armed at the
+    // last one's position. Clearing it is what a person moving the mouse does.
+    it._penSp = null;
     const selectOverInk = hoverAt(250, 300, 'mouse');  // picking tool: outline is useful
 
     a.penSeenThisSession = false; a.store.clear(); sf.hoverId = null; it.inkPointer = null;
@@ -2046,22 +2048,35 @@ async function run(win, app) {
     it.onMove(mk(X(302), Y(301), 'mouse', 0));
     const afterGhost = sf.canvas.style.cursor || '';
 
-    // a real mouse move, later, must still say what a click will do
-    it._penAt = 0;
+    // The same ghost, arriving a minute late - which is what a busy machine
+    // does to it. Nothing about the message has changed, so nothing about the
+    // answer should either. This is the case the old clock got wrong.
+    it._penAt = performance.now() - 60000;
+    it.onMove(mk(X(302), Y(301), 'mouse', 0));
+    const afterLateGhost = sf.canvas.style.cursor || '';
+
+    // A real mouse move must still say what a click will do - and it is
+    // recognised by being somewhere else, not by any clock having run out.
     it.onMove(mk(X(500), Y(400), 'mouse', 0));
     const afterRealMouse = sf.canvas.style.cursor || '';
 
     a.store.clear(); it.action = null; it.pointers.clear();
     a.settings.inkWithMouse = wasInk; a.penSeenThisSession = false;
     return { nibIsPen: nib.startsWith('url(') && layerGone, ghostKeptNib: afterGhost === nib,
+             lateGhostKeptNib: afterLateGhost === nib,
              realMouseStillGrabs: afterRealMouse === 'grab',
-             ghost: afterGhost.slice(0, 20), real: afterRealMouse };
+             ghost: afterGhost.slice(0, 20), late: afterLateGhost.slice(0, 20), real: afterRealMouse };
   `);
   check('the pen nib survives the pen lifting off', afterLift.nibIsPen);
   check('and the system cursor is what carries it once the stroke is over',
     afterLift.ghost.startsWith('url('), `cursor "${afterLift.ghost}"`);
   check('the cursor does not flash to a hand when the pen leaves the screen',
     afterLift.ghostKeptNib, `became "${afterLift.ghost}"`);
+  // The bug this replaced: the ghost used to be recognised partly by arriving
+  // quickly, so a machine busy with a screen recorder delivered it late, it was
+  // believed, and a hand blinked where the pen had been between every two words.
+  check('and not even when that message arrives a minute late on a busy machine',
+    afterLift.lateGhostKeptNib, `became "${afterLift.late}"`);
   check('but a real mouse move still shows what a click will do',
     afterLift.realMouseStillGrabs, afterLift.real);
 
@@ -4993,7 +5008,7 @@ module.exports.run = async (win, app) => {
     r.mouseCursor = String(sf.canvas.style.cursor).startsWith('url(') ? 'css-nib' : sf.canvas.style.cursor;
     r.mouseDrewNoNib = it.inkPointer === null;
 
-    it._penAt = 0;
+    it._penSp = null;
     it.onMove(mk(250, 300, 'pen', 0));
     r.penHoverCursor = String(sf.canvas.style.cursor).startsWith('url(') ? 'css-nib' : sf.canvas.style.cursor;
     r.penHoverUsedNoLayer = it.inkPointer === null;

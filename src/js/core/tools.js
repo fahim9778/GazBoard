@@ -11,6 +11,13 @@ import { inkCursor, inkGlyphUrl, inkGlyphHotspot } from './cursors.js';
 import { pageRects, pageIndexAt, pageIndexForBox, nearestPageIndex, offsetIntoRect, inRect } from './pages.js';
 
 const TAP_SLOP = 4;
+/*
+ * How close to the nib's last position a mouse report has to land before it is
+ * taken for Windows re-asserting the pointer rather than a person moving a
+ * mouse. Small on purpose: a mouse anybody has actually touched travels
+ * further than this between two reports.
+ */
+const GHOST_SLOP = 4;
 const HANDLE_GRAB = 12;   // forgiving grab radius around a handle's 9px dot
 
 /** Gestures that should keep going while the canvas scrolls beneath them. */
@@ -118,6 +125,9 @@ export class Interaction {
     }
     try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* synthetic or already-released pointer */ }
     if (e.pointerType === 'pen') this._penAt = performance.now();
+    // A button went down under a mouse, so the mouse is unambiguously in
+    // somebody's hand. Stop watching for a ghost that cannot now arrive.
+    else if (e.pointerType === 'mouse') this._penSp = null;
     this.app.hideMenus();
     // A pointerup that never arrives - a pen lifted as the window loses focus,
     // a cancel routed elsewhere - used to leave its id in the map for good.
@@ -287,14 +297,26 @@ export class Interaction {
        * mouse. Answering it repainted the cursor, so every full stop and every
        * lifted stroke ended in a hand flashing where the nib had been.
        *
-       * The ghost is recognisable by WHERE it lands: on the nib's own last
-       * position, moments after it. A mouse someone has actually picked up is
-       * somewhere else, and keeps sending moves besides - so a hand is still
-       * shown the instant the mouse is really used.
+       * This used to be recognised by WHERE it landed AND WHEN: within four
+       * pixels of the nib's last position, and within 800 milliseconds of it.
+       * The clock was the mistake. It measured how quickly the message reached
+       * us, which is not a property of the message at all - it is a property of
+       * how busy the machine happens to be. Put a screen recorder on the same
+       * laptop and the queue lengthens; the ghost turns up a second and a half
+       * late, sails past the deadline, and is believed. A hand then blinks
+       * where the pen was, between every two words, in front of a class.
+       *
+       * Position alone settles it, and settles it whatever the machine is
+       * doing. The ghost lands exactly where the nib was and then sits there -
+       * it is a report of where the mouse still is, not of it moving. A mouse
+       * a person has picked up goes somewhere. So: ignore moves that land on
+       * the nib's own spot, and the first one that does not is real - take it,
+       * and stop watching, because from then on the mouse is genuinely in use.
        */
-      if (e.pointerType === 'mouse' && !e.buttons && this._penSp
-          && performance.now() - this._penAt < 800
-          && Math.hypot(sp.x - this._penSp.x, sp.y - this._penSp.y) < 4) return;
+      if (e.pointerType === 'mouse' && !e.buttons && this._penSp) {
+        if (Math.hypot(sp.x - this._penSp.x, sp.y - this._penSp.y) < GHOST_SLOP) return;
+        this._penSp = null;
+      }
       this.updateHover(sp, wp, e.pointerType);
       return;
     }
