@@ -2500,6 +2500,19 @@ async function run(win, app) {
     it.onUp(mk(6200, 6200, 0));
     r.bareBoardStillDots = strokes() === inkBefore + 3;
 
+    // ...but with something selected, that same tap puts the floating bar away
+    // instead of leaving another dot. That bar sits over the board, and after a
+    // press-and-hold drag the ink tool is still chosen, so the only way anyone
+    // has to dismiss it is a tap on empty space.
+    a.setTool('pen'); a.setSelection(['tap-img']); it.action = null; it.pointers.clear();
+    const barOn = document.getElementById('ctxbar').classList.contains('show');
+    it.onDown(mk(6400, 6400, 1));
+    it.onUp(mk(6400, 6400, 0));
+    r.barWasShowing = barOn;
+    r.dismissNoInk = strokes() === inkBefore + 3;
+    r.dismissCleared = a.selected.length === 0;
+    r.barPutAway = !document.getElementById('ctxbar').classList.contains('show');
+
     a.store.doc.pages = pagesWere;
     a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
     sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
@@ -2515,6 +2528,9 @@ async function run(win, app) {
   check('a stylus tapping the same note still marks it - this is a rule about fingers',
     tapped.penStillMarks);
   check('and a finger tap on bare board is still a dot', tapped.bareBoardStillDots);
+  check('the floating bar is showing while something is selected', tapped.barWasShowing);
+  check('a tap on empty space puts that bar away instead of leaving a dot',
+    tapped.dismissNoInk && tapped.dismissCleared && tapped.barPutAway);
 
   /*
    * Press and hold to pick something up.

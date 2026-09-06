@@ -855,13 +855,21 @@ export class Interaction {
     for (const q of pts) if (Math.hypot(q.x - p0.x, q.y - p0.y) > slop) return false;
 
     const hit = pick(this.store, p0, 8 / z);
-    if (!hit) return false;                       // tapped bare board: a dot is a dot
 
-    // Throw the mark away before it becomes an object - it never reaches the
-    // board, so there is nothing in the undo history to explain either.
-    this.surface.wet = null;
-    this.action = null;
-    this.actionId = null;
+    // Tapped bare board. With something selected, the floating toolbar is
+    // sitting over the board and the tap means "put that away" - which is what
+    // a tap on empty space means in every other app. Clearing the selection
+    // hides the bar (see updateSelectionBar). With nothing selected there is
+    // nothing to dismiss, so a dot is a dot.
+    if (!hit) {
+      if (!this.surface.selection.size) return false;
+      this.discardTapMark();
+      this.app.setSelection([]);
+      this.surface.invalidate();
+      return true;
+    }
+
+    this.discardTapMark();
 
     if (hit.locked) { this.app.setSelection([hit.id]); this.app.hintLocked(); return true; }
 
@@ -875,6 +883,16 @@ export class Interaction {
     }
     this.surface.invalidate();
     return true;
+  }
+
+  /**
+   * Throw a tap's mark away before it becomes an object, so it never reaches
+   * the board and there is nothing in the undo history to explain either.
+   */
+  discardTapMark() {
+    this.surface.wet = null;
+    this.action = null;
+    this.actionId = null;
   }
 
   finishStroke(a) {
