@@ -75,14 +75,66 @@ function measure(dataUrl) {
   });
 }
 
-/** Free space to the right of everything already on the board. */
+const DROP_GAP = 40;         // breathing room between a new arrival and its neighbours
+const DROP_RINGS = 6;       // how far out to look before giving up on "nearby"
+
+/**
+ * Where a newly inserted picture or page should land.
+ *
+ * The old rule was one line: eighty pixels to the right of everything already
+ * on the board. On a fresh board that is exactly right. On a board that has
+ * been used it is a trap, because "everything" includes the far end - a sticky
+ * note somebody dragged off to the side an hour ago, or the last page of a
+ * ninety-page PDF imported this morning. The new picture then lands beyond ALL
+ * of it, thousands of units from the sentence being written, and since the view
+ * follows what it just inserted, the board appears to bolt sideways and leave
+ * the work behind.
+ *
+ * What a person means by "put it here" is: near what I am looking at, and not
+ * on top of anything. So the search starts at the middle of the current view
+ * and steps outwards a slot at a time until it finds room. Ring by ring, so
+ * whatever it finds is the CLOSEST free space rather than merely the first one
+ * some scan happened to reach - and the ring is left as soon as it yields
+ * anything, because a nearer spot can never appear in a later one.
+ *
+ * Only when the whole neighbourhood is full does it fall back to the old
+ * behaviour, which is the honest answer at that point: there is genuinely no
+ * room near you.
+ */
 export function dropOrigin(app, w, h) {
-  const b = app.store.contentBounds();
   const view = app.surface.cam.viewport(app.surface.width, app.surface.height);
-  if (!b) return { x: view.x + view.w / 2 - w / 2, y: view.y + view.h / 2 - h / 2 };
-  const overlapsView = b.x < view.x + view.w && b.x + b.w > view.x && b.y < view.y + view.h && b.y + b.h > view.y;
-  if (!overlapsView) return { x: view.x + view.w / 2 - w / 2, y: view.y + view.h / 2 - h / 2 };
-  return { x: b.x + b.w + 80, y: b.y };
+  const cx = view.x + view.w / 2, cy = view.y + view.h / 2;
+  const middle = { x: cx - w / 2, y: cy - h / 2 };
+
+  const taken = [];
+  for (const o of app.store.objects) { const b = boundsOf(o); if (b) taken.push(b); }
+  if (!taken.length) return middle;
+
+  const clear = (x, y) => !taken.some((b) =>
+    x < b.x + b.w + DROP_GAP && x + w + DROP_GAP > b.x
+    && y < b.y + b.h + DROP_GAP && y + h + DROP_GAP > b.y);
+
+  if (clear(middle.x, middle.y)) return middle;
+
+  // A slot is the thing's own size: the next place it could sit without
+  // touching where it would have been.
+  const stepX = w + DROP_GAP, stepY = h + DROP_GAP;
+  for (let r = 1; r <= DROP_RINGS; r++) {
+    let best = null, bestD = Infinity;
+    for (let iy = -r; iy <= r; iy++) {
+      for (let ix = -r; ix <= r; ix++) {
+        if (Math.max(Math.abs(ix), Math.abs(iy)) !== r) continue;   // this ring only
+        const x = middle.x + ix * stepX, y = middle.y + iy * stepY;
+        if (!clear(x, y)) continue;
+        const d = Math.hypot(x + w / 2 - cx, y + h / 2 - cy);
+        if (d < bestD) { bestD = d; best = { x, y }; }
+      }
+    }
+    if (best) return best;
+  }
+
+  const b = app.store.contentBounds();
+  return b ? { x: b.x + b.w + DROP_GAP * 2, y: b.y } : middle;
 }
 
 export async function insertImagesFromPaths(app, paths) {

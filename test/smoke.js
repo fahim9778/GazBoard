@@ -2133,6 +2133,59 @@ async function run(win, app) {
   check('then goes, once the system cursor has had a frame to arrive',
     handover.goneAfterAFrame);
 
+  /*
+   * The overlap has to FOLLOW the pointer, not mark where the stroke stopped.
+   *
+   * On an idle machine the hide lands within one frame and a stale copy could
+   * never be seen. Under a screen recorder that frame stretches, the hand has
+   * moved on, and there are two nibs on screen in different places - the system
+   * cursor under the pen and ours back at the last full stop. It reads as the
+   * nib reappearing in the wrong spot after every stroke and then catching up.
+   */
+  const trailing = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const el = document.getElementById('inkNib');
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.setTool('pen'); a.notePenSeen();
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const X = (v) => rect.left + v, Y = (v) => rect.top + v;
+    const mk = (x, y, type, buttons) => ({ pointerId: 1, pointerType: type,
+      button: 0, buttons, clientX: x, clientY: y, shiftKey: false, altKey: false, pressure: 0.5 });
+    // No regex: a backslash inside this template literal is eaten before the
+    // renderer ever sees it, and the pattern arrives unbalanced.
+    const xOf = () => {
+      const tr = el.style.transform || '';
+      const i = tr.indexOf('translate3d(');
+      return i < 0 ? null : Math.round(parseFloat(tr.slice(i + 12)));
+    };
+
+    it.onDown(mk(X(300), Y(300), 'pen', 1));
+    it.onMove(mk(X(320), Y(300), 'pen', 1));
+    it.onUp(mk(X(320), Y(300), 'pen', 0));
+    const parkedAt = xOf();
+
+    // The hand carries on moving while the hide is still pending. Every hover
+    // move in that window has to take the departing copy with it.
+    it.onMove(mk(X(520), Y(360), 'pen', 0));
+    const followedTo = xOf();
+    const stillUp = !el.hidden;
+
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const goneInTheEnd = el.hidden;
+
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    it.action = null; it.pointers.clear(); a.penSeenThisSession = false;
+    return { parkedAt, followedTo, stillUp, goneInTheEnd };
+  `);
+  check('a nib on its way out follows the hand instead of marking where the stroke stopped',
+    trailing.followedTo !== null && trailing.parkedAt !== null
+    && trailing.followedTo - trailing.parkedAt === 200,
+    `moved from ${trailing.parkedAt} to ${trailing.followedTo}`);
+  check('and it is still the overlap while it does that, not a second nib',
+    trailing.stillUp && trailing.goneInTheEnd);
+
   /* ---- what a busy board costs while you write on it ---- */
   const busy = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
@@ -2606,7 +2659,210 @@ async function run(win, app) {
     const r = await insertDocument(window.app, ${JSON.stringify(path.join(FIX, 'sample.pdf'))}, { pages: [1, 2, 3] });
     return { added: window.app.store.count - before, ok: !!r };
   `);
+  /*
+   * The box you type into.
+   *
+   * Two things were wrong with it and both showed up the moment anybody used
+   * it. It was an opaque white panel with a heavy accent border, rounded
+   * corners and a drop shadow - so it hid the shape or the board behind it,
+   * and what you looked at while typing was not what you got when you stopped.
+   * And it kept the height it was created with, so the second line pushed the
+   * first one out of sight and you carried on typing into a box that scrolled.
+   */
+  const textBox = await js(`
+    const a = window.app, te = a.textEditor;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const r = {};
+
+    // ---- writing something new ----
+    a.addTextAt({ x: 400, y: 400 });
+    const box = a.store.objects.filter((o) => o.type === 'text').pop();
+    r.opened = te.active;
+    const startH = box.h;
+
+    const style = () => getComputedStyle(te.el);
+    r.seeThrough = ['transparent', 'rgba(0, 0, 0, 0)'].includes(style().backgroundColor);
+    r.noHeavyBorder = parseFloat(style().borderTopWidth || '0') === 0;
+    r.noShadow = (style().boxShadow || 'none') === 'none';
+    r.framed = (style().outlineStyle || '') === 'dashed';
+
+    // Type enough to need several lines, the way input would.
+    te.el.value = 'One two three four five six seven eight nine ten eleven twelve '
+      + 'thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty '
+      + 'twenty-one twenty-two twenty-three twenty-four twenty-five';
+    te.place();
+    r.grewWhileTyping = box.h > startH;
+    // Nothing has scrolled away: the whole of it is visible in the box.
+    r.notScrolled = te.el.scrollTop === 0 && te.el.scrollHeight <= te.el.clientHeight + 2;
+    te.commit();
+    const afterWriting = box.h;
+    r.keptTheGrowth = afterWriting > startH;
+
+    // ---- coming back to EDIT it later ----
+    a.beginTextEdit(box);
+    r.reopened = te.active;
+    const beforeEdit = box.h;
+    te.el.value = te.el.value + ' and then a good deal more text again, several more lines of it, '
+      + 'so the box has to find room for all of it while it is being typed rather than after.';
+    te.place();
+    r.grewWhileEditing = box.h > beforeEdit;
+    r.notScrolledOnEdit = te.el.scrollTop === 0 && te.el.scrollHeight <= te.el.clientHeight + 2;
+    te.commit();
+
+    // ---- one undo puts back the height it had before that edit ----
+    a.store.undo();
+    r.undoneToBeforeEdit = Math.abs(a.store.doc.objects[box.id].h - beforeEdit) < 1.5;
+    r.undoneH = Math.round(a.store.doc.objects[box.id].h);
+    r.beforeEdit = Math.round(beforeEdit);
+
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setTool('select');
+    return r;
+  `);
+  check('a new text box opens with a see-through, unframed panel like any other text box',
+    textBox.opened && textBox.seeThrough && textBox.noHeavyBorder && textBox.noShadow,
+    `background ${textBox.seeThrough}, border ${textBox.noHeavyBorder}, shadow ${textBox.noShadow}`);
+  check('with a thin dashed frame around it rather than a heavy one through it',
+    textBox.framed);
+  check('it grows as you write instead of scrolling the first line out of sight',
+    textBox.grewWhileTyping && textBox.notScrolled);
+  check('and keeps that size once you stop', textBox.keptTheGrowth);
+  check('coming back to edit it later grows it the same way',
+    textBox.reopened && textBox.grewWhileEditing && textBox.notScrolledOnEdit);
+  check('and one undo puts back the size it had before that edit',
+    textBox.undoneToBeforeEdit, `${textBox.undoneH} vs ${textBox.beforeEdit}`);
+
+  // Re-opening a box with everything highlighted means the next key you press
+  // deletes the lot - fine for replacing, wrong for fixing a word, which is
+  // what re-opening is nearly always for.
+  const caret = await js(`
+    const a = window.app, te = a.textEditor;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.addTextAt({ x: 700, y: 700 });
+    const box = a.store.objects.filter((o) => o.type === 'text').pop();
+    te.el.value = 'existing words';
+    te.commit();
+    a.beginTextEdit(box);
+    await new Promise((r) => setTimeout(r, 60));
+    const r = { start: te.el.selectionStart, end: te.el.selectionEnd, len: te.el.value.length };
+    te.cancel();
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setTool('select');
+    return r;
+  `);
+  check('re-opening a text box gives you a caret at the end, not the whole thing selected',
+    caret.start === caret.len && caret.end === caret.len,
+    `selection ${caret.start}-${caret.end} of ${caret.len}`);
+
+  /*
+   * One copy of the words, not two.
+   *
+   * The canvas and the textarea both draw the same text in the same place. The
+   * old editor was an opaque white panel, so the canvas copy underneath was
+   * covered up by accident. Making the panel see-through - which is what a
+   * text box should be - uncovered it, and every letter appeared twice, a
+   * pixel or two apart, smeared.
+   */
+  const doubled = await js(`
+    const a = window.app, te = a.textEditor, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const r = {};
+    a.addTextAt({ x: 900, y: 900 });
+    const box = a.store.objects.filter((o) => o.type === 'text').pop();
+    te.el.value = 'words that must not appear twice';
+    te.commit();
+
+    a.beginTextEdit(box);
+    r.marked = !!sf.editing && sf.editing.id === box.id;
+    // What the canvas would actually paint for it right now.
+    const { drawObject } = await import('app://board/js/core/render.js');
+    const probe = document.createElement('canvas').getContext('2d');
+    let drewText = 0;
+    const realFill = probe.fillText.bind(probe);
+    probe.fillText = (...args) => { drewText++; return realFill(...args); };
+    drawObject(probe, box, () => {}, sf.editing);
+    r.silentWhileEditing = drewText === 0;
+
+    te.cancel();
+    r.cleared = sf.editing === null;
+    drewText = 0;
+    drawObject(probe, box, () => {}, sf.editing);
+    r.speaksAgainAfter = drewText > 0;
+
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.setTool('select');
+    return r;
+  `);
+  check('the canvas stops drawing the words while you are typing them',
+    doubled.marked && doubled.silentWhileEditing);
+  check('and draws them again the moment you stop',
+    doubled.cleared && doubled.speaksAgainAfter);
+
   check('PDF import adds pages', pdf.added === 3, pdf.added + ' pages');
+
+  /*
+   * Where an insert LANDS.
+   *
+   * The rule used to be "eighty pixels right of everything on the board", and
+   * everything includes the far end - a note dragged off to one side an hour
+   * ago, the last page of a PDF imported this morning. The new picture went
+   * beyond all of it, and because the view follows what it just inserted, the
+   * board bolted sideways and left the sentence being written behind.
+   */
+  const dropped = await js(`
+    const a = window.app, sf = a.surface;
+    const { dropOrigin } = await import('app://board/js/insert.js');
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    const pagesWere = a.store.doc.pages;
+    a.store.doc.pages = [];                       // a plain canvas, not a pad
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const view = sf.cam.viewport(sf.width, sf.height);
+    const inView = (o) => o.x + o.w / 2 > view.x - view.w && o.x + o.w / 2 < view.x + 2 * view.w;
+
+    // 1. an empty board puts it in the middle of what you are looking at.
+    // The suite has been building a board for a while, so this hides the
+    // existing objects for one call rather than destroying them.
+    const orderWas = a.store.doc.order.slice();
+    a.store.doc.order = [];
+    const onEmpty = dropOrigin(a, 400, 300);
+    a.store.doc.order = orderWas;
+    const emptyCentred = Math.abs(onEmpty.x + 200 - (view.x + view.w / 2)) < 1
+      && Math.abs(onEmpty.y + 150 - (view.y + view.h / 2)) < 1;
+
+    // 2. writing in the middle of the view, and one stray note miles away
+    const pts = [];
+    for (let i = 0; i <= 40; i++) pts.push({ x: view.x + view.w / 2 - 200 + i * 10, y: view.y + view.h / 2, p: 0.5 });
+    a.store.add({ id: 'drop-ink', type: 'stroke', tool: 'pen', color: '#111', width: 8, effect: 'none',
+      points: pts, bbox: { x: view.x + view.w / 2 - 200, y: view.y + view.h / 2, w: 400, h: 0 }, rotation: 0 });
+    a.store.add({ id: 'drop-far', type: 'note', x: view.x + 9000, y: view.y + 200,
+      w: 200, h: 200, rotation: 0, text: 'miles away', color: '#ffd', fontSize: 16 });
+
+    const spot = dropOrigin(a, 400, 300);
+    const near = Math.round(Math.hypot(spot.x + 200 - (view.x + view.w / 2),
+                                       spot.y + 150 - (view.y + view.h / 2)));
+    const beyondEverything = spot.x > view.x + 9000;
+
+    // 3. and it must not sit on the writing
+    const hits = (r) => r.x < view.x + view.w / 2 + 200 && r.x + 400 > view.x + view.w / 2 - 200
+      && r.y < view.y + view.h / 2 + 1 && r.y + 300 > view.y + view.h / 2;
+    const onTopOfInk = hits(spot);
+
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    a.store.doc.pages = pagesWere;
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    return { emptyCentred, near, beyondEverything, onTopOfInk, viewW: Math.round(view.w),
+             left: a.store.objects.filter((o) => !had.has(o.id)).length };
+  `);
+  check('an insert onto an empty board lands in the middle of the view',
+    dropped.emptyCentred);
+  check('and with a stray object miles away it still lands beside your work, not past it',
+    !dropped.beyondEverything && dropped.near < dropped.viewW * 2,
+    `${dropped.near} units from the middle of a ${dropped.viewW}-wide view`);
+  check('without landing on top of what you were writing',
+    !dropped.onTopOfInk);
+  check('and the placement test cleans up after itself',
+    dropped.left === 0, `${dropped.left} stray object(s)`);
 
 
   const docx = await js(`
@@ -6061,6 +6317,37 @@ module.exports.run = async (win, app) => {
   `);
   check('and it is switched off again afterwards, exactly as it was found',
     backOff.running === false && backOff.setting === false);
+
+  /*
+   * A computer that is paired but not showing up must not be offered a Send
+   * button, whatever address we remember for it.
+   *
+   * Remembering the address is right - announcements do not have to travel both
+   * ways, and a machine can be perfectly reachable while never appearing in
+   * anybody's list. Offering to send to it on the strength of that was not: with
+   * GazBoard closed at the other end, a blue "Send this board" under a heading
+   * saying the machine is not showing up is a button to nowhere. The address
+   * earns its keep by being knocked on instead, so a machine that really is
+   * there climbs into the live list and gets an ordinary Send button.
+   */
+  const away = await js(`
+    const { awayRow } = await import('app://board/js/ui/panels.js');
+    const withAddress = awayRow({ deviceId: 'd1', name: 'DESKTOP-27V8MQP',
+      remember: true, lastAddress: '192.168.0.243', lastPort: 53318 });
+    const without = awayRow({ deviceId: 'd2', name: 'Old laptop', remember: true });
+    return {
+      offlineWithAddress: withAddress.offline === true,
+      keepsTheAddress: withAddress.address === '192.168.0.243' && withAddress.lastKnown === true,
+      offlineWithout: without.offline === true,
+      noAddress: without.address === null && without.lastKnown === false,
+      stillPaired: withAddress.paired === true && without.paired === true
+    };
+  `);
+  check('a paired computer that is not showing up gets no Send button',
+    away.offlineWithAddress && away.offlineWithout);
+  check('but it keeps the address it was last reached at, to be knocked on',
+    away.keepsTheAddress && away.noAddress);
+  check('and it is still listed as paired either way', away.stillPaired);
 
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
