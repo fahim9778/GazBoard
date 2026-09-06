@@ -18,6 +18,21 @@ const TAP_SLOP = 4;
  * further than this between two reports.
  */
 const GHOST_SLOP = 4;
+/*
+ * Press and hold to pick something up.
+ *
+ * A finger drag has to keep drawing - writing on an imported slide with a
+ * fingertip is most of what a tablet is for, and those slides are objects like
+ * any other, so "drag moves things" would drag the lesson around instead of
+ * annotating it. Holding still for a moment is the one gesture that cannot be
+ * confused with either drawing or panning, which is why every touch platform
+ * uses it for exactly this.
+ *
+ * The slop is wider than a tap's: a finger resting on glass wanders further
+ * than a pen tip does, and punishing that would make the gesture feel broken.
+ */
+const HOLD_MS = 450;
+const HOLD_SLOP = 11;
 const HANDLE_GRAB = 12;   // forgiving grab radius around a handle's 9px dot
 
 /** Gestures that should keep going while the canvas scrolls beneath them. */
@@ -259,6 +274,7 @@ export class Interaction {
     }
     // Whichever pointer began the gesture owns it until it lifts.
     this.actionId = this.action ? e.pointerId : null;
+    this.armHoldToMove(e, sp, wp);
     this.surface.invalidate();
   }
 
@@ -342,6 +358,12 @@ export class Interaction {
     // A palm sliding on the screen therefore dragged the pen's stroke over to
     // the palm - the ink jumped, or looked like it had simply gone missing.
     if (this.actionId != null && e.pointerId !== this.actionId) return;
+
+    // Travelled too far to still be a press-and-hold: this is a stroke.
+    if (this._hold && e.pointerId === this._holdId && this._holdFrom
+        && Math.hypot(sp.x - this._holdFrom.x, sp.y - this._holdFrom.y) > HOLD_SLOP) {
+      this.cancelHold();
+    }
 
     // The drawn nib has to keep up with an ink stroke in flight. This is the
     // case the CSS cursor could never cover: Windows hides the system pointer
@@ -521,6 +543,7 @@ export class Interaction {
         return;
       }
     }
+    this.cancelHold();
     this.pointers.delete(e.pointerId);
     if (this.secondaryPan && e.pointerId === this.secondaryPan.id) { this.secondaryPan = null; return; }
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; return; }
@@ -623,6 +646,43 @@ export class Interaction {
    * Begin dragging the existing selection if `wp` is inside it.
    * Used by the lasso tool so a selection can be moved without switching tools.
    */
+  /**
+   * Start the clock on a press-and-hold, if this could be one.
+   *
+   * Only a finger, only while an ink tool is drawing, and only over something
+   * that can actually be picked up. Anything else - a stylus, the select tool,
+   * empty board - is left exactly as it was.
+   */
+  armHoldToMove(e, sp, wp) {
+    this.cancelHold();
+    if (e.pointerType !== 'touch') return;
+    if (!this.action || this.action.type !== 'draw') return;
+    const hit = pick(this.store, wp, 8 / this.surface.cam.z);
+    if (!hit || hit.locked) return;
+    this._holdFrom = sp;
+    this._holdId = e.pointerId;
+    this._hold = setTimeout(() => {
+      this._hold = null;
+      // The finger may have lifted or begun a real stroke in the meantime.
+      if (!this.action || this.action.type !== 'draw') return;
+      // The mark never becomes an object, so there is nothing to undo.
+      this.surface.wet = null;
+      this.action = null;
+      this.app.setSelection([hit.id]);
+      if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
+      this.actionId = this._holdId;
+      // A hidden gesture nobody is told about is a gesture nobody uses.
+      this.app.toast('Picked up — drag it where you want it', 'check', 1400);
+      this.surface.invalidate();
+    }, HOLD_MS);
+  }
+
+  /** Whatever this was, it is not a press-and-hold. */
+  cancelHold() {
+    if (this._hold) { clearTimeout(this._hold); this._hold = null; }
+    this._holdFrom = null;
+  }
+
   startMoveOnSelection(wp) {
     const sel = this.surface.selection;
     if (!sel.size || this.surface.selectionIsLocked()) return false;
@@ -1448,6 +1508,7 @@ export class Interaction {
   }
 
   startPinch() {
+    this.cancelHold();
     if (this.action && this.action.type === 'draw') {
       this.surface.wet = null;
       this.action = null;

@@ -50,6 +50,10 @@ export class TextEditor {
     // The canvas must stop drawing this object's text while the textarea is
     // showing it, or the two sit a pixel apart and smear into each other.
     app.surface.editing = { id: obj.id, cell };
+    // On a phone the keyboard takes most of the screen and the toolbar ends up
+    // sitting on the very box being typed into. The pens are no use mid-word,
+    // so they stand down until the words are finished - see app.css.
+    document.body.classList.add('typing');
 
     this.place();
 
@@ -195,6 +199,7 @@ export class TextEditor {
     const cell = this.cell;
     this.target = null; this.cell = null;
     this.app.surface.editing = null;      // the canvas owns the text again
+    document.body.classList.remove('typing');
     el.remove();
 
     const store = this.app.store;
@@ -304,6 +309,7 @@ export class TextEditor {
      */
     this.el = null; this.target = null; this.cell = null;
     this.app.surface.editing = null;      // the canvas owns the text again
+    document.body.classList.remove('typing');
     el.remove();
     // A cancelled edit gives back whatever height it grew to while typing -
     // for a text box exactly as for a note.

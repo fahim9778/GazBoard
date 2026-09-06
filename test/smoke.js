@@ -2516,6 +2516,82 @@ async function run(win, app) {
     tapped.penStillMarks);
   check('and a finger tap on bare board is still a dot', tapped.bareBoardStillDots);
 
+  /*
+   * Press and hold to pick something up.
+   *
+   * A finger DRAG has to keep drawing - writing on an imported slide with a
+   * fingertip is most of what a tablet is for, and slides are objects like any
+   * other, so "drag moves things" would drag the lesson around instead of
+   * annotating it. Holding still is the one gesture that cannot be mistaken for
+   * drawing or panning.
+   */
+  const held = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    const pagesWere = a.store.doc.pages;
+    a.store.doc.pages = [];
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.penSeenThisSession = false;
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { clientX: rect.left + p.x, clientY: rect.top + p.y }; };
+    const mk = (x, y, buttons, type) => ({ pointerId: 9, pointerType: type || 'touch', button: 0,
+      buttons, shiftKey: false, altKey: false, pressure: 0.5, ...at(x, y) });
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    a.store.add({ id: 'hold-note', type: 'note', x: 8000, y: 8000, w: 200, h: 200,
+      color: '#ffd94a', text: 'hold me', rotation: 0, align: 'center', font: 'ui' });
+    a.setTool('pen');
+    const inkBefore = strokes();
+    const r = {};
+
+    // hold still, then drag
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(8100, 8100, 1));
+    await wait(650);
+    r.becameAMove = !!it.action && it.action.type === 'move';
+    r.gotSelected = a.selected.length === 1 && a.selected[0].id === 'hold-note';
+    it.onMove(mk(8400, 8250, 1));
+    it.onUp(mk(8400, 8250, 0));
+    const moved = a.store.doc.objects['hold-note'];
+    r.actuallyMoved = Math.round(moved.x) === 8300 && Math.round(moved.y) === 8150;
+    r.leftNoInk = strokes() === inkBefore;
+
+    // a drag that sets off straight away is a stroke, not a hold
+    a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
+    const wasAt = { x: moved.x, y: moved.y };
+    it.onDown(mk(8320, 8170, 1));
+    for (let i = 1; i <= 8; i++) it.onMove(mk(8320 + i * 25, 8170 + i * 12, 1));
+    await wait(650);
+    it.onUp(mk(8520, 8266, 0));
+    r.dragStillDraws = strokes() === inkBefore + 1;
+    r.dragDidNotMoveIt = moved.x === wasAt.x && moved.y === wasAt.y;
+
+    // a stylus holding still is not a move - it is someone about to write
+    a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
+    a.notePenSeen();
+    it.onDown(mk(8320, 8170, 1, 'pen'));
+    await wait(650);
+    r.penNeverPicksUp = !!it.action && it.action.type === 'draw';
+    it.onUp(mk(8320, 8170, 0, 'pen'));
+
+    a.store.doc.pages = pagesWere;
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    a.penSeenThisSession = false; a.setTool('select'); a.setSelection([]);
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('holding a finger still on a note picks it up instead of drawing',
+    held.becameAMove && held.gotSelected && held.leftNoInk);
+  check('and dragging then actually moves it', held.actuallyMoved);
+  check('while a finger that sets off straight away still draws',
+    held.dragStillDraws && held.dragDidNotMoveIt);
+  check('and a stylus held still is someone about to write, not to move',
+    held.penNeverPicksUp);
+
   /* ---- ruler ---- */
   await js(`window.app.command('ruler'); window.app.ruler.angle = 0.35;`);
   check('ruler toggles', await js(`return window.app.ruler.visible;`));
@@ -6618,6 +6694,7 @@ module.exports.run = async (win, app) => {
    * column down the side of the screen.
    */
   const onPhone = [];
+  let typingOnPhone = null;
   try {
     win.webContents.debugger.attach('1.3');
     const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
@@ -6636,6 +6713,25 @@ module.exports.run = async (win, app) => {
         return out;
       `));
     }
+    // Still in phone mode: the toolbar has to stand down while the keyboard is
+    // up, or it sits on the very box being typed into.
+    typingOnPhone = await js(`
+      const a = window.app;
+      const bar = document.getElementById('toolbar');
+      const before = getComputedStyle(bar).display;
+      const had = new Set(a.store.objects.map((o) => o.id));
+      a.addNoteAt({ x: 12000, y: 12000 });
+      await new Promise((r) => setTimeout(r, 120));
+      const during = getComputedStyle(bar).display;
+      const flagged = document.body.classList.contains('typing');
+      a.textEditor.cancel();
+      await new Promise((r) => setTimeout(r, 120));
+      const after = getComputedStyle(bar).display;
+      a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+      a.setTool('select'); a.setSelection([]);
+      return { before, during, after, flagged,
+               cleared: !document.body.classList.contains('typing') };
+    `);
     await cdp('Emulation.clearDeviceMetricsOverride');
     await cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
     win.webContents.debugger.detach();
@@ -6658,6 +6754,12 @@ module.exports.run = async (win, app) => {
     onPhone.map((p) => `${p.label} zoom ${p.zoombar && p.zoombar.h} page ${p.pagebar && p.pagebar.h}`).join(' | '));
   check('and the zoom readout moves to the top when the keyboard takes the bottom',
     movedToTheTop, `top ${withKeyboard && withKeyboard.zoombar.top}`);
+  check('the toolbar stands down while you are typing on a phone',
+    !!typingOnPhone && typingOnPhone.flagged && typingOnPhone.during === 'none',
+    typingOnPhone ? `${typingOnPhone.before} -> ${typingOnPhone.during}` : 'not measured');
+  check('and comes straight back when you stop',
+    !!typingOnPhone && typingOnPhone.cleared && typingOnPhone.after === typingOnPhone.before,
+    typingOnPhone ? `back to ${typingOnPhone.after}` : 'not measured');
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);

@@ -490,6 +490,12 @@ kbd {
   .tool { width: 44px; height: 44px; }
   .pen { width: 36px; height: 50px; }
   #zoombar button, #pagebar button { width: 36px; height: 36px; }
+
+  /* Typing into a note or a text box: the keyboard has the bottom half of the
+     screen and the toolbar was landing on the box itself. Pens are no use
+     mid-word, so they stand down until the words are finished. Touch only -
+     on a desktop the toolbar is nowhere near what you are typing. */
+  body.typing #toolbar, body.typing #pagebar { display: none; }
   .icon-btn { width: 38px; height: 38px; }
   .btn { min-height: 38px; }
   .menu-item { padding: 10px 12px; }
