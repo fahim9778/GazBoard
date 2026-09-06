@@ -326,10 +326,28 @@ input, textarea { font: inherit; }
 }
 
 #editLayer { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
+/*
+ * The box you type in.
+ *
+ * It used to announce itself: a two-pixel accent border, rounded corners, a
+ * drop shadow, and an opaque white fill. Nothing you have ever typed into looks
+ * like that. Worse, the fill was a lie - it hid the note colour, the shape, the
+ * board underneath - so the thing you were looking at while typing was not the
+ * thing you got when you stopped, and the text jumped two pixels on commit
+ * besides, because a border sits between the box and its contents.
+ *
+ * A text box in Word, PowerPoint or Keynote is a thin dashed frame around text
+ * that is already sitting exactly where it will end up. So: no fill, no border,
+ * no shadow. The frame is an OUTLINE, which is painted outside the box and
+ * cannot shift a single character, held a few pixels clear of the text so it
+ * frames rather than crowds.
+ */
 #editLayer textarea {
-  position: absolute; pointer-events: auto; resize: none; border: 2px solid var(--accent-2);
-  border-radius: 4px; padding: 0; margin: 0; background: rgba(255,255,255,.96); color: var(--text);
-  overflow: hidden; outline: none; box-shadow: var(--shadow-2); user-select: text;
+  position: absolute; pointer-events: auto; resize: none;
+  border: 0; padding: 0; margin: 0; background: transparent; color: var(--text);
+  overflow: hidden; user-select: text;
+  outline: 1px dashed rgba(0,0,0,.45);
+  outline-offset: 4px;
 }
 
 /* ---------------- toast / progress ---------------- */

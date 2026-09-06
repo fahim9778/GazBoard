@@ -47,6 +47,10 @@ export class TextEditor {
       app.surface.invalidate();
     }
 
+    // The canvas must stop drawing this object's text while the textarea is
+    // showing it, or the two sit a pixel apart and smear into each other.
+    app.surface.editing = { id: obj.id, cell };
+
     this.place();
 
     ta.addEventListener('input', () => { this.place(); app.surface.invalidate(); });
@@ -58,7 +62,21 @@ export class TextEditor {
     });
     ta.addEventListener('blur', () => this.commit());
     ta.addEventListener('pointerdown', (e) => e.stopPropagation());
-    setTimeout(() => { ta.focus(); ta.select(); }, 0);
+    /*
+     * Caret at the end, not everything selected.
+     *
+     * Opening an existing box with all of its text highlighted means the next
+     * key you press deletes the lot. That is a fine way to REPLACE something
+     * and a terrible default for coming back to fix a word, which is what
+     * re-opening a text box is nearly always for. Every text box on a page
+     * behaves the other way: you get a caret, and the text stays put. Ctrl+A
+     * is still there for anyone who did want all of it.
+     */
+    setTimeout(() => {
+      ta.focus();
+      const end = ta.value.length;
+      ta.setSelectionRange(end, end);
+    }, 0);
     app.surface.invalidate();
   }
 
@@ -74,6 +92,24 @@ export class TextEditor {
 
     if (o.type === 'note' && !this.cell) {
       const grown = this.noteHeight(o, this.el.value);
+      if (grown > o.h) { o.h = grown; box = boundsOf(o); }
+    }
+
+    /*
+     * A text box grows as you type, instead of scrolling.
+     *
+     * A note has always done this. A text box did not: it kept the height it
+     * was created with, so the moment the text ran past one line the box
+     * started scrolling inside itself and the first line went out of sight.
+     * You were typing the third line of something whose first two lines had
+     * vanished, in a box that would silently resize the instant you clicked
+     * away. Nothing on a page behaves like that.
+     *
+     * It only ever grows here. Shrinking as you delete would make the frame
+     * flinch on every backspace; commit() does the exact fit once at the end.
+     */
+    if (o.type === 'text' && !this.cell && o.autoSize !== false) {
+      const grown = this.fitBox(o, this.el.value).h;
       if (grown > o.h) { o.h = grown; box = boundsOf(o); }
     }
 
@@ -100,8 +136,25 @@ export class TextEditor {
     s.fontWeight = o.bold ? '600' : '400';
     s.fontStyle = o.italic ? 'italic' : 'normal';
     s.textAlign = this.cell ? 'center' : (o.align || (o.type === 'text' ? 'left' : 'center'));
-    s.color = o.type === 'note' ? (o.textColor || readableText(o.color || '#ffd94a')) : (o.color || o.textColor || '#201f1e');
-    s.background = o.type === 'note' ? o.color : 'rgba(255,255,255,.96)';
+    const ink = o.type === 'note' ? (o.textColor || readableText(o.color || '#ffd94a'))
+      : (o.color || o.textColor || '#201f1e');
+    s.color = ink;
+    s.caretColor = ink;                 // a black caret is invisible on a dark note
+    /*
+     * Show what will actually be there.
+     *
+     * Everything except a note used to be typed into an opaque white panel,
+     * which hid the shape it was inside, the ink behind it, and the fact that a
+     * text box has no fill of its own. You typed onto white and got something
+     * else the moment you clicked away. A note keeps its own colour because a
+     * note really is a coloured square; everything else shows whatever the
+     * object will actually be drawn with, which is usually nothing.
+     */
+    s.background = o.type === 'note' ? o.color
+      : (!this.cell && o.background && o.background !== 'none' ? o.background : 'transparent');
+    // The frame has to be visible against whatever it is sitting on, and on a
+    // dark note that is not near-black.
+    s.outlineColor = o.type === 'note' ? ink : 'rgba(0,0,0,.45)';
     s.transform = o.rotation ? `rotate(${o.rotation}rad)` : '';
     s.transformOrigin = '0 0';
     s.padding = '0';
@@ -121,6 +174,7 @@ export class TextEditor {
     const target = this.target;
     const cell = this.cell;
     this.target = null; this.cell = null;
+    this.app.surface.editing = null;      // the canvas owns the text again
     el.remove();
 
     const store = this.app.store;
@@ -132,7 +186,14 @@ export class TextEditor {
       }
     } else if ((target.text || '') !== value) {
       const patch = { text: value };
-      if (target.type === 'text' && target.autoSize !== false) Object.assign(patch, this.fitBox(target, value));
+      if (target.type === 'text' && target.autoSize !== false) {
+        // Rewind the growth that happened while typing, so the undo entry
+        // records the height the box had BEFORE this edit rather than the one
+        // it drifted to during it. fitBox reads the width and the font, never
+        // the height, so the answer is the same either way.
+        if (this.startH != null) target.h = this.startH;
+        Object.assign(patch, this.fitBox(target, value));
+      }
       if (target.type === 'note') {
         // rewind the live growth so update() records the height it had before
         // this edit, then ask for the height the finished text needs
@@ -145,8 +206,8 @@ export class TextEditor {
       if (!value && target.type === 'text') store.remove([target.id], 'remove empty text');
     } else if (!value && target.type === 'text' && !target.text) {
       store.remove([target.id], 'remove empty text');
-    } else if (target.type === 'note' && this.startH != null) {
-      target.h = this.startH;      // nothing changed, so neither should the note
+    } else if (this.startH != null && (target.type === 'note' || target.type === 'text')) {
+      target.h = this.startH;      // nothing changed, so neither should the box
     }
     this.startH = null;
 
@@ -214,8 +275,13 @@ export class TextEditor {
      * should always have done.
      */
     this.el = null; this.target = null; this.cell = null;
+    this.app.surface.editing = null;      // the canvas owns the text again
     el.remove();
-    if (target && target.type === 'note' && this.startH != null) target.h = this.startH;
+    // A cancelled edit gives back whatever height it grew to while typing -
+    // for a text box exactly as for a note.
+    if (target && (target.type === 'note' || target.type === 'text') && this.startH != null) {
+      target.h = this.startH;
+    }
     this.startH = null;
     if (target && target.type === 'text' && !target.text) this.app.store.remove([target.id], 'remove empty text');
     this.app.afterTextEdit();
