@@ -22,6 +22,8 @@
     "test:web": "npm run build:web && node test/web-pwa.test.js",
     "test": "npm run smoke",
     "test:sync": "node test/sync.test.js",
+    "test:tablet": "node test/tablet-layout.test.js",
+    "test:all": "npm run smoke && npm run test:sync && npm run test:web && npm run test:tablet",
     "sync:receive": "node scripts/sync-demo.js receive",
     "sync:send": "node scripts/sync-demo.js send",
     "sync:discover": "node scripts/sync-demo.js discover",
