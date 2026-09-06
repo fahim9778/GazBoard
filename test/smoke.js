@@ -1101,6 +1101,10 @@ async function run(win, app) {
     a.settings.inkPointer = 'nib';
     const penOverInk = hoverAt(250, 300, 'pen');       // stylus hovering its own writing
     const penOverBox = hoverAt(580, 310, 'pen');
+    // Those were pen hovers, so the pen-ghost guard is armed. A person picking
+    // the mouse up clears it by moving; this test is about hover hints, and the
+    // guard has a test of its own.
+    it._penSp = null;
     const mouseOverInk = hoverAt(250, 300, 'mouse');   // mouse: cursor hints, no outline
     const mouseOverEmpty = hoverAt(900, 700, 'mouse');
 
@@ -2056,8 +2060,11 @@ async function run(win, app) {
     const afterLateGhost = sf.canvas.style.cursor || '';
 
     // A real mouse move must still say what a click will do - and it is
-    // recognised by being somewhere else, not by any clock having run out.
+    // recognised by being a STREAM of reports from somewhere else, not by any
+    // clock having run out. One report is what Windows sends by itself; a hand
+    // on a mouse keeps producing them.
     it.onMove(mk(X(500), Y(400), 'mouse', 0));
+    it.onMove(mk(X(520), Y(410), 'mouse', 0));
     const afterRealMouse = sf.canvas.style.cursor || '';
 
     a.store.clear(); it.action = null; it.pointers.clear();
@@ -2443,6 +2450,149 @@ async function run(win, app) {
     ruled.points > 3 && ruled.spread > 400, `${ruled.points} points across ${Math.round(ruled.spread)}`);
   check('with snapping switched off the same wander is left exactly as drawn',
     ruled.freeWorst > 50, `wandered ${Math.round(ruled.freeWorst)}`);
+  /*
+   * A ruler has two long sides and people use both - rotating it is how you
+   * choose which side the line comes out of. Only the near one used to draw,
+   * because the snap band was measured from the ruler's anchor line, which IS
+   * that edge; the far side sat a whole thickness away and caught nothing. And
+   * between the two there was a corridor where ink stayed free, which came out
+   * as pencil lines running under the plastic.
+   */
+  const bothEdges = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true; a.ruler.snap = true;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    const TH = a.ruler.thickness;
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const draw = (pts) => {
+      it.action = null; it.pointers.clear();
+      it.onDown(mk(at(pts[0][0], pts[0][1]), 1));
+      for (const [x, y] of pts.slice(1)) it.onMove(mk(at(x, y), 1));
+      const last = pts[pts.length - 1];
+      it.onUp(mk(at(last[0], last[1]), 0));
+      return a.store.objects.filter((o) => o.type === 'stroke').pop();
+    };
+    const spread = (o, key) => Math.max(...o.points.map((q) => q[key]))
+      - Math.min(...o.points.map((q) => q[key]));
+
+    // 1. along the FAR edge, with a wobble
+    const far = draw([[-300, TH], [-150, TH + 22], [0, TH - 30], [150, TH + 14], [280, TH]]);
+    const farOff = Math.max(...far.points.map((q) => Math.abs(q.y - TH)));
+
+    // 2. along the NEAR edge, unchanged behaviour
+    const near = draw([[-300, 0], [-150, 25], [0, -18], [200, 6]]);
+    const nearOff = Math.max(...near.points.map((q) => Math.abs(q.y)));
+
+    // 3. straight up the middle of the plastic: nothing may stay loose there
+    const mid = draw([[-250, TH * 0.5 - 6], [-100, TH * 0.5], [100, TH * 0.5 + 5], [250, TH * 0.5]]);
+    const midEdges = new Set(mid.points.map((q) => (Math.abs(q.y) < 0.5 ? 'near'
+      : Math.abs(q.y - TH) < 0.5 ? 'far' : 'loose')));
+
+    // 4. a stroke that merely CROSSES the ruler must be let go again, or a
+    //    circle drawn over it would come out as a straight line
+    const across = draw([[0, -400], [0, -60], [0, TH / 2], [0, 300], [40, 620]]);
+    const crossEnd = across.points[across.points.length - 1];
+
+    a.ruler.visible = false;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return { farOff, farSpread: spread(far, 'x'), nearOff,
+             midEdges: [...midEdges], crossEndY: crossEnd.y, crossEndX: crossEnd.x,
+             leftBehind: a.store.objects.filter((o) => !had.has(o.id)).length };
+  `);
+  check('the far side of the ruler draws a straight line too, not just the near one',
+    bothEdges.farOff < 0.5 && bothEdges.farSpread > 400,
+    `worst ${bothEdges.farOff?.toFixed?.(2)} off, across ${Math.round(bothEdges.farSpread)}`);
+  check('and the near side still does',
+    bothEdges.nearOff < 0.5, `worst ${bothEdges.nearOff?.toFixed?.(2)} off`);
+  check('ink cannot be left loose under the plastic - it goes to a side',
+    !bothEdges.midEdges.includes('loose'), bothEdges.midEdges.join(', '));
+  check('but a line drawn ACROSS the ruler is let go on the far side',
+    bothEdges.crossEndY > 500, `ended at y ${Math.round(bothEdges.crossEndY)}`);
+  check('and that stroke leaves the board as it found it',
+    bothEdges.leftBehind === 0, `${bothEdges.leftBehind} stray object(s)`);
+
+  /*
+   * You reach for a ruler while holding a pen, which is exactly when it could
+   * not be moved: dragging the body worked only under the Select or Pan tool,
+   * so a pen press on it drew a line instead. Moving the thing meant putting
+   * the pen down, changing tool, dragging, and changing back - while the toast
+   * said "drag to move". So there is a grip in the middle now, and it means
+   * move whatever is in your hand.
+   */
+  const grip = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true; a.ruler.snap = true;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    const TH = a.ruler.thickness;
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons, type) => ({ pointerId: 1, pointerType: type || 'pen', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+
+    // 1. the grip, with the PEN tool live: it moves and draws nothing
+    const inkBefore = strokes();
+    it.onDown(mk(at(0, TH / 2), 1));
+    it.onMove(mk(at(140, TH / 2 + 70), 1));
+    it.onUp(mk(at(140, TH / 2 + 70), 0));
+    const movedBy = { dx: Math.round(a.ruler.x), dy: Math.round(a.ruler.y) };
+    const drewNothing = strokes() === inkBefore;
+
+    a.ruler.x = 0; a.ruler.y = 0;
+    it.action = null; it.pointers.clear();
+
+    // 2. the body away from the grip, same pen: that still draws
+    it.onDown(mk(at(300, TH / 2), 1));
+    it.onMove(mk(at(420, TH / 2), 1));
+    it.onUp(mk(at(420, TH / 2), 0));
+    const bodyStillDraws = strokes() === inkBefore + 1;
+    const rulerStayed = a.ruler.x === 0 && a.ruler.y === 0;
+
+    it.action = null; it.pointers.clear();
+
+    // 3. a finger anywhere on it moves it - that is the hand a ruler is held with
+    it.onDown(mk(at(300, TH / 2), 1, 'touch'));
+    it.onMove(mk(at(300, TH / 2 + 90), 1, 'touch'));
+    it.onUp(mk(at(300, TH / 2 + 90), 0, 'touch'));
+    const touchMoved = Math.round(a.ruler.y);
+
+    a.ruler.visible = false; a.ruler.x = 0; a.ruler.y = 0;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return { movedBy, drewNothing, bodyStillDraws, rulerStayed, touchMoved,
+             leftBehind: a.store.objects.filter((o) => !had.has(o.id)).length };
+  `);
+  check('the ruler can be dragged by its grip with the pen tool in hand',
+    grip.movedBy.dx === 140 && grip.movedBy.dy === 70,
+    `moved to ${grip.movedBy.dx},${grip.movedBy.dy}`);
+  check('and that drag leaves no ink behind it', grip.drewNothing);
+  check('while pressing the ruler anywhere else still draws, as it must',
+    grip.bodyStillDraws && grip.rulerStayed);
+  check('and a finger on it moves it, whatever the tool',
+    grip.touchMoved === 90, `y is ${grip.touchMoved}`);
+  check('none of which leaves anything on the board',
+    grip.leftBehind === 0, `${grip.leftBehind} stray object(s)`);
+
   check('and the test board is handed back exactly as it was found',
     ruled.leftBehind === 0, `${ruled.leftBehind} stray object(s)`);
 

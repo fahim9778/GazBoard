@@ -1021,7 +1021,7 @@ class App {
       r.y = v.y + v.h / 2;
       r.length = Math.min(1200, v.w * 0.7);
       r.thickness = 78 / this.surface.cam.z;
-      this.toast('Ruler on — drag to move, scroll over it to rotate');
+      this.toast('Ruler on — drag the grip in the middle to move it, scroll over it to turn it');
     }
     this.surface.invalidate();
   }

@@ -43,6 +43,7 @@ export class Interaction {
     this._wheelFrom = null;     // 'mouse' or 'trackpad', for the stream in flight
     this._wheelAt = 0;
     this._penSp = null;         // and where it was, in screen coordinates
+    this._mouseSp = null;       // the last mouse report, for telling one from a stream
     this._edgeRaf = null;
     this.rightPan = null;       // an in-flight right-button drag
     this._eatNextMenu = false;  // a right-drag must not end in a context menu
@@ -127,7 +128,7 @@ export class Interaction {
     if (e.pointerType === 'pen') this._penAt = performance.now();
     // A button went down under a mouse, so the mouse is unambiguously in
     // somebody's hand. Stop watching for a ghost that cannot now arrive.
-    else if (e.pointerType === 'mouse') this._penSp = null;
+    else if (e.pointerType === 'mouse') { this._penSp = null; this._mouseSp = null; }
     this.app.hideMenus();
     // A pointerup that never arrives - a pen lifted as the window loses focus,
     // a cancel routed elsewhere - used to leave its id in the map for good.
@@ -172,7 +173,11 @@ export class Interaction {
     if (this.ruler.visible) {
       const zone = this.rulerZone(sp);
       if (zone === 'rotate') { this.action = { type: 'rulerRotate', start: wp, a0: this.ruler.angle }; return; }
-      if (zone === 'body' && (tool === 'select' || tool === 'pan')) {
+      // The grip moves it whatever is in your hand. A finger does too, because
+      // that is the hand a real ruler is held with and it can never be meant
+      // as ink. The whole body still drags under Select or Pan, as it did.
+      if (zone === 'move' || (zone === 'body'
+          && (e.pointerType === 'touch' || tool === 'select' || tool === 'pan'))) {
         this.action = { type: 'rulerMove', start: wp, x0: this.ruler.x, y0: this.ruler.y };
         return;
       }
@@ -281,7 +286,7 @@ export class Interaction {
     if (this.moveRightPan(e)) return;
     if (e.pointerType === 'pen' && e.buttons) this.app.notePenSeen();
     const sp = this.surface.screenPoint(e);
-    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = sp; }
+    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = sp; this._mouseSp = null; }
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { sp, wp, type: e.pointerType });
 
@@ -306,16 +311,28 @@ export class Interaction {
        * late, sails past the deadline, and is believed. A hand then blinks
        * where the pen was, between every two words, in front of a class.
        *
-       * Position alone settles it, and settles it whatever the machine is
-       * doing. The ghost lands exactly where the nib was and then sits there -
-       * it is a report of where the mouse still is, not of it moving. A mouse
-       * a person has picked up goes somewhere. So: ignore moves that land on
-       * the nib's own spot, and the first one that does not is real - take it,
-       * and stop watching, because from then on the mouse is genuinely in use.
+       * What settles it, whatever the machine is doing, is that the ghost is
+       * ONE report and a hand on a mouse is a stream of them. Windows sends a
+       * single "the mouse is here" as the pen leaves and then nothing more,
+       * because nothing is moving. A person who picks up a mouse produces
+       * report after report, each somewhere new.
+       *
+       * So the first mouse report after the pen is never believed, wherever it
+       * lands - that alone is what makes this independent of both the clock and
+       * of exactly where Windows decides to put the pointer. The second one, if
+       * it has moved, is a hand: take it, and stop watching, because from then
+       * on the mouse is genuinely in use. The cost is one report of delay
+       * before the cursor turns into a hand, which at pointer rates is a few
+       * thousandths of a second and cannot be seen.
        */
       if (e.pointerType === 'mouse' && !e.buttons && this._penSp) {
-        if (Math.hypot(sp.x - this._penSp.x, sp.y - this._penSp.y) < GHOST_SLOP) return;
+        const prev = this._mouseSp;
+        this._mouseSp = sp;
+        // No previous report to compare with: this is the single one Windows
+        // sends by itself. Still sitting in the same place: also not a hand.
+        if (!prev || Math.hypot(sp.x - prev.x, sp.y - prev.y) < GHOST_SLOP) return;
         this._penSp = null;
+        this._mouseSp = null;
       }
       this.updateHover(sp, wp, e.pointerType);
       return;
@@ -490,7 +507,7 @@ export class Interaction {
   }
 
   onUp(e) {
-    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = this.surface.screenPoint(e); }
+    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = this.surface.screenPoint(e); this._mouseSp = null; }
     if (this.rightPan && e.pointerId === this.rightPan.id) {
       const moved = this.rightPan.moved;
       this.rightPan = null;
@@ -714,9 +731,12 @@ export class Interaction {
     // starting in the gutter is drawing on the desk: nothing happens
     const sheet = this.sheetAt(wp);
     if (this.pages.length && !sheet) return;
-    // The action exists before the first point so that point can catch the
-    // ruler and latch the stroke to it - see snapToRuler().
-    const act = { type: 'draw', obj, snapAxis: null, sheet, ruled: false };
+    // Whether this stroke is a RULED one is decided here, once, by where it
+    // starts - and so is which of the ruler's two edges it belongs to. See
+    // snapToRuler() for why that cannot be left to the points as they arrive.
+    const startEdge = this.ruler.visible && this.ruler.snap ? this.rulerEdgeAt(wp) : null;
+    const act = { type: 'draw', obj, snapAxis: null, sheet,
+      ruled: startEdge !== null, ruledEdge: startEdge || 0 };
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
     this.surface.wet = obj;
     this.action = act;
@@ -1190,7 +1210,14 @@ export class Interaction {
       if (t === 'select') cursor = hit ? (hit.locked ? 'not-allowed' : 'move') : 'default';
     } else this.surface.hoverId = null;
 
-    if (this.ruler.visible && this.rulerZone(sp)) cursor = this.rulerZone(sp) === 'rotate' ? 'grab' : 'move';
+    if (this.ruler.visible) {
+      const zone = this.rulerZone(sp);
+      // Only the parts that actually do something say so. The body under a pen
+      // draws, and a "move" cursor over it would be the same old lie.
+      if (zone === 'rotate') cursor = 'grab';
+      else if (zone === 'move') cursor = 'move';
+      else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
+    }
     if (t === 'eraser') { this.eraserCursor = sp; this.surface.invalidate(); }
     this.setCursor(cursor);
   }
@@ -1393,12 +1420,31 @@ export class Interaction {
     return { c, len: r.length * z, thick: r.thickness * z, angle: r.angle };
   }
 
+  /** Where the grip that always moves the ruler sits, in ruler coordinates. */
+  static MOVE_GRIP = { halfLen: 34, pad: 11 };
+
   rulerZone(sp) {
     const { c, len, thick, angle } = this.rulerRect();
     const dx = sp.x - c.x, dy = sp.y - c.y;
     const along = dx * Math.cos(angle) + dy * Math.sin(angle);
     const perp = -dx * Math.sin(angle) + dy * Math.cos(angle);
     if (Math.abs(along - len / 2) < 16 && Math.abs(perp) < thick) return 'rotate';
+    /*
+     * A grip in the middle that moves the ruler whatever is being held.
+     *
+     * Dragging the body only worked with the Select or Pan tool - which is to
+     * say, never at the moment anybody wanted it, because you reach for a
+     * ruler while holding a pen. Pressing on it with the pen drew a line
+     * instead, so the ruler could not be moved without putting the pen down,
+     * switching tool, dragging, and switching back. It read as a ruler nailed
+     * to the board, and the toast cheerfully said "drag to move".
+     *
+     * A real ruler is held with the other hand. There is no other hand here,
+     * so there is a handle instead: small, in the middle, visible, and it
+     * always means move - pen, mouse, finger, whatever the tool.
+     */
+    const gr = Interaction.MOVE_GRIP;
+    if (Math.abs(along) < gr.halfLen && perp >= -gr.pad && perp <= thick + gr.pad) return 'move';
     if (Math.abs(along) <= len / 2 && perp >= -2 && perp <= thick) return 'body';
     return null;
   }
@@ -1413,21 +1459,44 @@ export class Interaction {
     };
   }
 
-  /** Is this point close enough to the edge to count as drawing against it? */
-  rulerCatches(pt) {
+  /**
+   * Which edge of the ruler this point belongs to, or null for well clear of it.
+   *
+   * A ruler has TWO long sides and people use both - the whole reason it gets
+   * rotated to 346 degrees is so one particular side lies where the line is
+   * wanted. Only the top one used to draw, because the ruler's anchor line IS
+   * its top edge and the snap band was measured from that: the far side sat a
+   * full thickness away and never came close enough to catch anything. Drawing
+   * along it gave you your hand's own wobble, next to a perfectly straight line
+   * on the other side, with nothing on screen to explain the difference.
+   *
+   * The middle was worse. A band around each edge would still leave a corridor
+   * up the centre where ink is free, and free ink under a ruler comes out as
+   * pencil lines visible through the plastic - which no ruler has ever done.
+   * So the whole body catches, and the answer is simply whichever side is
+   * nearer. The thing is solid.
+   *
+   * Returned as the offset of that edge from the anchor line: 0 for the near
+   * side, the full thickness for the far one.
+   */
+  rulerEdgeAt(pt) {
     const r = this.ruler;
     const z = this.surface.cam.z;
+    const band = 26 / z;                     // a little grace beyond the plastic
     const { along, perp } = this.rulerOffsets(pt);
-    return Math.abs(perp) <= 26 / z && Math.abs(along) <= r.length / 2 + 40 / z;
+    if (Math.abs(along) > r.length / 2 + 40 / z) return null;   // past the ends
+    if (perp < -band || perp > r.thickness + band) return null; // clear of it
+    return perp < r.thickness / 2 ? 0 : r.thickness;
   }
 
-  /** The point, moved sideways onto the ruler's edge. */
-  rulerProject(pt) {
+  /** The point, moved sideways onto one of the ruler's edges. */
+  rulerProject(pt, edge = 0) {
     const r = this.ruler;
     const { along } = this.rulerOffsets(pt);
+    const cos = Math.cos(r.angle), sin = Math.sin(r.angle);
     return {
-      x: r.x + Math.cos(r.angle) * along,
-      y: r.y + Math.sin(r.angle) * along,
+      x: r.x + cos * along - sin * edge,
+      y: r.y + sin * along + cos * edge,
       p: pt.p
     };
   }
@@ -1444,21 +1513,24 @@ export class Interaction {
    *
    * A real ruler does not let go. Once the pen is against the edge it stays
    * against the edge until it is lifted, however much the hand shakes, because
-   * a piece of plastic is in the way. So: the FIRST point close enough to the
-   * edge catches it, and every point after that in the same stroke is put on
-   * the line regardless of distance. Lifting the pen releases it - `action` is
-   * a fresh object per stroke, so the latch cannot outlive one.
+   * a piece of plastic is in the way. So a stroke that BEGINS on the ruler is
+   * held to the edge it began on for its whole length, at any distance.
+   * Lifting releases it - `action` is a fresh object per stroke, so the latch
+   * cannot outlive one - and the edge is fixed at the start so a stroke can
+   * never hop from one side of the ruler to the other halfway along.
    *
-   * A stroke that starts away from the ruler and later crosses it still gets
-   * caught, exactly as a pen sliding sideways into a real edge would.
+   * A stroke that merely RUNS ACROSS the ruler is a different thing and must
+   * not latch: it is deflected while it is against the plastic and let go on
+   * the far side, exactly as a real pen would be. Latching that one would turn
+   * a circle drawn over the ruler into a straight line for the rest of its
+   * length, which is a far worse bug than the one being fixed.
    */
   snapToRuler(pt, action) {
     const r = this.ruler;
     if (!r.visible || !r.snap) return pt;
-    if (action && action.ruled) return this.rulerProject(pt);
-    if (!this.rulerCatches(pt)) return pt;
-    if (action) action.ruled = true;
-    return this.rulerProject(pt);
+    if (action && action.ruled) return this.rulerProject(pt, action.ruledEdge);
+    const edge = this.rulerEdgeAt(pt);
+    return edge === null ? pt : this.rulerProject(pt, edge);
   }
 
   /* ------------------------------------------------------------ *
@@ -1602,15 +1674,34 @@ export class Interaction {
         if (major && stepPx > 6) ctx.fillText(String(Math.abs(i * stepWorld)), x, 24);
       }
     }
-    // angle readout + rotate grip
+    // The angle readout belongs beside the thing that changes it, not in the
+    // middle of the ruler where the move grip now lives - and where it was
+    // sitting on top of the centre tick's own label besides.
     const degv = ((angle * 180) / Math.PI + 360) % 360;
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
     ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(degv.toFixed(0) + '°', 0, thick - 8);
+    ctx.fillText(degv.toFixed(0) + '°', len / 2 - 52, thick / 2 + 4);
     ctx.beginPath();
     ctx.arc(len / 2 - 14, thick / 2, 8, 0, Math.PI * 2);
     ctx.fillStyle = '#0078d4';
     ctx.fill();
+
+    // The move grip. Three lines, the way every drag handle has looked for
+    // thirty years, so nobody has to be told what it is.
+    const gr = Interaction.MOVE_GRIP;
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(-gr.halfLen, 2, gr.halfLen * 2, thick - 4, 3);
+    else ctx.rect(-gr.halfLen, 2, gr.halfLen * 2, thick - 4);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+    ctx.lineWidth = 1.6;
+    for (const dx2 of [-7, 0, 7]) {
+      ctx.beginPath();
+      ctx.moveTo(dx2, thick / 2 - 9);
+      ctx.lineTo(dx2, thick / 2 + 9);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 }
