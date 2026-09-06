@@ -2433,6 +2433,10 @@ class App {
     let remember = false;
     let session = null;
     let timer = null;
+    // Shown as the way out if this computer never appears in their list. Read
+    // once: it cannot change while a dialog is open.
+    let addrs = [];
+    try { addrs = ((await window.board.sync.state()) || {}).addresses || []; } catch { addrs = []; }
 
     const stop = () => {
       clearInterval(timer);
@@ -2459,6 +2463,18 @@ class App {
         id: 'pairCountdown',
         style: 'text-align:center;font-size:12.5px;color:var(--text-2);margin:-6px 0 14px'
       }, `Good for another ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} - a fresh code appears here when it runs out`));
+
+      // The list finds this computer by itself on most networks. On the ones
+      // where it does not - a guest wifi that keeps its clients apart, a
+      // firewall eating the announcement - there is no clue on screen about
+      // what to do instead, and the person is left staring at an empty list.
+      if (addrs.length) {
+        card.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2);margin:-6px 0 14px' },
+          'If this computer never appears in their list, they can add it by address instead: ',
+          h('span', {
+            style: 'font-family:ui-monospace,Consolas,monospace;font-weight:600;color:var(--text)'
+          }, addrs.map((a) => a.address).join(' or '))));
+      }
 
       const opt = (value, label, hint) => {
         const b = h('button', {

@@ -432,6 +432,60 @@ export function createPanels(app) {
           renderSync(host);
         }
       }, 'Rename')));
+
+    /*
+     * This computer's address, spelled out.
+     *
+     * "Add a computer by address" asks for the address the other computer
+     * shows - and until now no computer showed one. Anyone who already knew
+     * how to find it did not need the feature; anyone who needed the feature
+     * was being sent to a command prompt to run ipconfig, which is not a thing
+     * to ask of a teacher two minutes before a class.
+     *
+     * Read fresh on every redraw rather than kept, because moving from wifi to
+     * a cable changes it and nothing tells the app that happened.
+     */
+    const addrs = st.addresses || [];
+    if (addrs.length) {
+      const many = addrs.length > 1;
+      const box = h('div', {
+        style: 'margin-top:9px;padding:9px 11px;border-radius:6px;background:var(--surface-2);'
+          + 'border:1px solid var(--stroke)'
+      }, h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' },
+        many
+          ? 'This computer\u2019s addresses. If it never turns up in someone\u2019s list, they can add '
+            + 'it by hand with one of these - whichever is the network you are both on.'
+          : 'This computer\u2019s address. If it never turns up in someone\u2019s list, they can add it '
+            + 'by hand with this.'));
+
+      for (const a of addrs) {
+        box.appendChild(h('div', { style: 'display:flex;align-items:center;gap:9px;margin-top:7px' },
+          h('span', {
+            style: 'font-family:ui-monospace,Consolas,monospace;font-size:14.5px;font-weight:600;'
+              + 'letter-spacing:.3px'
+          }, a.address),
+          // The interface name is noise when there is only one address, and
+          // the only way to tell them apart when there are two.
+          many ? h('span', { style: 'font-size:11.5px;color:var(--text-2)' }, a.name) : null,
+          h('button', {
+            class: 'btn',
+            style: 'padding:2px 9px;font-size:11.5px;margin-left:auto;flex:none',
+            onclick: async () => {
+              // Copying is the whole point - the person reading this is the
+              // one who did not know where to find it, and typing four numbers
+              // off a screen onto another machine is how they get it wrong.
+              try {
+                await navigator.clipboard.writeText(a.address);
+                app.toast('Address copied - ' + a.address, 'check', 3000);
+              } catch {
+                app.toast('Could not copy. The address is ' + a.address, 'help', 6000);
+              }
+            }
+          }, 'Copy')));
+      }
+      host.appendChild(box);
+    }
+
     if (st.discovery === false) {
       /*
        * The announcement socket did not come up - something else has UDP
@@ -484,8 +538,26 @@ export function createPanels(app) {
     for (const p of seen) host.appendChild(deviceRow(p, host));
 
     if (away.length) {
-      host.appendChild(h('h5', { style: 'margin:16px 0 8px' }, 'Paired, but not switched on right now'));
-      for (const r of away) host.appendChild(deviceRow({ ...r, paired: true, offline: true }, host));
+      host.appendChild(h('h5', { style: 'margin:16px 0 8px' }, 'Paired, but not showing up right now'));
+      for (const r of away) {
+        /*
+         * "Not switched on right now" is a guess, and on some networks a wrong
+         * one. Announcements do not have to travel both ways - a firewall on
+         * one machine, or a wifi that keeps its clients apart, leaves this
+         * computer seeing nothing while the other sees it perfectly well.
+         *
+         * So a computer that has actually reached us before keeps its address,
+         * and keeps a Send button with it. Pressing it either works or says
+         * plainly what went wrong, which beats no button and no explanation.
+         */
+        host.appendChild(deviceRow({
+          ...r, paired: true,
+          offline: !r.lastAddress,
+          address: r.lastAddress || null,
+          port: r.lastPort || null,
+          lastKnown: !!r.lastAddress
+        }, host));
+      }
     }
 
     host.appendChild(h('button', {
@@ -523,7 +595,7 @@ export function createPanels(app) {
 
   function deviceRow(p, host) {
     const line = [];
-    if (p.address) line.push(p.address);
+    if (p.address) line.push(p.address + (p.lastKnown ? ' (last seen here)' : ''));
     line.push(p.paired ? 'paired' : 'not paired yet');
     if (p.paired && p.fingerprint) line.push(p.fingerprint);
     if (p.paired && p.remember === false) line.push('just for now');

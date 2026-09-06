@@ -115,6 +115,46 @@ function createSyncNode(opts) {
     if (!before || before.address !== address || before.name !== msg.name) onPeers(list());
   }
 
+  /**
+   * Remember the address a paired computer actually reached us from.
+   *
+   * Discovery is one-directional in practice. A broadcast that gets through in
+   * one direction does not have to get through in the other: a firewall on one
+   * machine, a wifi that keeps its clients apart, two different subnets - any
+   * of these leaves one computer seeing the other in its list while the other
+   * sees nothing, and the one that sees nothing has no address to send to and
+   * so no Send button at all.
+   *
+   * But a computer that just PAIRED with us, or just sent us a board, made a
+   * connection to get here - and the address it came from is reachable by
+   * definition, because a packet from it is what we are holding. So that gets
+   * written down on the paired record, which outlives the twelve seconds a
+   * discovered peer is remembered for and survives a restart for the machines
+   * marked "remembered".
+   *
+   * Only ever called after the other end has PROVED who it is - a completed
+   * pairing, or an envelope that opened with the shared key. An address on a
+   * trusted record is a thing a stranger must not be able to write to.
+   */
+  function noteCallerAddress(req, id, theirPort) {
+    const raw = req && req.socket && req.socket.remoteAddress;
+    if (!raw || !id) return;
+    // A dual-stack socket reports an IPv4 caller as ::ffff:192.168.0.4, which
+    // nothing else in the app would know what to do with. Loopback is kept
+    // rather than dropped: two copies on one machine is a real arrangement,
+    // and 127.0.0.1 is the correct answer for it.
+    const address = raw.startsWith('::ffff:') ? raw.slice(7) : raw;
+    const rec = paired.get(id);
+    if (!rec) return;
+    // Their listening port, not the one they happen to be calling from - that
+    // is an ephemeral number that will not be there a second later. Older
+    // versions do not send it; the usual port is the right guess for them.
+    const listenPort = Number(theirPort) || rec.lastPort || TRANSFER_PORT;
+    if (rec.lastAddress === address && rec.lastPort === listenPort) return;
+    paired.set(id, { ...rec, lastAddress: address, lastPort: listenPort });
+    onPeers(list());
+  }
+
   function forgetStalePeers() {
     const cutoff = Date.now() - PEER_FORGOTTEN_AFTER_MS;
     let dropped = false;
@@ -254,6 +294,10 @@ function createSyncNode(opts) {
       keys,
       them: { deviceId: String(body.deviceId), publicKey: String(body.publicKey) },
       name: String(body.name || 'Unknown device').slice(0, 64),
+      // What they listen on, so we can call them back later even if their
+      // announcements never reach us. Absent from older versions, and the
+      // usual port is the right guess for those.
+      port: Number(body.port) || 0,
       at: Date.now()
     });
     return json(res, 200, { v: P.PROTOCOL, deviceId, name: deviceName, publicKey: keys.publicKey });
@@ -290,6 +334,9 @@ function createSyncNode(opts) {
       // memory, so closing the app is what forgets a classroom.
       remember: active.remember
     });
+    // They proved they knew the code, so where they called from is worth
+    // keeping - it may be the only address this machine ever learns for them.
+    noteCallerAddress(req, who, half.port);
     halfPaired.delete(who);
     // The session stays open. Others in the room still have to pair.
 
@@ -318,6 +365,8 @@ function createSyncNode(opts) {
 
     const plain = P.open(Buffer.from(rec.key, 'base64'), envelope);
     if (!plain) return json(res, 401, { error: 'not paired' });
+    // The envelope opened, so this really is them: keep their address current.
+    noteCallerAddress(req, from, envelope?.aad?.port);
 
     let board;
     try { board = JSON.parse(plain.toString()); } catch { return json(res, 400, { error: 'bad board' }); }
@@ -339,7 +388,7 @@ function createSyncNode(opts) {
     const us = { deviceId, publicKey: keys.publicKey };
 
     const hello = await post(peer, '/pair/hello',
-      { v: P.PROTOCOL, deviceId, name: deviceName, publicKey: keys.publicKey });
+      { v: P.PROTOCOL, deviceId, name: deviceName, publicKey: keys.publicKey, port });
     if (!hello.ok) throw new Error(hello.body?.error || 'the other device is not expecting a pairing');
 
     const them = { deviceId: String(hello.body.deviceId), publicKey: String(hello.body.publicKey) };
@@ -371,6 +420,9 @@ function createSyncNode(opts) {
       // Mirror what the far end decided, so both machines forget at the same time.
       remember: !!done.body.remembered
     };
+    // We reached them at this address a moment ago, so it is worth keeping for
+    // the next time - discovery may never show them to us at all.
+    if (peer.address) { rec.lastAddress = peer.address; rec.lastPort = peer.port || TRANSFER_PORT; }
     paired.set(rec.deviceId, rec);
     return { ...rec, fingerprint: P.fingerprint(key) };
   }
@@ -379,11 +431,24 @@ function createSyncNode(opts) {
   async function send(peer, board, onProgress = null) {
     const rec = paired.get(peer.deviceId);
     if (!rec) throw new Error('not paired with that device');
+    /*
+     * A peer that is not announcing itself right now still has an address, if
+     * it ever reached this machine: the one written down when it paired or
+     * last sent something. Using it is how "Send" works at all on a network
+     * where the announcements only travel one way.
+     */
+    if (!peer.address && rec.lastAddress) {
+      peer = { ...peer, address: rec.lastAddress, port: rec.lastPort || TRANSFER_PORT };
+    }
+    if (!peer.address) {
+      throw new Error(`${rec.name || 'that computer'} has not been seen on this network yet, so there `
+        + 'is no address to send to. Open sharing there, or add it by address.');
+    }
     const payload = Buffer.from(JSON.stringify(board));
     if (payload.length > MAX_BOARD_BYTES) throw new Error('board is too large to send');
 
     const envelope = P.seal(Buffer.from(rec.key, 'base64'),
-      { from: deviceId, kind: 'board', v: P.PROTOCOL }, payload);
+      { from: deviceId, kind: 'board', v: P.PROTOCOL, port }, payload);
 
     /*
      * This one waits on a PERSON, so it cannot share the ordinary timeout.
@@ -427,6 +492,45 @@ function createSyncNode(opts) {
    * @param {number} opts.timeoutMs  how long the socket may sit idle
    * @param {Function} opts.onProgress  (sent, total) while the body goes out
    */
+  /**
+   * Turn a network error code into something a person can act on.
+   *
+   * Node's own words are for programmers: "connect ENETUNREACH 10.0.5.12:53318"
+   * told a teacher standing in a classroom precisely nothing. Each of these
+   * codes means something specific and different about what to try next, so
+   * each gets its own sentence rather than one shrug for all of them.
+   */
+  function plainNetworkError(e, address, addrPort) {
+    const where = address ? `${address}${addrPort ? ':' + addrPort : ''}` : 'that computer';
+    switch (e && e.code) {
+      case 'ENETUNREACH':
+      case 'EHOSTUNREACH':
+      case 'EHOSTDOWN':
+        // The operating system did not even try: it has no route there. Almost
+        // always two different networks - a guest wifi and a cabled one, or a
+        // VPN - rather than anything wrong with either GazBoard.
+        return `cannot reach ${where} from this computer. That address is on a `
+          + 'different network from this one, or something in between is blocking the way. '
+          + 'Check that both computers show addresses starting with the same numbers.';
+      case 'ECONNREFUSED':
+        // Something answered, and said no. The machine is up; GazBoard is not.
+        return `nothing is listening at ${where}. GazBoard is probably closed on that `
+          + 'computer, or sharing is switched off there.';
+      case 'ETIMEDOUT':
+        // Packets went out and nothing came back. Silence is what a firewall
+        // does; a refusal is what a computer does.
+        return `no answer from ${where}. That computer's firewall is most likely dropping `
+          + 'the connection - open GazBoard there and check the sharing section for a firewall warning.';
+      case 'ECONNRESET':
+        return `${where} cut the connection off part way through.`;
+      case 'EAI_AGAIN':
+      case 'ENOTFOUND':
+        return `cannot find ${where}.`;
+      default:
+        return (e && e.message) || 'could not reach that computer';
+    }
+  }
+
   function post(peer, path, body, { timeoutMs = REQUEST_TIMEOUT_MS, onProgress = null } = {}) {
     return new Promise((resolve, reject) => {
       const data = Buffer.from(JSON.stringify(body));
@@ -444,7 +548,10 @@ function createSyncNode(opts) {
         });
       });
       req.on('timeout', () => { req.destroy(new Error('the other device did not answer')); });
-      req.on('error', reject);
+      // Everything above this line knows about addresses and ports. Nothing
+      // above the caller does, so the translation belongs here.
+      req.on('error', (e) => reject(
+        e && e.code ? Object.assign(new Error(plainNetworkError(e, peer.address, peer.port)), { code: e.code }) : e));
 
       if (!onProgress) { req.end(data); return; }
 
@@ -598,11 +705,7 @@ function createSyncNode(opts) {
       req.on('timeout', () => req.destroy(new Error('no answer from that address')));
       // Node's own wording here is for programmers, not for someone standing at
       // a laptop wondering why nothing happened.
-      req.on('error', (e) => reject(new Error(
-        e.code === 'ECONNREFUSED' ? 'that machine refused the connection'
-          : e.code === 'EHOSTUNREACH' || e.code === 'ENETUNREACH' ? 'that address cannot be reached from here'
-            : e.code === 'ETIMEDOUT' ? 'no answer from that address'
-              : e.message)));
+      req.on('error', (e) => reject(new Error(plainNetworkError(e, address, addrPort))));
       req.end();
     });
     if (reply.v !== P.PROTOCOL || !reply.deviceId) throw new Error('not a GazBoard');
@@ -690,6 +793,9 @@ function createSyncNode(opts) {
     beginPairing, cancelPairing, pairWith, send, unpair, endSession,
     pairedDevices: () => paired.all().map((r) => ({
       deviceId: r.deviceId, name: r.name, remember: !!r.remember, pairedAt: r.pairedAt,
+      // Where they were last reached. The panel offers Send on the strength of
+      // this, for a computer that is paired but not currently announcing.
+      lastAddress: r.lastAddress || null, lastPort: r.lastPort || null,
       fingerprint: P.fingerprint(Buffer.from(r.key, 'base64'))
     })),
     get port() { return port; },
@@ -700,4 +806,24 @@ function createSyncNode(opts) {
   };
 }
 
-module.exports = { createSyncNode, DISCOVERY_PORT, TRANSFER_PORT, MAX_BOARD_BYTES };
+/**
+ * The addresses this computer can be reached on, for showing to a person.
+ *
+ * IPv4 only and loopback dropped, because this is read off a screen and typed
+ * into another machine by someone who has never typed an address before. The
+ * interface's own name comes along because a laptop on wifi and a cable has
+ * two of these and only its owner can say which one the other machine shares a
+ * network with.
+ */
+function localAddresses() {
+  const out = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const a of list || []) {
+      if (a.family !== 'IPv4' || a.internal || !a.address) continue;
+      out.push({ name, address: a.address });
+    }
+  }
+  return out;
+}
+
+module.exports = { createSyncNode, localAddresses, DISCOVERY_PORT, TRANSFER_PORT, MAX_BOARD_BYTES };
