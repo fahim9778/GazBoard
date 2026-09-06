@@ -867,6 +867,76 @@ async function run() {
    * next root-level module before it reaches an installer.
    */
 
+  /*
+   * Announcements do not have to travel both ways.
+   *
+   * A firewall on one machine, a wifi that keeps its clients apart, two
+   * subnets that do not carry broadcasts to each other - any of these leaves
+   * one computer seeing the other in its list while the other sees nothing at
+   * all. The one that sees nothing had no address, so no Send button, and no
+   * way to answer a board it had just been handed.
+   *
+   * But the machine that reached us made a connection to do it, and the
+   * address it came from is reachable by definition.
+   */
+  await section('a computer that reached us keeps its address', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+
+      const asB = t.bStore.all()[0];
+      check('the machine that was paired WITH writes down where the other one called from',
+        !!asB && asB.lastAddress === '127.0.0.1' && asB.lastPort === t.A.port,
+        `${asB && asB.lastAddress}:${asB && asB.lastPort}, and it listens on ${t.A.port}`);
+
+      // The point of writing it down: B never discovered A, and can still send.
+      const reply = await t.B.send({ deviceId: asB.deviceId, name: asB.name },
+        { id: 'reply-1', name: 'Sent back', objects: [] });
+      check('and can send to it without ever having seen it announce itself',
+        !!reply && reply.accepted === true, JSON.stringify(reply));
+
+      // The initiator keeps the address it dialled, for the same reason.
+      const asA = t.aStore.all()[0];
+      check('and the machine that did the pairing keeps the address it dialled',
+        !!asA && asA.lastAddress === '127.0.0.1' && asA.lastPort === t.B.port,
+        `${asA && asA.lastAddress}:${asA && asA.lastPort}`);
+
+      // Nothing to go on at all is still a sentence, not a crash.
+      let nothing = '';
+      try {
+        await t.B.send({ deviceId: 'a-device-nobody-has-met', name: 'Ghost' }, { id: 'x', objects: [] });
+      } catch (e) { nothing = e.message; }
+      check('and a device it was never paired with is refused in words',
+        /not paired/i.test(nothing), nothing);
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * "connect ENETUNREACH 10.0.5.12:53318" is what a teacher was shown when a
+   * send failed. Every one of these codes means something different about what
+   * to try next, and none of them means anything to the person reading it.
+   */
+  await section('a failed send says what went wrong in words', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+
+      let refused = '';
+      try {
+        // Port 1: nothing is listening there, and the kernel says so at once.
+        await t.A.send({ deviceId: asA.deviceId, name: asA.name, address: '127.0.0.1', port: 1 },
+          { id: 'nope', objects: [] });
+      } catch (e) { refused = e.message; }
+      check('a closed port is explained rather than reported',
+        /nothing is listening/i.test(refused) && !/ECONNREFUSED/.test(refused), refused);
+      check('and it names the address it could not get to',
+        /127\.0\.0\.1:1/.test(refused), refused);
+    } finally { await t.stop(); }
+  });
+
   await section('what the installer actually contains', async () => {
     const fs = require('node:fs');
     const path = require('node:path');
