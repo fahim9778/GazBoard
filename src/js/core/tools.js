@@ -692,10 +692,12 @@ export class Interaction {
     // starting in the gutter is drawing on the desk: nothing happens
     const sheet = this.sheetAt(wp);
     if (this.pages.length && !sheet) return;
-    const first = this.snapToRuler({ ...wp, p: this.pressure(e) }, null);
-    obj.points.push(first);
+    // The action exists before the first point so that point can catch the
+    // ruler and latch the stroke to it - see snapToRuler().
+    const act = { type: 'draw', obj, snapAxis: null, sheet, ruled: false };
+    obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
     this.surface.wet = obj;
-    this.action = { type: 'draw', obj, snapAxis: null, sheet };
+    this.action = act;
   }
 
   finishStroke(a) {
@@ -1379,21 +1381,62 @@ export class Interaction {
     return null;
   }
 
-  /** Project a point onto the ruler edge when drawing close to it. */
-  snapToRuler(pt, action) {
+  /** How far along the ruler's edge a point sits, and how far off it. */
+  rulerOffsets(pt) {
     const r = this.ruler;
-    if (!r.visible || !r.snap) return pt;
-    const z = this.surface.cam.z;
     const dx = pt.x - r.x, dy = pt.y - r.y;
-    const along = dx * Math.cos(r.angle) + dy * Math.sin(r.angle);
-    const perp = -dx * Math.sin(r.angle) + dy * Math.cos(r.angle);
-    const band = 26 / z;
-    if (Math.abs(perp) > band || Math.abs(along) > r.length / 2 + 40 / z) return pt;
+    return {
+      along: dx * Math.cos(r.angle) + dy * Math.sin(r.angle),
+      perp: -dx * Math.sin(r.angle) + dy * Math.cos(r.angle)
+    };
+  }
+
+  /** Is this point close enough to the edge to count as drawing against it? */
+  rulerCatches(pt) {
+    const r = this.ruler;
+    const z = this.surface.cam.z;
+    const { along, perp } = this.rulerOffsets(pt);
+    return Math.abs(perp) <= 26 / z && Math.abs(along) <= r.length / 2 + 40 / z;
+  }
+
+  /** The point, moved sideways onto the ruler's edge. */
+  rulerProject(pt) {
+    const r = this.ruler;
+    const { along } = this.rulerOffsets(pt);
     return {
       x: r.x + Math.cos(r.angle) * along,
       y: r.y + Math.sin(r.angle) * along,
       p: pt.p
     };
+  }
+
+  /**
+   * Hold a stroke against the ruler's edge.
+   *
+   * This used to test every point on its own: within 26 pixels of the edge,
+   * snap; further out, draw wherever the hand went. Which meant the ruler only
+   * held a line as steadily as the hand did - a wobble wide enough took the ink
+   * off the edge mid-stroke and left a straight line with a bulge in it. That
+   * is precisely the wobble a ruler exists to absorb, and the person drawing
+   * has no way to see the 26-pixel boundary they are supposed to stay inside.
+   *
+   * A real ruler does not let go. Once the pen is against the edge it stays
+   * against the edge until it is lifted, however much the hand shakes, because
+   * a piece of plastic is in the way. So: the FIRST point close enough to the
+   * edge catches it, and every point after that in the same stroke is put on
+   * the line regardless of distance. Lifting the pen releases it - `action` is
+   * a fresh object per stroke, so the latch cannot outlive one.
+   *
+   * A stroke that starts away from the ruler and later crosses it still gets
+   * caught, exactly as a pen sliding sideways into a real edge would.
+   */
+  snapToRuler(pt, action) {
+    const r = this.ruler;
+    if (!r.visible || !r.snap) return pt;
+    if (action && action.ruled) return this.rulerProject(pt);
+    if (!this.rulerCatches(pt)) return pt;
+    if (action) action.ruled = true;
+    return this.rulerProject(pt);
   }
 
   /* ------------------------------------------------------------ *

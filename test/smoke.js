@@ -2361,6 +2361,76 @@ async function run(win, app) {
   await js(`window.app.command('ruler'); window.app.ruler.angle = 0.35;`);
   check('ruler toggles', await js(`return window.app.ruler.visible;`));
 
+  /*
+   * A ruler has to hold the line for a hand that shakes - that is the entire
+   * job. The snap used to be decided per point, so a wobble wider than 26
+   * pixels put the ink back wherever the hand was and left a straight line with
+   * a bulge in it. Nothing on screen shows where that boundary is, so it read
+   * as the ruler randomly letting go.
+   *
+   * The stroke below starts against the edge and then wanders a long way off
+   * it, which is what an unsteady hand does. Every point has to land on the
+   * line anyway.
+   */
+  const ruled = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    // The board carries work from earlier tests. Note what is on it, draw on
+    // top, and take only the new strokes away again at the end.
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true; a.ruler.snap = true;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    // The ruler lies along y = 0 in board coordinates; find the screen row for it.
+    const onLine = (x) => sf.cam.toScreen(x, 0);
+    const mk = (p, buttons) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons,
+      clientX: rect.left + p.x, clientY: rect.top + p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+
+    const start = onLine(-300);
+    it.onDown(mk(start, 1));
+    // now wander: 4, then 30, then 120 pixels off the edge and back
+    for (const [x, off] of [[-200, 4], [-100, 30], [0, 120], [100, 45], [200, 3]]) {
+      const p = onLine(x); it.onMove(mk({ x: p.x, y: p.y + off }, 1));
+    }
+    const endp = onLine(260);
+    it.onUp(mk(endp, 0));
+
+    const ink = a.store.objects.filter((o) => o.type === 'stroke').pop();
+    const worst = ink ? Math.max(...ink.points.map((q) => Math.abs(q.y))) : -1;
+    const spread = ink ? Math.max(...ink.points.map((q) => q.x)) - Math.min(...ink.points.map((q) => q.x)) : 0;
+
+    // Same wander with snapping switched off must NOT be straightened - the
+    // setting has to still mean something.
+    a.ruler.snap = false;
+    it.action = null; it.pointers.clear();
+    const s2 = onLine(-300);
+    it.onDown(mk(s2, 1));
+    const w = onLine(0);
+    it.onMove(mk({ x: w.x, y: w.y + 120 }, 1));
+    it.onUp(mk({ x: w.x, y: w.y + 120 }, 0));
+    const free = a.store.objects.filter((o) => o.type === 'stroke').pop();
+    const freeWorst = free ? Math.max(...free.points.map((q) => Math.abs(q.y))) : -1;
+
+    a.ruler.snap = true; a.ruler.visible = false;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return { worst, spread, points: ink ? ink.points.length : 0, freeWorst,
+             leftBehind: a.store.objects.filter((o) => !had.has(o.id)).length };
+  `);
+  check('a stroke that starts on the ruler stays on it however much the hand wanders',
+    ruled.worst >= 0 && ruled.worst < 0.5, `furthest point was ${ruled.worst?.toFixed?.(2)} off the line`);
+  check('and it is a real line, not a dot pinned to one spot',
+    ruled.points > 3 && ruled.spread > 400, `${ruled.points} points across ${Math.round(ruled.spread)}`);
+  check('with snapping switched off the same wander is left exactly as drawn',
+    ruled.freeWorst > 50, `wandered ${Math.round(ruled.freeWorst)}`);
+  check('and the test board is handed back exactly as it was found',
+    ruled.leftBehind === 0, `${ruled.leftBehind} stray object(s)`);
+
   await sleep(400);
   await shot(win, '01-board');
 
@@ -5768,6 +5838,64 @@ module.exports.run = async (win, app) => {
     return { running: st.running, setting: window.app.settings.sync };`);
   check('none of that switched sharing on behind your back',
     stillOff.running === false && stillOff.setting === false);
+
+  /*
+   * "Add a computer by address" has always asked for the address the other
+   * computer shows - while no computer showed one. Anybody who knew how to
+   * find it did not need the feature, and anybody who needed it was being sent
+   * to a command prompt. So the panel says it, on the machine it belongs to.
+   *
+   * Sharing has to be running for the panel to draw at all, so this switches
+   * it on, looks, and switches it back off.
+   */
+  await js(`
+    // The live block is drawn only when the setting is on, not merely when the
+    // service is running - the same thing a person switching it on does.
+    window.app.settings.sync = true;
+    await window.app.startSync();
+  `);
+  await sleep(600);
+  const shownAddress = await js(`
+    const st = await window.board.sync.state();
+    window.app.panels.settings();
+    await new Promise((r) => setTimeout(r, 350));
+    const body = document.getElementById('panelBody');
+    const sec = [...body.querySelectorAll('.section')].find((s) => {
+      const t = s.querySelector('h5');
+      return t && t.textContent === 'Share on this network';
+    });
+    const text = sec ? sec.textContent : '';
+    const first = (st.addresses || [])[0];
+    return {
+      running: st.running,
+      count: (st.addresses || []).length,
+      shaped: (st.addresses || []).every((a) => {
+        const parts = String(a.address).split('.');
+        return !!a.name && parts.length === 4
+          && parts.every((n) => n !== '' && Number(n) >= 0 && Number(n) <= 255);
+      }),
+      onScreen: !!first && text.includes(first.address),
+      explains: /address/i.test(text),
+      copy: !!sec && [...sec.querySelectorAll('button')].some((b) => b.textContent === 'Copy'),
+      sample: first ? first.address : '(none)'
+    };
+  `);
+  check('sharing knows this computer\'s own address on the network',
+    shownAddress.count > 0 && shownAddress.shaped, `${shownAddress.count}: ${shownAddress.sample}`);
+  check('and the panel puts it on screen rather than sending anyone to a command prompt',
+    shownAddress.onScreen && shownAddress.explains, shownAddress.sample);
+  check('with a button to copy it, because typing four numbers off a screen goes wrong',
+    shownAddress.copy);
+
+  const backOff = await js(`
+    window.app.panels.close && window.app.panels.close();
+    await window.board.sync.stop();
+    window.app.settings.sync = false; window.app.saveSettings();
+    const st = await window.board.sync.state();
+    return { running: st.running, setting: window.app.settings.sync };
+  `);
+  check('and it is switched off again afterwards, exactly as it was found',
+    backOff.running === false && backOff.setting === false);
 
   /* ---- the name plate ---- */
   const document_title = await js(`return document.title;`);
