@@ -2432,6 +2432,90 @@ async function run(win, app) {
   await js(`window.app.store.setBackground({ pattern: 'grid', color: '#ffffff' });`);
   check('background pattern set', (await js(`return window.app.store.doc.background.pattern;`)) === 'grid');
 
+  /*
+   * A finger tapping something already on the board.
+   *
+   * With an ink tool chosen, touch draws - right on a tablet, where the finger
+   * IS the pen. But it made everything on the board untouchable: tapping a note
+   * to write in it left a dot on the note, and the only way to reach anything
+   * was Select tool, tap, and back again. On a phone that is most of the work.
+   */
+  const tapped = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    const pagesWere = a.store.doc.pages;
+    a.store.doc.pages = [];
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.penSeenThisSession = false;
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { clientX: rect.left + p.x, clientY: rect.top + p.y }; };
+    const mk = (x, y, buttons, type) => ({ pointerId: 7, pointerType: type || 'touch', button: 0,
+      buttons, shiftKey: false, altKey: false, pressure: 0.5, ...at(x, y) });
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+
+    a.store.add({ id: 'tap-note', type: 'note', x: 5000, y: 5000, w: 200, h: 200,
+      color: '#ffd94a', text: 'tap me', rotation: 0, align: 'center', font: 'ui' });
+    a.store.add({ id: 'tap-img', type: 'image', x: 5400, y: 5000, w: 200, h: 150, rotation: 0,
+      src: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', name: 'x' });
+
+    a.setTool('pen');
+    const inkBefore = strokes();
+
+    // a finger TAP on the note
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(5100, 5100, 1));
+    it.onMove(mk(5101, 5100, 1));
+    it.onUp(mk(5101, 5100, 0));
+    const r = {};
+    r.noteNoInk = strokes() === inkBefore;
+    r.noteOpened = a.textEditor.active && a.textEditor.target && a.textEditor.target.id === 'tap-note';
+    a.textEditor.cancel();
+
+    // a finger TAP on the picture: picked up, not written on
+    a.setTool('pen'); it.action = null; it.pointers.clear();
+    it.onDown(mk(5500, 5060, 1));
+    it.onUp(mk(5500, 5060, 0));
+    r.imgNoInk = strokes() === inkBefore;
+    r.imgSelected = a.selected.length === 1 && a.selected[0].id === 'tap-img';
+
+    // a finger DRAG across the note still draws - it is a stroke, not a tap
+    a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
+    it.onDown(mk(5020, 5020, 1));
+    for (let i = 1; i <= 8; i++) it.onMove(mk(5020 + i * 20, 5020 + i * 10, 1));
+    it.onUp(mk(5180, 5100, 0));
+    r.dragStillDraws = strokes() === inkBefore + 1;
+
+    // a PEN tap on the note marks it, as a stylus should
+    a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
+    a.notePenSeen();
+    it.onDown(mk(5100, 5100, 1, 'pen'));
+    it.onUp(mk(5100, 5100, 0, 'pen'));
+    r.penStillMarks = strokes() === inkBefore + 2;
+
+    // a finger tap on bare board is still a dot
+    a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
+    it.onDown(mk(6200, 6200, 1));
+    it.onUp(mk(6200, 6200, 0));
+    r.bareBoardStillDots = strokes() === inkBefore + 3;
+
+    a.store.doc.pages = pagesWere;
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    a.penSeenThisSession = false; a.setTool('select'); a.setSelection([]);
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('a finger tap on a note opens it instead of leaving a dot on it',
+    tapped.noteNoInk && tapped.noteOpened);
+  check('and a tap on a picture picks the picture up', tapped.imgNoInk && tapped.imgSelected);
+  check('while dragging a finger across them still draws, because that is a stroke',
+    tapped.dragStillDraws);
+  check('a stylus tapping the same note still marks it - this is a rule about fingers',
+    tapped.penStillMarks);
+  check('and a finger tap on bare board is still a dot', tapped.bareBoardStillDots);
+
   /* ---- ruler ---- */
   await js(`window.app.command('ruler'); window.app.ruler.angle = 0.35;`);
   check('ruler toggles', await js(`return window.app.ruler.visible;`));
@@ -6517,6 +6601,63 @@ module.exports.run = async (win, app) => {
     String(app.commandLine.getSwitchValue('disable-features') || '')
       .includes('CalculateNativeWinOcclusion'),
     app.commandLine.getSwitchValue('disable-features'));
+
+  /*
+   * The readouts on a phone, with and without the keyboard up.
+   *
+   * This one needs a real coarse pointer, so it drives Chromium's own device
+   * emulation rather than just making the window small - none of the touch CSS
+   * applies otherwise, and the bug it guards against was invisible on a desktop
+   * for exactly that reason.
+   *
+   * What went wrong: the short-screen rule sends the zoom and page readouts to
+   * the TOP of the board, setting `top` and clearing `bottom`. A later
+   * touch-only block set `bottom` again and said nothing about `top`. An
+   * absolutely positioned box given both edges does not move - it stretches. On
+   * a phone with the keyboard open the zoom readout became a 276-pixel white
+   * column down the side of the screen.
+   */
+  const onPhone = [];
+  try {
+    win.webContents.debugger.attach('1.3');
+    const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
+    for (const [w, h, label] of [[412, 915, 'phone'], [412, 430, 'phone with keyboard']]) {
+      await cdp('Emulation.setDeviceMetricsOverride',
+        { width: w, height: h, deviceScaleFactor: 2.625, mobile: true });
+      await cdp('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+      await sleep(450);
+      onPhone.push(await js(`
+        const out = { label: '${label}', coarse: matchMedia('(pointer: coarse)').matches };
+        for (const id of ['zoombar', 'pagebar']) {
+          const el = document.getElementById(id);
+          const r = el.getBoundingClientRect();
+          out[id] = { h: Math.round(r.height), top: Math.round(r.top) };
+        }
+        return out;
+      `));
+    }
+    await cdp('Emulation.clearDeviceMetricsOverride');
+    await cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
+    win.webContents.debugger.detach();
+    await sleep(300);
+  } catch (e) {
+    onPhone.push({ label: 'emulation unavailable: ' + e.message });
+  }
+  const coarseEverywhere = onPhone.every((p) => p.coarse === true);
+  const shortEverywhere = onPhone.every((p) => p.zoombar && p.zoombar.h < 70 && p.pagebar.h < 70);
+  // With the keyboard up there is no room at the bottom, so the readout is
+  // meant to move to the TOP of the board. Measured from the box itself:
+  // getComputedStyle reports a resolved pixel value for `top` even when the
+  // stylesheet said `auto`, so it cannot answer this question.
+  const withKeyboard = onPhone.find((p) => p.label === 'phone with keyboard');
+  const movedToTheTop = !!withKeyboard && withKeyboard.zoombar.top < 120;
+  check('a phone really is treated as a touch device', coarseEverywhere,
+    onPhone.map((p) => p.label + ':' + p.coarse).join(' '));
+  check('the zoom and page readouts stay their own size, keyboard open or not',
+    shortEverywhere,
+    onPhone.map((p) => `${p.label} zoom ${p.zoombar && p.zoombar.h} page ${p.pagebar && p.pagebar.h}`).join(' | '));
+  check('and the zoom readout moves to the top when the keyboard takes the bottom',
+    movedToTheTop, `top ${withKeyboard && withKeyboard.zoombar.top}`);
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);

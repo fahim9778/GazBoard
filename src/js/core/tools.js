@@ -533,7 +533,11 @@ export class Interaction {
 
     switch (a.type) {
       case 'laser': break;            // the trail fades on its own
-      case 'draw': this.finishStroke(a); break;
+      case 'draw':
+        // A finger TAP on something already there means "I want that thing",
+        // not "leave a dot on it". See tappedAnObject().
+        if (!this.tappedAnObject(a, e)) this.finishStroke(a);
+        break;
       case 'erase': this.finishErase(a); break;
       case 'marquee': {
         const box = normalizeBox({ x: a.start.x, y: a.start.y, w: a.cur.x - a.start.x, h: a.cur.y - a.start.y });
@@ -740,6 +744,63 @@ export class Interaction {
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
     this.surface.wet = obj;
     this.action = act;
+  }
+
+  /**
+   * Did this stroke turn out to be a finger tapping something?
+   *
+   * With an ink tool chosen, touching the board draws - which is right, and is
+   * how a whiteboard has to behave on a tablet where the finger is the pen.
+   * But it made the objects on the board untouchable. Tapping a note to write
+   * in it left a dot on the note instead, and the only way to get at anything
+   * was to go to the toolbar, choose Select, tap the thing, and go back. On a
+   * phone, where the toolbar is already a scroll away, that is most of the
+   * work of using the app.
+   *
+   * A tap is not a stroke. It has no length: it goes down and comes up in the
+   * same place, which no deliberate mark does except a full stop - and a full
+   * stop landing exactly on top of an existing object is rare enough, and
+   * cheap enough to redo, to be worth trading.
+   *
+   * A PEN is left alone. Someone holding a stylus over a note and tapping it
+   * means to mark it; that is what a stylus is for, and pens can reach the
+   * Select tool without losing their place. This is a rule about fingers.
+   *
+   * Returns true when it dealt with the tap, and the caller should not turn it
+   * into ink.
+   */
+  tappedAnObject(a, e) {
+    if (e.pointerType !== 'touch') return false;
+    const pts = a.obj && a.obj.points;
+    if (!pts || !pts.length) return false;
+
+    // No length: every point within a few pixels of where it started.
+    const z = this.surface.cam.z;
+    const slop = TAP_SLOP / z;
+    const p0 = pts[0];
+    for (const q of pts) if (Math.hypot(q.x - p0.x, q.y - p0.y) > slop) return false;
+
+    const hit = pick(this.store, p0, 8 / z);
+    if (!hit) return false;                       // tapped bare board: a dot is a dot
+
+    // Throw the mark away before it becomes an object - it never reaches the
+    // board, so there is nothing in the undo history to explain either.
+    this.surface.wet = null;
+    this.action = null;
+    this.actionId = null;
+
+    if (hit.locked) { this.app.setSelection([hit.id]); this.app.hintLocked(); return true; }
+
+    this.app.setSelection([hit.id]);
+    // Something with words in it opens for writing; everything else is simply
+    // picked up, which is what a tap on a picture should do.
+    if (['note', 'text', 'shape', 'table'].includes(hit.type)) {
+      this.app.armToolRestore();
+      this.app.setTool('select');
+      this.app.beginTextEdit(hit);
+    }
+    this.surface.invalidate();
+    return true;
   }
 
   finishStroke(a) {
