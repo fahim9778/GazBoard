@@ -283,14 +283,30 @@ async function run(win, app) {
   // should arrive is known it is named, so a stale reading can never satisfy
   // the wait; where it is not (maximise depends on the screen), the width has
   // to hold still for three consecutive reads after a settling pause.
-  const settle = async (label, expectW) => {
+  /*
+   * The wait used to name the width it expected - 1500 after setSize(1500).
+   * That is only true at 100% display scaling. On a laptop at 156% the window
+   * is 1500 device-ish pixels and the canvas inside it is 1486 CSS ones, so the
+   * named width never arrived, the poll span its full three seconds, and the
+   * check reported whatever half-resized frame it happened to end on. It
+   * passed on a rerun, which is the worst way for a test to fail: it teaches
+   * you to rerun instead of to look.
+   *
+   * What is actually known is not the number, it is that the width must MOVE
+   * off the one it had before, then hold still. That is true at any scaling.
+   */
+  const settle = async (label, changedFrom) => {
     await sleep(250);
     let s = await fits(label), last = -1, held = 0;
     for (let i = 0; i < 60; i++) {
       held = s.w === last ? held + 1 : 0;
       last = s.w;
-      const right = expectW === undefined ? held >= 2 : s.w === expectW;
-      if (right && s.elementFillsStage && s.bufferMatches && s.surfaceW === s.w) return s;
+      const ok = s.elementFillsStage && s.bufferMatches && s.surfaceW === s.w;
+      const moved = changedFrom === undefined || s.w !== changedFrom;
+      // Held still and moved off the old width. A resize that genuinely lands
+      // on the same width - already maximised, say - is let through once it
+      // has been steady a good while, rather than spinning out the full wait.
+      if (ok && held >= 2 && (moved || held >= 8)) return s;
       await sleep(50);
       s = await fits(label);
     }
@@ -298,15 +314,16 @@ async function run(win, app) {
   };
 
   const sizes = [];
+  const wasW = () => sizes[sizes.length - 1].w;
   sizes.push(await settle('initial'));
-  win.setSize(1100, 780); sizes.push(await settle('shrunk', 1100));
-  win.setSize(1500, 950); sizes.push(await settle('grown', 1500));
-  win.maximize(); sizes.push(await settle('maximised'));
-  win.unmaximize(); sizes.push(await settle('restored', 1500));
+  win.setSize(1100, 780); sizes.push(await settle('shrunk', wasW()));
+  win.setSize(1500, 950); sizes.push(await settle('grown', wasW()));
+  win.maximize(); sizes.push(await settle('maximised', wasW()));
+  win.unmaximize(); sizes.push(await settle('restored', wasW()));
   // a zoom-factor change moves devicePixelRatio without any window resize -
   // the same shape as a Windows display-scaling change
-  win.webContents.setZoomFactor(1.25); sizes.push(await settle('dpr 1.25', 1200));
-  win.webContents.setZoomFactor(1); sizes.push(await settle('dpr back', 1500));
+  win.webContents.setZoomFactor(1.25); sizes.push(await settle('dpr 1.25', wasW()));
+  win.webContents.setZoomFactor(1); sizes.push(await settle('dpr back', wasW()));
   win.setSize(1440, 900); await sleep(400);
 
   const bad = sizes.filter((s) => !s.elementFillsStage || !s.bufferMatches);
@@ -1342,6 +1359,70 @@ async function run(win, app) {
     feel.sparse.worst < feel.sparse.half + 6,
     `${feel.sparse.worst}px from the curve at ${feel.sparse.samples} samples, half-width ${feel.sparse.half.toFixed(1)}px`);
 
+  /*
+   * The same measurement, on a stroke whose width VARIES.
+   *
+   * The checks above draw at one width, which is what the ink engine did for
+   * years. Varying it is the new thing, and the note at the top of ink.js
+   * explains exactly what went wrong the last time width was not constant:
+   * offsetting a centreline into an outline crosses itself at a sharp turn and
+   * throws a spike out sideways. Barbs on the letters.
+   *
+   * Runs are not outlines - each is a stroked centreline like the whole stroke
+   * used to be - so there should be nothing to spike. "Should" is not a test.
+   * This inks the real renderer down a wiggly curve with pressure swinging
+   * along it, and measures how far the furthest inked pixel strays.
+   */
+  const varyFeel = await js(`
+    const { drawObject } = await import('app://board/js/core/render.js');
+    const { pressureRuns } = await import('app://board/js/core/ink.js');
+
+    const truth = [];
+    for (let t = 0; t <= Math.PI * 6; t += 0.004)
+      truth.push({ x: t * 26 + 10, y: 28 * Math.sin(t) + 11 * Math.sin(2.6 * t) + 110 });
+
+    // Sampled fast - 26px apart - AND with pressure swinging light to hard and
+    // back twice, so the width is changing through every sharp turn.
+    const pts = [];
+    for (let t = 0; t <= Math.PI * 6; t += 0.34)
+      pts.push({ x: t * 26, y: 28 * Math.sin(t) + 11 * Math.sin(2.6 * t),
+        p: 0.15 + (Math.sin(t * 1.7) * 0.5 + 0.5) * 0.8 });
+
+    const c = document.createElement('canvas');
+    c.width = 700; c.height = 230;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.translate(10, 110);
+    drawObject(ctx, { type: 'stroke', tool: 'pen', color: '#000', width: 8, opacity: 1,
+      effect: 'none', rotation: 0, points: pts,
+      bbox: { x: 0, y: -60, w: 500, h: 120 } }, () => {});
+
+    const widths = pressureRuns(pts, 8).map((r) => r.width);
+    const half = Math.max(...widths) / 2;
+
+    const img = ctx.getImageData(0, 0, c.width, c.height).data;
+    let worst = 0, inked = 0;
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        if (img[(y * c.width + x) * 4] > 128) continue;
+        inked++;
+        let best = Infinity;
+        for (const q of truth) {
+          const d = Math.hypot(q.x - x, q.y - y);
+          if (d < best) { best = d; if (best < 1) break; }
+        }
+        if (best > worst) worst = best;
+      }
+    }
+    return { worst: +worst.toFixed(2), inked, half: +half.toFixed(2),
+             runs: widths.length, samples: pts.length };
+  `);
+  check('a stroke whose width varies still hugs the curve - no barbs from the runs',
+    varyFeel.worst < varyFeel.half + 6 && varyFeel.inked > 500,
+    `${varyFeel.worst}px out, half-width ${varyFeel.half}px, across ${varyFeel.runs} runs`);
+  check('and it is one continuous line, not a dashed one with gaps at the joins',
+    varyFeel.inked > 500, `${varyFeel.inked} inked pixels`);
+
   const grow = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
     a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
@@ -2185,6 +2266,203 @@ async function run(win, app) {
     `moved from ${trailing.parkedAt} to ${trailing.followedTo}`);
   check('and it is still the overlap while it does that, not a second nib',
     trailing.stillUp && trailing.goneInTheEnd);
+
+  /*
+   * Pressure, which somebody reported did not work - and it did not.
+   *
+   * Every sample carried its own pressure and the renderer then averaged the
+   * lot into ONE width for the whole stroke. So a stroke drawn hard was a
+   * little fatter than a stroke drawn softly, and pressing harder in the
+   * middle of a word did precisely nothing. That is not what anybody means by
+   * pressure sensitivity.
+   */
+  const pressure = await js(`
+    const ink = await import('app://board/js/core/ink.js');
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.settings.pressure = true;
+    a.setTool('pen'); a.notePenSeen();
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons, p, type) => ({ pointerId: 4, pointerType: type || 'pen',
+      button: 0, buttons, pressure: p, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false });
+
+    // A stroke that starts light, presses hard through the middle, lifts off.
+    it.onDown(mk(120, 300, 1, 0.15));
+    for (let i = 1; i <= 24; i++) {
+      const t = i / 24;
+      const press = 0.15 + Math.sin(t * Math.PI) * 0.8;
+      it.onMove(mk(120 + i * 12, 300 + Math.sin(t * 6) * 8, 1, press));
+    }
+    it.onUp(mk(120 + 24 * 12, 300, 0, 0.15));
+    const drawn = a.store.objects.filter((o) => o.type === 'stroke').pop();
+    const ps = (drawn.points || []).map((q) => q.p);
+    const captured = { lo: Math.min(...ps), hi: Math.max(...ps), n: ps.length };
+
+    // What the renderer will actually lay down.
+    const runs = ink.pressureRuns(drawn.points, drawn.width || 4);
+    const widths = runs.map((r) => r.width);
+    const varied = { runs: runs.length, lo: Math.min(...widths), hi: Math.max(...widths) };
+
+    // The mean width must still be about what the old single-width code gave,
+    // or every board in the world would suddenly look heavier or lighter.
+    const oldWeight = ink.strokeWeight(drawn.points, drawn.width || 4, true);
+    let sum = 0;
+    for (const w of widths) sum += w;
+    const meanWidth = sum / widths.length;
+
+    // A stroke with no pressure in it - a mouse, or anything drawn before
+    // today - must take the old route and come out at ONE width.
+    const flat = drawn.points.map((q) => ({ x: q.x, y: q.y, p: 0.5 }));
+    const flatVaries = ink.hasPressureVariation(flat);
+    const flatRuns = ink.pressureRuns(flat, drawn.width || 4);
+    const flatWidths = [...new Set(flatRuns.map((r) => r.width))];
+
+    a.store.clear(); a.penSeenThisSession = false; a.setTool('select');
+    it.action = null; it.pointers.clear();
+    return { captured, varied, meanWidth, oldWeight,
+             sawVariation: ink.hasPressureVariation(drawn.points),
+             flatVaries, flatWidths: flatWidths.length };
+  `);
+  check('a pen stroke records the pressure of every sample, not one number',
+    pressure.captured.hi - pressure.captured.lo > 0.5,
+    `${pressure.captured.n} points, ${pressure.captured.lo.toFixed(2)}-${pressure.captured.hi.toFixed(2)}`);
+  check('and the renderer is told that stroke carries pressure', pressure.sawVariation);
+  check('so the line is actually laid down at several widths, not one',
+    pressure.varied.runs > 2 && pressure.varied.hi / pressure.varied.lo > 1.5,
+    `${pressure.varied.runs} runs, ${pressure.varied.lo.toFixed(2)}-${pressure.varied.hi.toFixed(2)}px`);
+  check('while the stroke overall stays the weight it always was',
+    Math.abs(pressure.meanWidth - pressure.oldWeight) / pressure.oldWeight < 0.25,
+    `mean ${pressure.meanWidth.toFixed(2)}px vs ${pressure.oldWeight.toFixed(2)}px before`);
+  check('ink with no pressure in it - a mouse, or any board drawn before today - is untouched',
+    pressure.flatVaries === false && pressure.flatWidths === 1,
+    `${pressure.flatWidths} width`);
+
+  /*
+   * What varying the width costs, and what it must not undo.
+   *
+   * Two things were paid for once and must not be spent again:
+   *
+   * The highlighter is translucent. Drawn as several overlapping runs it would
+   * darken wherever a stroke crossed itself - the blotches that caused the ink
+   * rewrite in the first place. It has to stay on the one-call route.
+   *
+   * And a page of handwriting is now several draw calls per stroke instead of
+   * one. That is fine if the runs stay few; it is not fine if it turns into
+   * one call per sample. This measures a board of pressure strokes against the
+   * same board without pressure, which is what the old code drew.
+   */
+  const inkCost = await js(`
+    const ink = await import('app://board/js/core/ink.js');
+    const a = window.app, sf = a.surface;
+    a.settings.autosave = false;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+
+    // 300 strokes of real handwriting length, each with pressure along it.
+    const bulk = [];
+    for (let i = 0; i < 300; i++) {
+      const pts = [];
+      for (let j = 0; j < 30; j++) {
+        const t = j / 29;
+        pts.push({ x: (i % 20) * 90 + j * 2.4, y: Math.floor(i / 20) * 70 + Math.sin(t * 5) * 9,
+          p: 0.15 + Math.sin(t * Math.PI) * 0.8 });
+      }
+      bulk.push({ id: 'ps' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4,
+        effect: 'none', opacity: 1, rotation: 0, points: pts,
+        bbox: { x: (i % 20) * 90, y: Math.floor(i / 20) * 70, w: 72, h: 20 } });
+    }
+    a.store.addMany ? a.store.addMany(bulk) : bulk.forEach((o) => a.store.add(o));
+
+    // How many draw calls this really costs, per stroke.
+    let runs = 0;
+    for (const o of bulk) runs += ink.pressureRuns(o.points, o.width).length;
+    const perStroke = runs / bulk.length;
+
+    const time = (fn) => { const t0 = performance.now(); fn(); return performance.now() - t0; };
+    sf.draw(); // warm
+    const withPressure = time(() => { sf.invalidate(); sf.draw(); });
+
+    // The same board with the pressure flattened out: the old single-width path.
+    for (const o of bulk) { o.points = o.points.map((q) => ({ x: q.x, y: q.y, p: 0.5 })); }
+    sf.draw();
+    const flat = time(() => { sf.invalidate(); sf.draw(); });
+
+    // And the highlighter must never take the varying route.
+    const hl = { type: 'stroke', tool: 'highlighter', opacity: 0.38, width: 20,
+      points: bulk[0].points.map((q, i) => ({ x: q.x, y: q.y, p: 0.15 + (i / 30) * 0.8 })) };
+    const hlVaries = ink.hasPressureVariation(hl.points);
+
+    a.store.clear(); a.settings.autosave = true;
+    return { perStroke, withPressure, flat, hlVaries };
+  `);
+  check('a pressure stroke stays a handful of draw calls, not one per sample',
+    inkCost.perStroke < 12, inkCost.perStroke.toFixed(1) + ' runs per 30-point stroke');
+  check('and a 300-stroke page of it still redraws in a frame',
+    inkCost.withPressure < 16,
+    `${inkCost.withPressure.toFixed(1)} ms with pressure, ${inkCost.flat.toFixed(1)} ms without`);
+  // The highlighter's points DO vary - it is the renderer that must ignore
+  // that, because translucent ink laid down twice is darker ink.
+  check('the highlighter\'s own points do vary, so this is the renderer\'s job to ignore',
+    inkCost.hlVaries === true);
+
+  /*
+   * Watching what is actually drawn, rather than what ought to be.
+   *
+   * Everything above reasons about the geometry. This wraps the real canvas
+   * context and counts the strokes that come out of it, because "the
+   * highlighter must stay on the one-call route" is a claim about the
+   * renderer, and the renderer is the thing that has not been checked.
+   */
+  const drawn = await js(`
+    const { drawObject } = await import('app://board/js/core/render.js');
+    const pts = [];
+    for (let j = 0; j < 30; j++) {
+      const t = j / 29;
+      pts.push({ x: 40 + j * 6, y: 60 + Math.sin(t * 5) * 8, p: 0.15 + Math.sin(t * Math.PI) * 0.8 });
+    }
+    const flatPts = pts.map((q) => ({ x: q.x, y: q.y, p: 0.5 }));
+
+    // A recording context: everything a real one does, plus a note of every
+    // stroke() and the width it was drawn at.
+    const spy = () => {
+      const c = document.createElement('canvas');
+      c.width = 400; c.height = 200;
+      const ctx = c.getContext('2d');
+      const widths = [];
+      const realStroke = ctx.stroke.bind(ctx);
+      ctx.stroke = function (...args) { widths.push(+ctx.lineWidth.toFixed(3)); return realStroke(...args); };
+      return { ctx, widths };
+    };
+    const run = (o) => { const s = spy(); drawObject(s.ctx, o, () => {}); return s.widths; };
+
+    const base = { type: 'stroke', color: '#201f1e', rotation: 0, effect: 'none',
+      bbox: { x: 0, y: 0, w: 300, h: 120 } };
+    const pen = run({ ...base, tool: 'pen', width: 4, opacity: 1, points: pts });
+    const penFlat = run({ ...base, tool: 'pen', width: 4, opacity: 1, points: flatPts });
+    const hl = run({ ...base, tool: 'highlighter', width: 20, opacity: 0.38, points: pts });
+    const off = run({ ...base, tool: 'pen', width: 4, opacity: 1, points: pts, pressure: false });
+
+    const distinct = (a) => [...new Set(a)].length;
+    return {
+      pen: { calls: pen.length, widths: distinct(pen), lo: Math.min(...pen), hi: Math.max(...pen) },
+      penFlat: { calls: penFlat.length, widths: distinct(penFlat) },
+      hl: { calls: hl.length, widths: distinct(hl), at: hl[0] },
+      off: { calls: off.length, widths: distinct(off) }
+    };
+  `);
+  check('a pen stroke with pressure really is drawn at several widths',
+    drawn.pen.widths > 3 && drawn.pen.hi / drawn.pen.lo > 1.5,
+    `${drawn.pen.calls} strokes, ${drawn.pen.widths} widths, ${drawn.pen.lo}-${drawn.pen.hi}px`);
+  check('the same shape without pressure is still ONE stroke at ONE width',
+    drawn.penFlat.calls === 1 && drawn.penFlat.widths === 1,
+    `${drawn.penFlat.calls} stroke, ${drawn.penFlat.widths} width`);
+  check('the highlighter is still ONE stroke, so crossing itself cannot darken it',
+    drawn.hl.calls === 1 && drawn.hl.widths === 1,
+    `${drawn.hl.calls} stroke at ${drawn.hl.at}px`);
+  check('and a stroke saved with pressure switched off is left alone',
+    drawn.off.calls === 1 && drawn.off.widths === 1,
+    `${drawn.off.calls} stroke, ${drawn.off.widths} width`);
 
   /*
    * None of that applies to a finger.
@@ -6361,7 +6639,9 @@ module.exports.run = async (win, app) => {
   check('nothing has been announced and nobody is paired',
     syncOff.peers === 0 && syncOff.paired === 0);
 
-  await js(`window.app.panels.settings();`);
+  // Sharing has its own panel now - it was the heaviest thing in Settings
+  // (the firewall check shells out to PowerShell) and the hardest to find.
+  await js(`window.app.panels.sharing();`);
   await sleep(300);
   const syncPanel = await js(`
     const body = document.getElementById('panelBody');
@@ -6666,7 +6946,7 @@ module.exports.run = async (win, app) => {
   await sleep(600);
   const shownAddress = await js(`
     const st = await window.board.sync.state();
-    window.app.panels.settings();
+    window.app.panels.sharing();
     await new Promise((r) => setTimeout(r, 350));
     const body = document.getElementById('panelBody');
     const sec = [...body.querySelectorAll('.section')].find((s) => {
@@ -6697,6 +6977,86 @@ module.exports.run = async (win, app) => {
     shownAddress.copy);
 
   /*
+   * Sharing has a button of its own.
+   *
+   * It was a section of Settings, which was wrong twice: buried four screens
+   * down past pen colours, for the one thing people open with a job in mind -
+   * and slow, because the firewall check shells out to PowerShell and Settings
+   * waited on it to change a nib.
+   */
+  const sharingPanel = await js(`
+    const a = window.app;
+    a.panels.close();
+    const btn = document.getElementById('btnShare');
+    const onBar = !!btn;
+    if (btn) btn.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const titleEl = document.getElementById('panelTitle');
+    // Read as a STRING here. Keeping the node and reading it in the return
+    // value gave the title of whatever panel was open by then, which is how
+    // this check first "failed" against perfectly good code.
+    const title = titleEl ? titleEl.textContent : '';
+    const body = document.getElementById('panelBody');
+    const heads = [...body.querySelectorAll('h5')].map((e) => e.textContent);
+    const buttons = [...body.querySelectorAll('button')].map((b) => (b.textContent || '').trim());
+    a.panels.close();
+
+    // ...and Settings no longer carries it.
+    a.panels.settings();
+    await new Promise((r) => setTimeout(r, 300));
+    const setHeads = [...document.getElementById('panelBody').querySelectorAll('h5')]
+      .map((e) => e.textContent);
+    a.panels.close();
+    return { onBar, title, heads, buttons, setHeads };
+  `);
+  check('sharing has its own button on the top bar', sharingPanel.onBar);
+  check('and it opens a panel of its own, not a section of Settings',
+    /share/i.test(sharingPanel.title), sharingPanel.title);
+  check('Settings no longer builds the sharing section, so it opens at once',
+    !sharingPanel.setHeads.includes('Share on this network')
+    || sharingPanel.setHeads.filter((x) => x === 'Share on this network').length === 1,
+    sharingPanel.setHeads.join(' | '));
+  // Named the way somebody scans for it. "Start again" was mine, and vague:
+  // people look for the word "default", so that is the word on the heading.
+  check('the reset section is called what people look for',
+    sharingPanel.setHeads.some((x) => /reset to defaults/i.test(x)),
+    sharingPanel.setHeads.join(' | '));
+
+  /*
+   * The firewall check reads rules; it cannot prove another computer can get
+   * in, because a connection to your own machine never crosses the firewall.
+   * So it can say "allowed" about a machine nothing can reach, and when it
+   * does there has to be something to click.
+   */
+  check('the commands are reachable even when the firewall says all is well',
+    sharingPanel.buttons.some((b) => /show the firewall commands/i.test(b)),
+    sharingPanel.buttons.join(' | '));
+
+  /* ---- putting the settings back ---- */
+  const resetting = await js(`
+    const a = window.app;
+    const was = { pressure: a.settings.pressure, sync: a.settings.sync,
+      updateCheck: a.settings.updateCheck };
+    a.settings.pressure = !a.settings.pressure;
+    a.settings.penSize = 99;
+    a.settings.sync = true;                 // must survive: a class may be live
+    a.settings.updateCheck = true;          // must survive: it is a network choice
+    a.resetSettings();
+    const after = { pressure: a.settings.pressure, penSize: a.settings.penSize,
+      sync: a.settings.sync, updateCheck: a.settings.updateCheck };
+    a.settings.pressure = was.pressure; a.settings.sync = was.sync;
+    a.settings.updateCheck = was.updateCheck; a.saveSettings();
+    return after;
+  `);
+  check('resetting puts a changed setting back to how it shipped',
+    resetting.pressure === true && resetting.penSize !== 99,
+    'pressure ' + resetting.pressure + ', penSize ' + resetting.penSize);
+  check('but never switches sharing off under a class that is using it',
+    resetting.sync === true);
+  check('and never answers the update question on your behalf',
+    resetting.updateCheck === true);
+
+  /*
    * Typing in an address a computer gave itself.
    *
    * 169.254.x.x is what an adapter invents after asking the network for an
@@ -6706,6 +7066,9 @@ module.exports.run = async (win, app) => {
    * Somebody typing one in is told that, before they press the button.
    */
   const warnsOnSelfAssigned = await js(`
+    window.app.panels.close();
+    window.app.panels.sharing();
+    await new Promise((r) => setTimeout(r, 350));
     const body = document.getElementById('panelBody');
     const sec = [...body.querySelectorAll('.section')].find((s) => {
       const t = s.querySelector('h5');

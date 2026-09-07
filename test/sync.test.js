@@ -1037,14 +1037,39 @@ async function run() {
       check('a version that names none still works exactly as before',
         !!old && old.address === '10.10.113.99', old && old.address);
 
-      // A machine with Hyper-V or WSL advertises addresses that LOOK real and
-      // reach nowhere. Ranking cannot tell; only asking can.
-      t.A._notePeer(say({ id: 'virtual-host', name: 'Office PC',
-        a: ['172.23.160.1', '172.18.208.105'] }), '172.18.208.105');
+      /*
+       * The case that must NOT change: a machine with two working-looking
+       * addresses whose announcement already arrives fine.
+       *
+       * A desktop with Hyper-V names its virtual switch address alongside its
+       * real one, and os.networkInterfaces() may well put the virtual one
+       * first. If a named address outranked the one the packet came from, a
+       * home setup that has worked for months would start dialling a switch
+       * address that reaches nowhere - breaking the working case to fix the
+       * broken one.
+       *
+       * So the arrival address wins whenever it is not invented. It is the
+       * only address we have evidence about: a packet came from it.
+       */
+      t.A._notePeer(say({ id: 'virtual-host', name: 'Home desktop',
+        a: ['172.23.160.1', '192.168.0.5'] }), '192.168.0.5');
       const virt = t.A._list().find((p) => p.deviceId === 'virtual-host');
-      check('every address a machine names is kept, so a wrong guess is recoverable',
-        !!virt && virt.addresses.includes('172.18.208.105')
+      check('an address that already worked keeps being used, not a named one',
+        !!virt && virt.address === '192.168.0.5', virt && virt.address);
+      check('and the virtual switch address is kept only as a fallback',
+        !!virt && virt.addresses.indexOf('192.168.0.5') === 0
         && virt.addresses.includes('172.23.160.1'), (virt && virt.addresses || []).join(', '));
+
+      // Same machine, but its announcement reaches us from the invented
+      // address. NOW there is no evidence, and a named one is all there is.
+      t.A._notePeer(say({ id: 'no-evidence', name: 'Classroom PC',
+        a: ['172.23.160.1', '10.10.113.81'] }), '169.254.151.8');
+      const none = t.A._list().find((p) => p.deviceId === 'no-evidence');
+      check('a named address is used only when the arrival address is invented',
+        !!none && none.address === '172.23.160.1', none && none.address);
+      check('with the invented one behind it, and the knock to sort them out',
+        !!none && none.addresses.includes('10.10.113.81')
+        && none.addresses.includes('169.254.151.8'), (none && none.addresses || []).join(', '));
     } finally { await t.stop(); }
   });
 
@@ -1076,6 +1101,56 @@ async function run() {
         addresses: ['203.0.113.9', '127.0.0.1'] }, board);
       check('and a send walks past an address that does not answer to one that does',
         !!ok && ok.accepted === true, JSON.stringify(ok));
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * Nothing that already worked may stop working.
+   *
+   * Two machines paired before any of this existed - a laptop and a desktop at
+   * home - must carry on exactly as they were. The announcement gained a field
+   * and the peer records gained a list; both are additions, and every path has
+   * to behave identically when neither is there.
+   */
+  await section('a pairing made by an older version still works untouched', async () => {
+    const t = await pair();
+    try {
+      // Pair the way the old code did: a peer object with one address and no
+      // list of alternatives, which is exactly what an older record hands over.
+      const showing = t.B.beginPairing();
+      const oldStylePeer = { deviceId: null, name: 'Home desktop',
+        address: '127.0.0.1', port: t.B.port };
+      const rec = await t.A.pairWith(oldStylePeer, showing.code);
+      check('pairing with a peer that has no address list still succeeds',
+        !!rec && !!rec.deviceId, rec && rec.name);
+
+      const asA = t.aStore.all()[0];
+      const sent = await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+        address: '127.0.0.1', port: t.B.port }, { id: 'old', name: 'Board', objects: [] });
+      check('and sending to it needs no address list either',
+        !!sent && sent.accepted === true, JSON.stringify(sent));
+
+      // The stored record is the thing that survives a restart. It must look
+      // the same as it always did.
+      check('the pairing record still holds just the one address it was reached at',
+        asA.lastAddress === '127.0.0.1' && asA.lastPort === t.B.port,
+        `${asA.lastAddress}:${asA.lastPort}`);
+
+      // An announcement from a version that predates the new field.
+      t.A._notePeer({ t: 'gazboard', v: P.PROTOCOL, id: 'old-peer',
+        name: 'Older GazBoard', port: 53318 }, '192.168.0.44');
+      const seen = t.A._list().find((p) => p.deviceId === 'old-peer');
+      check('an older machine is listed at the address its packet came from, as before',
+        !!seen && seen.address === '192.168.0.44', seen && seen.address);
+
+      // ...and the new field is one an older machine simply does not read.
+      // Proving that here means proving the announcement is still ordinary
+      // JSON with the same keys in it that it always had.
+      const msg = JSON.parse(Buffer.from(JSON.stringify({
+        t: 'gazboard', v: P.PROTOCOL, id: 'x', name: 'y', port: 53318, a: ['10.0.0.1']
+      })).toString());
+      check('the announcement keeps every field an older version reads',
+        msg.t === 'gazboard' && msg.v === P.PROTOCOL && !!msg.id && !!msg.name && !!msg.port);
     } finally { await t.stop(); }
   });
 

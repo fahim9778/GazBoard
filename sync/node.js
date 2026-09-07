@@ -129,12 +129,24 @@ function createSyncNode(opts) {
    * Capped, because this has to stay inside one UDP packet, and a machine with
    * a stack of virtual adapters can have a surprising number of them.
    */
+  let advertCache = { at: 0, list: [] };
   function advertisedAddresses() {
+    // Announcements go out every few seconds and this reads the network
+    // interfaces, which is a system call. Nothing about a machine's addresses
+    // changes faster than a person can plug in a cable, so a short cache costs
+    // nothing and saves waking the OS twenty times a minute for the same
+    // answer. Short enough that moving from wifi to a cable is still picked up
+    // within a couple of announcements.
+    const now = Date.now();
+    if (advertCache.at && now - advertCache.at < 10000) return advertCache.list;
+    let list = [];
     try {
-      return localAddresses().map((a) => a.address)
+      list = localAddresses().map((a) => a.address)
         .filter((a) => !isSelfAssigned(a))
         .slice(0, 6);
-    } catch { return []; }
+    } catch { list = []; }
+    advertCache = { at: now, list };
+    return list;
   }
 
   /*
@@ -169,12 +181,34 @@ function createSyncNode(opts) {
    * are dropped so the list stays short enough to try one by one.
    */
   function candidateAddresses(msg, arrivedFrom) {
-    const named = Array.isArray(msg && msg.a) ? msg.a : [];
-    const all = [...named, arrivedFrom]
-      .filter((a) => typeof a === 'string' && /^[0-9.]{7,15}$/.test(a));
-    const real = all.filter((a) => !isSelfAssigned(a));
-    const invented = all.filter(isSelfAssigned);
-    return [...new Set([...real, ...invented])].slice(0, 8);
+    const ok = (a) => typeof a === 'string' && /^[0-9.]{7,15}$/.test(a);
+    const named = (Array.isArray(msg && msg.a) ? msg.a : []).filter(ok);
+    const from = ok(arrivedFrom) ? arrivedFrom : null;
+
+    /*
+     * The address the packet CAME FROM goes first, unless it is invented.
+     *
+     * This ordering is the whole safety of the change. An arrival address is
+     * not a guess: a packet travelled from it to here a moment ago, so it is
+     * the one address we have actual evidence about. Everything that works
+     * today works because of it, and it has to keep winning.
+     *
+     * The addresses a machine names itself are a different kind of thing -
+     * useful, and unverified. A desktop with Hyper-V or WSL will happily name
+     * a 172.x or 192.x switch address that looks perfect and reaches nowhere,
+     * and the order os.networkInterfaces() hands them over is not meaningful.
+     * Putting those ahead of the proven one would break working setups to fix
+     * a broken one, which is a bad trade in any release.
+     *
+     * So they are the fallback, and they matter in exactly the case that
+     * needed fixing: when the packet arrived from a 169.254 that nobody can
+     * dial back, there is no evidence to prefer and a named address is the
+     * only thing to go on.
+     */
+    const provenFirst = from && !isSelfAssigned(from) ? [from] : [];
+    const namedReal = named.filter((a) => !isSelfAssigned(a));
+    const invented = [...named, ...(from ? [from] : [])].filter(isSelfAssigned);
+    return [...new Set([...provenFirst, ...namedReal, ...invented])].slice(0, 8);
   }
 
   function notePeer(msg, address, opts = {}) {

@@ -753,6 +753,123 @@ export function createPanels(app) {
   }
 
   /* ---------------- settings ---------------- */
+
+  /* ---------------- sharing ---------------- */
+
+  /*
+   * Sharing gets its own panel, and its own button.
+   *
+   * It used to be a section of Settings, which was wrong twice over. It was
+   * buried - four screens down past pen colours and autosave, for the one
+   * thing in the app a person opens with a specific job in mind. And it was
+   * slow: the firewall check shells out to PowerShell, so opening Settings to
+   * change a nib waited on a process that had nothing to do with nibs.
+   *
+   * Out here it opens when it is wanted and Settings opens at once.
+   */
+  function sharing() {
+    open('sharing', 'Share on this network', () => {
+      const s = app.settings;
+      const row = (label, control, hint) => h('div', { style: 'margin-bottom:16px' },
+        h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' },
+          h('span', { style: 'font-size:13.5px' }, label), control),
+        hint ? h('div', { style: 'font-size:12px;color:var(--text-2);margin-top:4px' }, hint) : null);
+
+      const mkChoice = (options, get, set) => {
+        const wrap = h('div', { style: 'display:flex;gap:4px' });
+        for (const [value, label] of options) {
+          const b = h('button', { class: 'btn' + (get() === value ? ' primary' : '') }, label);
+          b.style.cssText += 'padding:4px 10px;font-size:12.5px';
+          b.addEventListener('click', () => set(value));
+          wrap.appendChild(b);
+        }
+        return wrap;
+      };
+
+      const mkToggle = (get, set) => {
+        const i = h('input', { type: 'checkbox' });
+        i.checked = get();
+        i.addEventListener('change', () => { set(i.checked); app.saveSettings(); app.surface.invalidate(); });
+        return h('label', { class: 'toggle' }, i);
+      };
+
+      const syncBlock = () => {
+        const host = h('div', { style: 'margin-top:10px' });
+        syncHost = host;
+        setTimeout(() => renderSync(host), 0);
+        return host;
+      };
+
+      if (!(window.board && window.board.sync)) {
+        return h('div', {}, h('div', { class: 'section' },
+          h('h5', {}, 'Not in this version'),
+          h('div', { style: 'font-size:12.5px;color:var(--text-2);line-height:1.6' },
+            'Handing boards straight to another computer is in the desktop app. '
+            + 'In a browser there is no way to listen for one.')));
+      }
+
+      return h('div', {}, h('div', { class: 'section' },
+
+          h('h5', {}, 'Share on this network'),
+          row('Share boards on this network', mkToggle(() => s.sync === true, async (v) => {
+            s.sync = v;
+            if (v) {
+              // A switch that stays on after the thing behind it failed to
+              // start is a lie the person then has to discover for themselves.
+              const up = await app.startSync();
+              if (!up) { s.sync = false; app.saveSettings(); }
+            } else {
+              try { await window.board.sync.stop(); app.toast('Sharing switched off'); }
+              catch { /* it was not running anyway */ }
+              app.syncStartError = null;
+            }
+            rerender();
+          }),
+            // "Windows may ask once" was here, on all three platforms. The
+            // firewall banner below names the real one; this stays neutral.
+            'Off unless you switch it on. When it is on, this computer says hello to other GazBoards on the '
+            + 'same wifi so you can hand a board straight across - no account, no internet, nothing leaves the '
+            + 'room. Your computer may ask once whether to allow it through the firewall; say yes for private '
+            + 'networks or nobody will be able to reach you. Nothing is ever saved without you being asked first.'),
+          row('When a board arrives', mkChoice(
+            [[true, 'Open it'], [false, 'Just file it']],
+            () => s.syncOpenOnArrival !== false,
+            (v) => { s.syncOpenOnArrival = v; app.saveSettings(); rerender(); }
+          ), s.syncOpenOnArrival !== false
+            ? 'Once you accept a board it opens straight away, which is what you want between your own '
+              + 'machines. If several arrive at once only the last one opens - the rest are filed, so you '
+              + 'are not watching boards flash past.'
+            : 'Accepted boards are filed in My boards and you carry on with what you were doing. Right for '
+              + 'a class handing work in. The one exception is replacing a board you have open: that always '
+              + 'reloads, or you would be looking at the copy it just replaced.'),
+          s.sync ? syncBlock() : null
+      ),
+      /*
+       * The commands, always reachable.
+       *
+       * The firewall check reads rules and reasons about them; it cannot test
+       * that another computer can actually get in, because a connection to
+       * your own machine never crosses the firewall. So it can say "allowed"
+       * about a machine nothing can reach - a rule scoped to a profile this
+       * network is not on, or something further out on the network doing the
+       * blocking. When that happens the banner is reassuring and wrong, and
+       * there was nothing to click.
+       */
+      h('div', { class: 'section' },
+        h('h5', {}, 'Still not working?'),
+        h('div', { style: 'font-size:12.5px;color:var(--text-2);line-height:1.6;margin-bottom:10px' },
+          'GazBoard reads the firewall rules on this computer, which is not the same as another '
+          + 'computer proving it can get in - so it can say all is well when it is not. These are the '
+          + 'commands that open the way, written for this computer\u2019s own system, and they do no '
+          + 'harm if the way is already open.'),
+        (() => {
+          const b = h('button', { class: 'btn', style: 'width:100%' }, 'Show the firewall commands');
+          b.addEventListener('click', () => app.showFirewallHelp('manual'));
+          return b;
+        })()));
+    });
+  }
+
   function settings() {
     open('settings', 'Settings', () => {
       const s = app.settings;
@@ -858,43 +975,82 @@ export function createPanels(app) {
             'Shaves a little lag off the pen by letting the canvas skip a buffering step. On some graphics drivers this makes the board flicker while you write or drag, especially with imported document pages on it — leave it off if you see that. Applies when the app is reopened.'),
           row('Autosave', mkToggle(() => s.autosave, (v) => (s.autosave = v)), 'Boards are stored locally on this computer.')
         ),
-        // Only the desktop build has this at all; the web build's preload has
-        // no sync, and an empty section explaining a feature that cannot exist
-        // there would be worse than no section.
+        /*
+         * Back to how it shipped.
+         *
+         * Every switch above is one somebody can turn the wrong way and not
+         * remember which, and the honest ones - pressure, low-latency inking,
+         * pointer style - are exactly the ones that get poked at when
+         * something looks wrong. One button back to a known state is worth
+         * more than a list of what each default was.
+         *
+         * Boards, paired computers and sharing are untouched; the wording
+         * says so, because a "reset" button that might delete work is a button
+         * nobody dares press.
+         */
+        h('div', { class: 'section' },
+          h('h5', {}, 'Reset to defaults'),
+          row('Put every setting back to how it shipped',
+            (() => {
+              const b = h('button', { class: 'btn' }, 'Reset settings');
+              b.style.cssText += 'padding:4px 12px;font-size:12.5px';
+              b.addEventListener('click', async () => {
+                if (!await app.confirm('Reset every setting?',
+                  'Pens, pointers, zoom, autosave and the rest go back to how GazBoard shipped. '
+                  + 'Your boards are not touched, paired computers are kept, and sharing stays '
+                  + 'exactly as it is now.', 'Reset them')) return;
+                app.resetSettings();
+                app.toast('Settings are back to how they shipped');
+                rerender();
+              });
+              return b;
+            })(),
+            'Your boards, your paired computers and the sharing switch are left alone.'),
+          // Only the web build. An Electron window has no stale service worker
+          // to get stuck behind, and offering a "hard refresh" there would be
+          // a button that appears to do nothing.
+          (window.board && !window.board.sync) ? row('Reload the app from scratch',
+            (() => {
+              const b = h('button', { class: 'btn' }, 'Hard refresh');
+              b.style.cssText += 'padding:4px 12px;font-size:12.5px';
+              b.addEventListener('click', async () => {
+                if (!await app.confirm('Reload GazBoard from scratch?',
+                  'The saved copy of the app in this browser is thrown away and fetched again. '
+                  + 'Your boards are stored separately and are not affected. Save anything '
+                  + 'unsaved first.', 'Reload')) return;
+                try {
+                  if (navigator.serviceWorker) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map((r) => r.unregister()));
+                  }
+                  if (window.caches) {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map((k) => caches.delete(k)));
+                  }
+                } catch { /* nothing cached, or a browser that will not say */ }
+                // Cache-busted so the browser cannot hand back the page it
+                // already has, which is the whole thing being escaped from.
+                location.replace(location.pathname + '?r=' + Date.now());
+              });
+              return b;
+            })(),
+            'Use this when GazBoard in the browser looks out of date after an update. '
+            + 'It clears the offline copy and fetches the newest one. Boards are kept.') : null
+        ),
+        // Sharing lives in its own panel now. It was the heaviest thing in
+        // here - it reads the firewall, which shells out to PowerShell, so
+        // opening Settings to change a pen colour waited on that - and it was
+        // also the hardest to find, four screens down a list of switches.
         (window.board && window.board.sync) ? h('div', { class: 'section' },
           h('h5', {}, 'Share on this network'),
-          row('Share boards on this network', mkToggle(() => s.sync === true, async (v) => {
-            s.sync = v;
-            if (v) {
-              // A switch that stays on after the thing behind it failed to
-              // start is a lie the person then has to discover for themselves.
-              const up = await app.startSync();
-              if (!up) { s.sync = false; app.saveSettings(); }
-            } else {
-              try { await window.board.sync.stop(); app.toast('Sharing switched off'); }
-              catch { /* it was not running anyway */ }
-              app.syncStartError = null;
-            }
-            rerender();
-          }),
-            // "Windows may ask once" was here, on all three platforms. The
-            // firewall banner below names the real one; this stays neutral.
-            'Off unless you switch it on. When it is on, this computer says hello to other GazBoards on the '
-            + 'same wifi so you can hand a board straight across - no account, no internet, nothing leaves the '
-            + 'room. Your computer may ask once whether to allow it through the firewall; say yes for private '
-            + 'networks or nobody will be able to reach you. Nothing is ever saved without you being asked first.'),
-          row('When a board arrives', mkChoice(
-            [[true, 'Open it'], [false, 'Just file it']],
-            () => s.syncOpenOnArrival !== false,
-            (v) => { s.syncOpenOnArrival = v; app.saveSettings(); rerender(); }
-          ), s.syncOpenOnArrival !== false
-            ? 'Once you accept a board it opens straight away, which is what you want between your own '
-              + 'machines. If several arrive at once only the last one opens - the rest are filed, so you '
-              + 'are not watching boards flash past.'
-            : 'Accepted boards are filed in My boards and you carry on with what you were doing. Right for '
-              + 'a class handing work in. The one exception is replacing a board you have open: that always '
-              + 'reloads, or you would be looking at the copy it just replaced.'),
-          s.sync ? syncBlock() : null
+          h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:10px' },
+            'Handing a board to another computer in the room has its own panel now - '
+            + 'the Share button on the top bar.'),
+          (() => {
+            const b = h('button', { class: 'btn primary', style: 'width:100%' }, 'Open sharing');
+            b.addEventListener('click', () => sharing());
+            return b;
+          })()
         ) : null,
         h('div', { class: 'section' },
           h('h5', {}, 'Board'),
@@ -932,7 +1088,10 @@ export function createPanels(app) {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, saved on this computer at:`),
           h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData + '/boards'),
-          h('button', { class: 'btn', style: 'width:100%', onclick: () => window.board.showItem(i.userData + '/boards') }, 'Open that folder'));
+          h('button', { class: 'btn', style: 'width:100%', onclick: () => {
+            if (window.board.openBoardsFolder) window.board.openBoardsFolder();
+            else window.board.showItem(i.userData + '/boards');
+          } }, 'Open that folder'));
         host.appendChild(foot);
       } else {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
@@ -959,5 +1118,5 @@ export function createPanels(app) {
 
   function refresh() { app.surface.invalidate(); }
 
-  return { templates, background, settings, boards, close, syncChanged, get open() { return !!currentKey; } };
+  return { templates, background, settings, sharing, boards, close, syncChanged, get open() { return !!currentKey; } };
 }

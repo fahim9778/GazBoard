@@ -110,12 +110,16 @@ export function initToolbar(app) {
     ['btnTemplates', 'template', () => app.panels.templates()],
     ['btnBackground', 'palette', () => app.panels.background()],
     ['btnExport', 'export', (e) => openExportPopover(app, e.currentTarget)],
+    ['btnShare', 'share', () => app.panels.sharing()],
     ['btnSettings', 'settings', () => app.panels.settings()],
     ['btnHelp', 'help', () => app.showShortcuts()]
   ];
   const labels = { btnBoards: 'Boards', btnTemplates: 'Templates', btnBackground: 'Background', btnExport: 'Export' };
   for (const [id, ic, fn] of top) {
     const el = document.getElementById(id);
+    // A build without sharing has no such button in the page, and asking for
+    // one that is not there used to take the whole toolbar down with it.
+    if (!el) continue;
     el.innerHTML = icon(ic, 18) + (labels[id] ? `<span>${labels[id]}</span>` : '');
     el.addEventListener('click', fn);
   }
@@ -377,6 +381,7 @@ export function openMorePopover(app, anchor) {
     menuItem('Save a copy…', 'doc', () => app.command('board.save'), { key: 'Ctrl+S' }),
     menuItem('Open board…', 'board', () => app.command('board.open'), { key: 'Ctrl+O' }),
     h('div', { class: 'menu-sep' }),
+    menuItem('Share on this network…', 'share', () => app.panels.sharing()),
     menuItem('Settings', 'settings', () => app.panels.settings()),
     menuItem('Keyboard shortcuts', 'help', () => app.showShortcuts()),
     menuItem('Check for updates…', 'update', () => app.checkForUpdates({ force: true })),

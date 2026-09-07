@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('board', {
   openDialog: (opts) => ipcRenderer.invoke('dialog:open', opts),
   saveDialog: (opts) => ipcRenderer.invoke('dialog:save', opts),
   showItem: (p) => ipcRenderer.invoke('shell:showItem', p),
+  openBoardsFolder: () => ipcRenderer.invoke('shell:openBoards'),
   openReleases: (url) => ipcRenderer.invoke('shell:openExternal', url),
   checkForUpdate: () => ipcRenderer.invoke('updates:check'),
 

@@ -23,7 +23,7 @@ import {
   insertImagesFromPaths, insertImageFiles, dropOrigin, isImagePath, isDocPath
 } from './insert.js';
 
-const DEFAULT_SETTINGS = {
+export const DEFAULT_SETTINGS = {
   penColor: '#201f1e', penWidth: 4, penEffect: 'none',
   highlighterColor: '#fff100', highlighterWidth: 20,
   eraserSize: 30, eraserMode: 'partial',
@@ -1214,6 +1214,39 @@ class App {
   }
 
   /* ---------------- notifications & dialogs ---------------- */
+  /**
+   * Put every setting back the way it shipped.
+   *
+   * Two things are deliberately left alone, because resetting them would do
+   * something rather than merely undo something.
+   *
+   * Sharing stays as it is: switching it off would drop a class mid-lesson,
+   * and switching it ON is not a thing a "reset" button has any business
+   * doing to a person's network. Paired computers are not settings at all and
+   * are never touched here - forgetting those has its own button, with its own
+   * warning, because the other machine has to be told.
+   *
+   * The update check stays too. It is the one setting whose default is "never
+   * asked", and answering it on somebody's behalf is not a default, it is a
+   * decision about the network.
+   */
+  resetSettings() {
+    const keep = {
+      sync: this.settings.sync,
+      updateCheck: this.settings.updateCheck,
+      lastUpdateCheck: this.settings.lastUpdateCheck,
+      skippedVersion: this.settings.skippedVersion,
+      updateAskedAt: this.settings.updateAskedAt,
+      hintsSeen: this.settings.hintsSeen
+    };
+    this.settings = { ...DEFAULT_SETTINGS, ...keep };
+    this.saveSettings();
+    this.interaction.hideInkPointer();
+    this.setTool(this.tool);
+    this.surface.invalidate();
+    this.syncUI();
+  }
+
   toast(message, iconName = 'check', ms = 2600) {
     const host = document.getElementById('toasts');
     const el = h('div', { class: 'toast' }, h('span', { html: icon(iconName, 16), style: 'display:flex' }), h('span', {}, message));
@@ -1807,7 +1840,12 @@ class App {
       if (i.electron) {
         const openIt = h('button', { class: 'btn' }, 'Open that folder');
         openIt.style.cssText += 'margin-top:8px;padding:4px 10px;font-size:12.5px';
-        openIt.addEventListener('click', () => window.board.showItem(i.userData + '/boards'));
+        openIt.addEventListener('click', () => {
+          // Older preloads have only showItem. Landing one folder up is worse
+          // than the button doing nothing at all, but not by much.
+          if (window.board.openBoardsFolder) window.board.openBoardsFolder();
+          else window.board.showItem(i.userData + '/boards');
+        });
         where.appendChild(openIt);
       }
       card.appendChild(where);
@@ -2386,9 +2424,16 @@ class App {
     card.appendChild(h('p', {}, reason === 'cancelled'
       ? 'Nothing was changed. If you would rather not give GazBoard permission to do this, '
         + `these are the commands that do the same thing - run them in ${where}.`
-      : 'GazBoard could not change the firewall on this computer, which usually means the '
-        + 'machine is managed and will not allow it. These are the commands that do it - '
-        + `run them in ${where}, or pass them to whoever looks after the machine.`));
+      : reason === 'manual'
+        // Asked for rather than arrived at. Nothing has failed, and saying it
+        // has would be its own small lie - this is the person checking the
+        // firewall themselves because GazBoard said all was well and it wasn't.
+        ? 'GazBoard reads the rules on this computer, which is not the same as another computer '
+          + 'proving it can get in - so it can report all is well when it is not. These commands open '
+          + `the way, and do no harm if it is already open. Run them in ${where}.`
+        : 'GazBoard could not change the firewall on this computer, which usually means the '
+          + 'machine is managed and will not allow it. These are the commands that do it - '
+          + `run them in ${where}, or pass them to whoever looks after the machine.`));
 
     const text = cmds.join('\n\n');
     card.appendChild(h('pre', {

@@ -3,7 +3,7 @@
 import { boundsOf, worldBounds } from './store.js';
 import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
-import { inkPath, strokeWeight } from './ink.js';
+import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
 
 import { fontStack } from '../ui/palettes.js';
 
@@ -197,11 +197,34 @@ export function drawStroke(ctx, o) {
     ctx.globalAlpha = o.opacity ?? 0.38;
     ctx.globalCompositeOperation = 'multiply';
   }
-  ctx.lineWidth = highlighter ? (o.width || 20) : strokeWeight(pts, o.width || 4, o.pressure !== false);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.strokeStyle = inkStyle(ctx, o);
-  ctx.stroke(path);                       // one call: no seams, no overlap darkening
+
+  /*
+   * Two ways to lay this down, and which one is used is decided by the ink
+   * itself rather than by a setting.
+   *
+   * A stroke that carries real pressure - a pen, on a machine with pressure
+   * switched on - is drawn as runs of varying width, so pressing harder in the
+   * middle of a word thickens the middle of the word. That is the thing people
+   * mean by pressure sensitivity, and it did not used to happen: the mean of
+   * the whole stroke set one width for the lot.
+   *
+   * Everything else goes down exactly as it always did, in one call. A mouse
+   * reports no pressure, a finger reports none worth having, the highlighter
+   * is translucent and would darken where a stroke crossed itself, and every
+   * stroke saved before today has 0.5 written at every point. Those must not
+   * change - a board drawn last year has to open looking like itself.
+   */
+  const varying = !highlighter && o.pressure !== false && hasPressureVariation(pts);
+  if (varying) {
+    const runs = inkRuns(o);
+    for (const r of runs) { ctx.lineWidth = r.width; ctx.stroke(r.path); }
+  } else {
+    ctx.lineWidth = highlighter ? (o.width || 20) : strokeWeight(pts, o.width || 4, o.pressure !== false);
+    ctx.stroke(path);                     // one call: no seams, no overlap darkening
+  }
 
   if (o.effect === 'galaxy') {
     ctx.globalCompositeOperation = 'lighter';

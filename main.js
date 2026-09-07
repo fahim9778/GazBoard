@@ -654,6 +654,29 @@ function ipc() {
   });
 
   ipcMain.handle('shell:showItem', (_e, p) => { shell.showItemInFolder(p); });
+
+  /*
+   * Open the boards folder itself, with the boards in it.
+   *
+   * showItemInFolder was the wrong call here. It opens the folder CONTAINING
+   * what you name and highlights it, so asking for the boards folder opened
+   * its parent with the boards folder sitting there selected - one click short
+   * of what the button says, and confusing enough that people assumed their
+   * boards were missing.
+   *
+   * The path is built here rather than sent in from the window, so it is the
+   * same one the app actually saves to, joined the way this operating system
+   * joins paths - a renderer gluing on '/boards' was near enough on Windows
+   * and not something to keep relying on.
+   */
+  ipcMain.handle('shell:openBoards', async () => {
+    const dir = dataDir();
+    try { await fsp.mkdir(dir, { recursive: true }); } catch { /* it is there, or it cannot be */ }
+    const err = await shell.openPath(dir);
+    // openPath answers with an empty string on success and a reason on failure.
+    if (err) { shell.showItemInFolder(dir); return false; }
+    return true;
+  });
   ipcMain.handle('shell:openExternal', async (_e, url) => {
     // only ever our own releases page - never an arbitrary URL from the board
     if (typeof url !== 'string' || !url.startsWith(RELEASES_URL)) return false;
