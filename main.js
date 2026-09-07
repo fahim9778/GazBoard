@@ -602,6 +602,7 @@ function sync() {
   syncService = createSyncService({
     userDataDir: app.getPath('userData'),
     onPeers: (peers) => send('sync:peers', peers),
+    onReceiving: (info) => send('sync:receiving', info),
     // A board that has arrived is a question for the person, not a decision for
     // the main process. This hands it to the window and waits for an answer;
     // no window, no answer, and the transfer is declined.

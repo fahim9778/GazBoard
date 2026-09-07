@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('board', {
     },
     // the device list changed underfoot
     onPeers: (fn) => ipcRenderer.on('sync:peers', (_e, peers) => fn(peers)),
+    onReceiving: (fn) => ipcRenderer.on('sync:receiving', (_e, info) => fn(info)),
     // a board is at the door; answer with an outcome string, or null to decline
     onIncoming: (fn) => ipcRenderer.on('sync:incoming', (_e, msg) => fn(msg)),
     // bytes going out during a send, so a long transfer does not look hung

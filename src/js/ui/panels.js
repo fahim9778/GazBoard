@@ -831,6 +831,11 @@ export function createPanels(app) {
             + 'same wifi so you can hand a board straight across - no account, no internet, nothing leaves the '
             + 'room. Your computer may ask once whether to allow it through the firewall; say yes for private '
             + 'networks or nobody will be able to reach you. Nothing is ever saved without you being asked first.'),
+          row('Sound when a board starts arriving', mkToggle(() => s.arrivalSound !== false,
+            (v) => { s.arrivalSound = v; if (v) app.playArrivalChime(); }),
+            'Two soft notes and a moment of highlight on the top bar the instant a board '
+            + 'starts coming in - so the "accept this board?" question is expected rather than '
+            + 'a surprise over the sentence you were writing.'),
           row('When a board arrives', mkChoice(
             [[true, 'Open it'], [false, 'Just file it']],
             () => s.syncOpenOnArrival !== false,

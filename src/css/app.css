@@ -558,3 +558,75 @@ kbd {
   .tpl-grid { grid-template-columns: 1fr; }
 }
 
+
+/* ------------------------------------------------------------------ *
+ *  A board arriving
+ *
+ *  Someone may be writing on the board when a colleague hits Send, so this
+ *  lives IN the top bar rather than over the canvas: it cannot cover ink,
+ *  and showing or hiding it never moves the drawing surface. The ring is a
+ *  conic gradient, so filling it is one style write the compositor handles -
+ *  no layout, no repaint of the board behind it.
+ * ------------------------------------------------------------------ */
+#rxBadge {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px 3px 4px;
+  margin-right: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--stroke);
+  font-size: 12px;
+  color: var(--text-2);
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+#rxBadge.show { display: flex; }
+
+#rxBadge .rx-ring {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(var(--accent) 0deg, var(--stroke) 0deg);
+  /* the hole in the middle, so it reads as a ring rather than a pie */
+  -webkit-mask: radial-gradient(circle, transparent 4.5px, #000 5px);
+  mask: radial-gradient(circle, transparent 4.5px, #000 5px);
+}
+
+#rxBadge .rx-label { overflow: hidden; text-overflow: ellipsis; }
+
+/* On a phone the top bar has no room for a name; the ring alone still says
+   something is coming, and the panel has the detail. */
+@media (max-width: 760px) {
+  #rxBadge { max-width: 34px; padding: 3px 5px; }
+  #rxBadge .rx-label { display: none; }
+}
+
+/*
+ * The first couple of seconds of a board arriving.
+ *
+ * Only box-shadow, border-colour and the badge's own background move. None of
+ * those affect layout, so the toolbar does not shift and the canvas is never
+ * asked to repaint - the animation runs on the compositor while somebody
+ * carries on writing underneath it.
+ */
+#rxBadge.alert {
+  border-color: var(--accent);
+  animation: rx-pulse 1.3s ease-out 2;
+}
+#rxBadge.alert .rx-label { color: var(--text); font-weight: 600; }
+
+@keyframes rx-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(0, 120, 212, .45); }
+  70%  { box-shadow: 0 0 0 7px rgba(0, 120, 212, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 120, 212, 0); }
+}
+
+/* Someone who has asked their system for less movement gets the colour change
+   and no pulse. The chime and the ring still do their job. */
+@media (prefers-reduced-motion: reduce) {
+  #rxBadge.alert { animation: none; }
+}

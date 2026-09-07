@@ -60,7 +60,7 @@ const BOARD = {
  * while the tests run. Discovery is exercised separately; these are wired by
  * address so a test machine never shouts at its own network.
  */
-async function pair() {
+async function pair(opts = {}) {
   const aStore = memoryStore(), bStore = memoryStore();
   const arrivals = [];
   let verdict = () => 'kept-both';
@@ -73,6 +73,8 @@ async function pair() {
   const B = createSyncNode({
     deviceId: P.newDeviceId(), deviceName: 'Classroom tablet', paired: bStore,
     host: '127.0.0.1', broadcast: '127.0.0.1', discoveryPort: 0,
+    // B is the one boards are sent TO, so it is B that reports them arriving.
+    onReceiving: opts.onReceiving || (() => {}),
     onBoard: async (msg) => { arrivals.push(msg); return verdict(msg); }
   });
 
@@ -1151,6 +1153,95 @@ async function run() {
       })).toString());
       check('the announcement keeps every field an older version reads',
         msg.t === 'gazboard' && msg.v === P.PROTOCOL && !!msg.id && !!msg.name && !!msg.port);
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * The receiving end, reporting for itself.
+   *
+   * The sender has always had progress; the receiver had nothing, and a board
+   * with slides on it is a real wait on classroom wifi. This checks the node
+   * actually calls back as the bytes land, names the sender from its own
+   * pairing record, and does not put the board's title on the wire.
+   */
+  await section('a board arriving is reported as it arrives', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+
+      // Big enough that the body arrives in more than one chunk.
+      const objects = [];
+      for (let i = 0; i < 400; i++) {
+        objects.push({ id: 'o' + i, type: 'note', x: i, y: i, w: 200, h: 200,
+          text: 'x'.repeat(600), color: '#ffd94a' });
+      }
+      await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+        address: '127.0.0.1', port: t.B.port }, { id: 'big', name: 'Week 6 - Sorting', objects });
+
+      const arrived = seen.filter((s) => s.state === 'arrived');
+      check('the receiving side is told a board is coming in', seen.length > 0,
+        seen.length + ' updates');
+      check('and it names the sender from its own records, not from the wire',
+        seen.every((s) => s.name && s.name !== 'Another computer'),
+        seen[0] && seen[0].name);
+      check('the board only names itself once it has arrived and opened',
+        arrived.length === 1 && arrived[0].board === 'Week 6 - Sorting'
+        && seen.filter((s) => s.board).length === 1,
+        arrived[0] && arrived[0].board);
+      check('every update belongs to the one transfer', new Set(seen.map((s) => s.id)).size === 1);
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * Naming the sender when they are on an older build.
+   *
+   * The id that lets the badge say a name before the board has finished
+   * arriving rides in a header only this release sends. A colleague still on
+   * 2.6.3 sends nothing, and the badge said "Another computer" - which is
+   * barely better than no badge, because the point of it is knowing who is
+   * about to drop a board on you mid-lesson.
+   *
+   * Their machine is still named here: it was named when it paired, and the
+   * address it is calling from is on that record.
+   */
+  await section('a sender on an older build is still named', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+
+      // Strip the header the way an older version would: it simply never sets
+      // one. Everything else about the send is unchanged.
+      const http = require('node:http');
+      const realRequest = http.request;
+      http.request = function (opts, ...rest) {
+        if (opts && opts.headers) { delete opts.headers['x-gazboard-from']; }
+        return realRequest.call(this, opts, ...rest);
+      };
+      let sent;
+      try {
+        const objects = [];
+        for (let i = 0; i < 300; i++) {
+          objects.push({ id: 'o' + i, type: 'note', x: i, y: i, w: 200, h: 200,
+            text: 'y'.repeat(600), color: '#ffd94a' });
+        }
+        sent = await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+          address: '127.0.0.1', port: t.B.port }, { id: 'old', name: 'Older Board', objects });
+      } finally { http.request = realRequest; }
+
+      check('the board still arrives from an older sender', !!sent && sent.accepted === true);
+      check('and it is named from the pairing record, not shrugged at',
+        seen.length > 0 && seen.every((s) => s.name !== 'Another computer'),
+        (seen[0] && seen[0].name) || '(nothing reported)');
+      const arrived = seen.filter((s) => s.state === 'arrived');
+      check('the name is certain once the envelope opens',
+        arrived.length === 1 && arrived[0].name === 'Desk PC',
+        arrived[0] && arrived[0].name);
     } finally { await t.stop(); }
   });
 

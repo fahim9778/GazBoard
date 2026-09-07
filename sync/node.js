@@ -81,14 +81,18 @@ const json = (res, code, body) => {
 };
 
 /** Read a request body, refusing anything over the cap without buffering it. */
-function readBody(req, limit) {
+function readBody(req, limit, onProgress = null) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
+    // How big the whole thing will be, if the sender said. Everything GazBoard
+    // sends does; anything that does not simply gets no percentage.
+    const total = Number(req.headers['content-length']) || 0;
     req.on('data', (c) => {
       size += c.length;
       if (size > limit) { reject(new Error('too large')); req.destroy(); return; }
       chunks.push(c);
+      if (onProgress) onProgress(size, total);
     });
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
@@ -104,10 +108,13 @@ function readBody(req, limit) {
  *                                   receiving side's decision. Throwing, or
  *                                   returning null, declines the transfer.
  * @param {Function} [opts.onPeers]  called when the visible device list changes
+ * @param {Function} [opts.onReceiving] called as a board arrives, so the person
+ *                                   on this machine can see it coming without
+ *                                   anything interrupting what they are doing
  */
 function createSyncNode(opts) {
   const {
-    deviceId, deviceName, paired, onBoard, onPeers = () => {},
+    deviceId, deviceName, paired, onBoard, onPeers = () => {}, onReceiving = () => {},
     host = '0.0.0.0', broadcast = '255.255.255.255', discoveryPort = DISCOVERY_PORT
   } = opts;
 
@@ -498,9 +505,71 @@ function createSyncNode(opts) {
   /* ---------------- the server side of a transfer ---------------- */
 
   async function handleSend(req, res) {
+    /*
+     * Who is sending, before a byte of the board has been read.
+     *
+     * The board itself is sealed - its name lives inside the encrypted part and
+     * cannot be known until the whole thing has arrived and opened. The SENDER
+     * can be named at once, because the pairing record is already here and the
+     * device id rides on the outside of the envelope. So the person watching
+     * sees "Rahim's PC is sending you a board" straight away, and which board
+     * it is a moment later.
+     *
+     * The name is deliberately NOT put on the wire alongside the envelope: the
+     * outside of an envelope is readable by anything on the network, and the
+     * title of a board is nobody else's business.
+     */
+    /*
+     * Naming the sender before the envelope has opened.
+     *
+     * Three goes at it, best first, because "Another computer" on the badge is
+     * barely better than no badge - the whole point is knowing who is about to
+     * drop a board on you mid-lesson.
+     *
+     * 1. The id in the header. Only versions from this release send it.
+     * 2. The address the connection came from, matched against the paired
+     *    records. This is what saves a mixed staffroom: a colleague still on
+     *    an older build sends no header at all, and their machine is still
+     *    named here because it was named when it paired.
+     * 3. Give up and say so.
+     *
+     * Whichever way it goes, the name is read from OUR pairing record - never
+     * from anything the sender put on the wire. A stranger cannot make the
+     * badge say whatever they like.
+     */
+    const claimed = String(req.headers['x-gazboard-from'] || '').slice(0, 64);
+    const callerIp = (() => {
+      const raw = req && req.socket && req.socket.remoteAddress;
+      if (!raw) return null;
+      return raw.startsWith('::ffff:') ? raw.slice(7) : raw;
+    })();
+    const known = (claimed && paired.get(claimed))
+      || (callerIp && paired.all().find((r) => r.lastAddress === callerIp))
+      || null;
+    let senderName = (known && known.name) || 'Another computer';
+    const transferId = 'rx-' + Math.random().toString(36).slice(2, 9);
+    let lastAt = 0, lastPct = -1;
+    const report = (got, total) => {
+      if (!total) return;
+      const pct = Math.min(99, Math.round((got / total) * 100));
+      const now = Date.now();
+      // Throttled hard. This fires per network chunk - hundreds of times for a
+      // board carrying slides - and somebody may be mid-sentence on the board
+      // while it arrives. Four times a second, and only when the number moved.
+      if (pct === lastPct || now - lastAt < 250) return;
+      lastAt = now; lastPct = pct;
+      onReceiving({ id: transferId, deviceId: (known && known.deviceId) || claimed || null,
+        name: senderName, percent: pct, bytes: total });
+    };
+    const done = (state, extra = {}) => onReceiving({ id: transferId,
+      deviceId: (known && known.deviceId) || claimed || null,
+      name: senderName, percent: 100, state, ...extra });
+
     let envelope;
-    try { envelope = JSON.parse((await readBody(req, MAX_BOARD_BYTES)).toString()); }
-    catch (e) {
+    try {
+      envelope = JSON.parse((await readBody(req, MAX_BOARD_BYTES, report)).toString());
+    } catch (e) {
+      done('failed');
       return json(res, e.message === 'too large' ? 413 : 400, { error: e.message || 'bad request' });
     }
 
@@ -508,16 +577,23 @@ function createSyncNode(opts) {
     const rec = from && paired.get(from);
     // An unpaired sender is told nothing beyond "no". Whether a given device id
     // is known here is not something a stranger gets to probe for.
-    if (!rec) return json(res, 401, { error: 'not paired' });
+    if (!rec) { done('failed'); return json(res, 401, { error: 'not paired' }); }
 
     const plain = P.open(Buffer.from(rec.key, 'base64'), envelope);
-    if (!plain) return json(res, 401, { error: 'not paired' });
+    if (!plain) { done('failed'); return json(res, 401, { error: 'not paired' }); }
     // The envelope opened, so this really is them: keep their address current.
     noteCallerAddress(req, from, envelope?.aad?.port);
 
     let board;
-    try { board = JSON.parse(plain.toString()); } catch { return json(res, 400, { error: 'bad board' }); }
+    try { board = JSON.parse(plain.toString()); } catch { done('failed'); return json(res, 400, { error: 'bad board' }); }
 
+    /*
+     * The envelope opened, so now we know exactly who this is - no guessing.
+     * If the guess above was wrong, or was the "Another computer" shrug, this
+     * is where it gets put right, alongside the board's own name.
+     */
+    senderName = rec.name || senderName;
+    done('arrived', { board: String(board && board.name || '').slice(0, 80) });
     try {
       const outcome = await onBoard({ board, from: { deviceId: from, name: rec.name } });
       if (!outcome) return json(res, 200, { accepted: false, outcome: 'declined' });
@@ -735,7 +811,12 @@ function createSyncNode(opts) {
       const data = Buffer.from(JSON.stringify(body));
       const req = http.request({
         host: peer.address, port: peer.port, path, method: 'POST',
-        headers: { 'content-type': 'application/json', 'content-length': data.length },
+        // Our device id, so the far end can name us on its progress indicator
+        // before it has read enough of the board to open the envelope. Only an
+        // id - the pairing record on that machine turns it into a name, and a
+        // stranger's id matches nothing there.
+        headers: { 'content-type': 'application/json', 'content-length': data.length,
+          'x-gazboard-from': deviceId },
         timeout: timeoutMs
       }, (res) => {
         const chunks = [];

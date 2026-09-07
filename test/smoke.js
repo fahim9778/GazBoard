@@ -6977,6 +6977,121 @@ module.exports.run = async (win, app) => {
     shownAddress.copy);
 
   /*
+   * Watching a board arrive.
+   *
+   * The sender has always had a progress bar; the receiver had nothing at all,
+   * and a board carrying slides is tens of megabytes over classroom wifi. The
+   * hard constraint is that somebody may be MID-SENTENCE on the board when a
+   * colleague hits Send, so whatever shows this may not cover the canvas,
+   * steal focus, move the toolbar, or repaint the drawing.
+   */
+  const receiving = await js(`
+    const a = window.app, sf = a.surface;
+    a.newBoard(true);
+    const badge = document.getElementById('rxBadge');
+    const canvasBefore = sf.canvas.getBoundingClientRect();
+
+    // Count repaints of the actual board while a transfer runs.
+    let redraws = 0;
+    const realDraw = sf.draw.bind(sf);
+    sf.draw = function (...args) { redraws++; return realDraw(...args); };
+
+    const hiddenAtRest = !badge.classList.contains('show');
+    a.showReceiving({ id: 't1', name: "Rahim's PC", percent: 12 });
+    const early = { shown: badge.classList.contains('show'),
+      text: badge.querySelector('.rx-label').textContent };
+    a.showReceiving({ id: 't1', name: "Rahim's PC", percent: 64 });
+    const mid = badge.querySelector('.rx-ring').getAttribute('aria-valuenow');
+    a.showReceiving({ id: 't1', name: "Rahim's PC", percent: 100,
+      state: 'arrived', board: 'Week 6 - Sorting' });
+    const end = badge.querySelector('.rx-label').textContent;
+
+    const canvasAfter = sf.canvas.getBoundingClientRect();
+    // A failed transfer must clear itself rather than leave a stuck ring.
+    a.showReceiving({ id: 't2', name: 'Someone', percent: 40, state: 'failed' });
+    const afterFail = badge.classList.contains('show');
+
+    sf.draw = realDraw;
+    return { hiddenAtRest, early, mid, end, afterFail, redraws,
+      moved: Math.round(canvasAfter.width) !== Math.round(canvasBefore.width)
+        || Math.round(canvasAfter.height) !== Math.round(canvasBefore.height),
+      overCanvas: badge.getBoundingClientRect().bottom > canvasAfter.top + 1 };
+  `);
+  check('nothing is shown until a board is actually on its way', receiving.hiddenAtRest);
+  check('a board arriving names who is sending it, before it has finished',
+    receiving.early.shown && /Rahim/.test(receiving.early.text), receiving.early.text);
+  check('and the ring fills as it comes in', receiving.mid === '64', receiving.mid + '%');
+  check('the board names itself once it has arrived and been unsealed',
+    /Week 6 - Sorting/.test(receiving.end), receiving.end);
+  check('a transfer that fails clears itself instead of sticking', receiving.afterFail === false);
+  check('none of it repaints the board somebody may be writing on',
+    receiving.redraws === 0, receiving.redraws + ' repaints');
+  check('and the canvas is not moved or covered by it',
+    receiving.moved === false && receiving.overCanvas === false);
+
+  /*
+   * Being told, rather than having to notice.
+   *
+   * A ring that quietly fills in the corner is no use to somebody looking at
+   * their own handwriting. The report was: writing on the board, a colleague
+   * hits Send, and the first you know of it is an "accept this board?" dialog
+   * landing over your sentence.
+   *
+   * So the badge announces itself once - a brief pulse and two soft notes -
+   * and then settles down to being a ring. Once, at the start; a progress
+   * update must never set it off again.
+   */
+  const alerting = await js(`
+    const a = window.app, sf = a.surface;
+    const badge = document.getElementById('rxBadge');
+    a.settings.arrivalSound = true;
+
+    // Count chimes without making a sound in the test run.
+    let chimes = 0;
+    const realChime = a.playArrivalChime.bind(a);
+    a.playArrivalChime = () => { chimes++; };
+
+    let redraws = 0;
+    const realDraw = sf.draw.bind(sf);
+    sf.draw = function (...args) { redraws++; return realDraw(...args); };
+    const before = sf.canvas.getBoundingClientRect();
+
+    a._rxAnnounced = null;
+    a.showReceiving({ id: 'a1', name: 'Lab PC', percent: 3 });
+    const first = { alerting: badge.classList.contains('alert'), chimes };
+    a.showReceiving({ id: 'a1', name: 'Lab PC', percent: 41 });
+    a.showReceiving({ id: 'a1', name: 'Lab PC', percent: 77 });
+    const during = { chimes, stillOne: chimes === 1 };
+
+    // A second, separate board must announce itself again.
+    a.showReceiving({ id: 'a1', name: 'Lab PC', percent: 100, state: 'arrived', board: 'B' });
+    a.showReceiving({ id: 'a2', name: 'Lab PC', percent: 5 });
+    const second = chimes;
+
+    // Switched off, it stays silent - but still shows.
+    a.settings.arrivalSound = false;
+    a.playArrivalChime = realChime;          // the real one, which must return early
+    let threw = false;
+    try { a.playArrivalChime(); } catch { threw = true; }
+
+    const after = sf.canvas.getBoundingClientRect();
+    sf.draw = realDraw;
+    badge.classList.remove('alert', 'show');
+    a.settings.arrivalSound = true;
+    return { first, during, second, threw, redraws,
+      moved: Math.round(after.width) !== Math.round(before.width)
+        || Math.round(after.height) !== Math.round(before.height) };
+  `);
+  check('a board starting to arrive announces itself instead of waiting to be noticed',
+    alerting.first.alerting && alerting.first.chimes === 1);
+  check('and it says so once, not on every chunk that lands',
+    alerting.during.stillOne, alerting.during.chimes + ' chime(s) across three updates');
+  check('a second board announces itself in its own right', alerting.second === 2);
+  check('switching the sound off is silent rather than broken', alerting.threw === false);
+  check('none of the announcing repaints or moves the board either',
+    alerting.redraws === 0 && alerting.moved === false, alerting.redraws + ' repaints');
+
+  /*
    * Sharing has a button of its own.
    *
    * It was a section of Settings, which was wrong twice: buried four screens

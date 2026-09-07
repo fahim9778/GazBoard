@@ -75,7 +75,7 @@ function createIdentity(userDataDir) {
  *        which is the renderer showing someone the arriving board and waiting.
  * @param {Function} opts.onPeers        called when the visible device list changes
  */
-function createSyncService({ userDataDir, askAboutBoard, onPeers = () => {} }) {
+function createSyncService({ userDataDir, askAboutBoard, onPeers = () => {}, onReceiving = () => {} }) {
   const id = createIdentity(userDataDir);
   let node = null;
   let lastError = null;
@@ -115,6 +115,7 @@ function createSyncService({ userDataDir, askAboutBoard, onPeers = () => {} }) {
       deviceName: id.deviceName,
       paired: id.paired,
       onPeers,
+      onReceiving,
       onBoard: askAboutBoard
     });
     try {

@@ -48,6 +48,10 @@ export const DEFAULT_SETTINGS = {
   // and a phone has no hover for it to belong to. On is for a touchscreen PC
   // whose owner wants it anyway. See showInkPointer() in tools.js.
   nibOnTouch: false,
+  // A short two-note chime when a board starts arriving. On by default: the
+  // thing it prevents is being halfway through a sentence when an "accept
+  // this board?" dialog appears out of nowhere. See showReceiving().
+  arrivalSound: true,
   // Sharing boards over the local network. Off, and off for everyone who
   // upgrades: nothing binds a port, announces itself or listens for anything
   // until this is switched on by hand. See initSync().
@@ -1247,6 +1251,109 @@ class App {
     this.syncUI();
   }
 
+  /**
+   * A board is arriving. Say so, quietly.
+   *
+   * The rule this is written around: somebody may be mid-sentence on the board
+   * when a colleague hits Send. Nothing here may steal focus, cover the
+   * canvas, move the toolbar, or cause a single repaint of the drawing.
+   *
+   * So it is one small ring on the top bar - a circle that fills as the board
+   * comes in, with the sender's name beside it. It writes straight into two
+   * DOM nodes and touches nothing else. The board name only appears at the
+   * end, because until the whole thing has arrived and been unsealed there is
+   * no way to know it: the title is inside the encrypted part, which is where
+   * it belongs.
+   */
+  /**
+   * Two soft notes, made on the spot rather than shipped as a file.
+   *
+   * Nothing is downloaded and nothing is bundled: it is a hundred milliseconds
+   * of oscillator, so the app stays the same size and still works with no
+   * network at all. Quiet on purpose - this is a nudge during a lesson, not an
+   * alarm - and it fails silently, because a browser that has not been clicked
+   * yet will refuse to make a sound and that must never break a transfer.
+   */
+  playArrivalChime() {
+    if (this.settings.arrivalSound === false) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      const ctx = this._audio || (this._audio = new Ctx());
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      const now = ctx.currentTime;
+      [[660, 0], [880, 0.11]].forEach(([hz, at]) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = hz;
+        // A gentle rise and fall. A square-edged blip reads as an error sound.
+        gain.gain.setValueAtTime(0.0001, now + at);
+        gain.gain.exponentialRampToValueAtTime(0.09, now + at + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.16);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(now + at);
+        osc.stop(now + at + 0.18);
+      });
+    } catch { /* no audio on this machine, or not allowed yet */ }
+  }
+
+  showReceiving(info) {
+    if (!info) return;
+    const host = document.getElementById('rxBadge');
+    if (!host) return;
+    const ring = host.querySelector('.rx-ring');
+    const label = host.querySelector('.rx-label');
+
+    if (info.state === 'failed') { host.classList.remove('show'); return; }
+
+    const pct = Math.max(0, Math.min(100, Math.round(info.percent || 0)));
+    // The ring is a conic gradient, so moving it is one style write and the
+    // compositor does the rest. No layout, no paint of anything else.
+    if (ring) {
+      ring.style.background =
+        `conic-gradient(var(--accent) ${pct * 3.6}deg, var(--stroke) 0deg)`;
+      ring.setAttribute('aria-valuenow', String(pct));
+    }
+    if (label) {
+      label.textContent = info.state === 'arrived'
+        ? (info.board ? `${info.board} — from ${info.name}` : `Board from ${info.name}`)
+        : `${info.name} — ${pct}%`;
+    }
+    /*
+     * The heads-up, once per transfer.
+     *
+     * The complaint this answers: writing on the board, someone hits Send, and
+     * the first you know of it is an "accept this board?" dialog landing over
+     * your sentence. A ring that quietly fills in the corner is no use if you
+     * are looking at the ink.
+     *
+     * So the badge announces itself - a brief pulse and two soft notes - and
+     * then settles down to being a ring. Once, at the start, keyed on the
+     * transfer id so a progress update never re-triggers it.
+     */
+    if (info.id && info.id !== this._rxAnnounced && info.state !== 'arrived') {
+      this._rxAnnounced = info.id;
+      host.classList.add('alert');
+      setTimeout(() => host.classList.remove('alert'), 2600);
+      this.playArrivalChime();
+    }
+
+    host.classList.add('show');
+    host.title = info.state === 'arrived'
+      ? 'A board has just arrived' : `Receiving a board from ${info.name}`;
+
+    clearTimeout(this._rxHide);
+    if (info.state === 'arrived') {
+      // Leave the finished name up long enough to read, then get out of the way.
+      this._rxHide = setTimeout(() => host.classList.remove('show'), 4000);
+    } else {
+      // A sender that goes quiet - laptop shut, wifi dropped - must not leave a
+      // ring stuck at 40% forever.
+      this._rxHide = setTimeout(() => host.classList.remove('show'), 20000);
+    }
+  }
+
   toast(message, iconName = 'check', ms = 2600) {
     const host = document.getElementById('toasts');
     const el = h('div', { class: 'toast' }, h('span', { html: icon(iconName, 16), style: 'display:flex' }), h('span', {}, message));
@@ -2076,6 +2183,9 @@ class App {
       this.panels.syncChanged();
     });
     window.board.sync.onIncoming((msg) => this.queueIncomingBoard(msg));
+    if (window.board.sync.onReceiving) {
+      window.board.sync.onReceiving((info) => this.showReceiving(info));
+    }
     // Routed through a field rather than wired per send, because listeners
     // registered on a preload bridge cannot be taken off again.
     this._onSendBytes = null;
