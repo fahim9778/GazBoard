@@ -123,10 +123,58 @@ function createSyncNode(opts) {
 
   /* ---------------- discovery ---------------- */
 
+  /**
+   * The addresses to put IN an announcement, best first.
+   *
+   * Capped, because this has to stay inside one UDP packet, and a machine with
+   * a stack of virtual adapters can have a surprising number of them.
+   */
+  function advertisedAddresses() {
+    try {
+      return localAddresses().map((a) => a.address)
+        .filter((a) => !isSelfAssigned(a))
+        .slice(0, 6);
+    } catch { return []; }
+  }
+
+  /*
+   * An announcement says where to find this machine, not merely that it exists.
+   *
+   * It used to say only "I am here", leaving the listener to use the address
+   * the packet ARRIVED from. That is right on a simple network and wrong on a
+   * building one. A PC with a wired port that gets no address and wifi that
+   * does will announce out of both; the wired broadcast reaches everything on
+   * that floor's cabling carrying a useless 169.254 source, while the wifi
+   * broadcast never crosses to the wired side at all. The listener therefore
+   * sees exactly one announcement, from the address that cannot be dialled -
+   * and there is no second, better one coming to correct it.
+   *
+   * Saying the addresses outright fixes that: the packet can arrive by any
+   * route it likes, and what it CARRIES is what gets dialled. Older versions
+   * do not send the field and are not harmed by it; a listener that finds it
+   * missing falls back to the arrival address exactly as before.
+   */
   function announcement() {
     return Buffer.from(JSON.stringify({
-      t: 'gazboard', v: P.PROTOCOL, id: deviceId, name: deviceName, port
+      t: 'gazboard', v: P.PROTOCOL, id: deviceId, name: deviceName, port,
+      a: advertisedAddresses()
     }));
+  }
+
+  /**
+   * Every address a peer might be reachable on, best first.
+   *
+   * The ones it named itself come before the one its packet happened to arrive
+   * from, and anything a computer invented for itself comes last. Duplicates
+   * are dropped so the list stays short enough to try one by one.
+   */
+  function candidateAddresses(msg, arrivedFrom) {
+    const named = Array.isArray(msg && msg.a) ? msg.a : [];
+    const all = [...named, arrivedFrom]
+      .filter((a) => typeof a === 'string' && /^[0-9.]{7,15}$/.test(a));
+    const real = all.filter((a) => !isSelfAssigned(a));
+    const invented = all.filter(isSelfAssigned);
+    return [...new Set([...real, ...invented])].slice(0, 8);
   }
 
   function notePeer(msg, address, opts = {}) {
@@ -156,15 +204,21 @@ function createSyncNode(opts) {
      * It is still accepted when it is the first or only thing we have heard,
      * because two laptops on one cable have nothing else to offer each other.
      */
+    const candidates = pinned ? [address] : candidateAddresses(msg, address);
+    const best = candidates[0] || address;
     const keepPinned = before && before.pinned && !pinned;
     const keepReal = before && before.address && !isSelfAssigned(before.address)
-      && isSelfAssigned(address) && !pinned;
+      && isSelfAssigned(best) && !pinned;
     const keep = keepPinned || keepReal;
-    const useAddress = keep ? before.address : address;
+    const useAddress = keep ? before.address : best;
     const usePort = keep ? before.port : msg.port;
+    // Keep the rest as fallbacks, with whatever we are using at the head of
+    // the queue: send() walks this list when the first one will not answer.
+    const useList = [...new Set([useAddress, ...candidates])];
     peers.set(msg.id, {
       deviceId: msg.id, name: String(msg.name || 'Unknown device').slice(0, 64),
       address: useAddress, port: usePort, seen: Date.now(),
+      addresses: useList,
       pinned: pinned || (before ? before.pinned === true : false)
     });
     if (!before || before.address !== useAddress || before.name !== msg.name) onPeers(list());
@@ -443,6 +497,9 @@ function createSyncNode(opts) {
 
   /** Pair with a peer using the code it is showing. Resolves to the paired record. */
   async function pairWith(peer, code) {
+    // Same reason as in send(): the address it announced may not be the one
+    // that answers, and pairing is where somebody first finds that out.
+    peer = await bestAddress(peer);
     const keys = P.createPairingKeys();
     const us = { deviceId, publicKey: keys.publicKey };
 
@@ -486,6 +543,52 @@ function createSyncNode(opts) {
     return { ...rec, fingerprint: P.fingerprint(key) };
   }
 
+  /** A quiet knock on one address. True if a GazBoard answered. */
+  function knock(address, addrPort, timeoutMs = 1500) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      let req;
+      try {
+        req = http.request({ host: address, port: addrPort, path: '/ping', method: 'GET',
+          timeout: timeoutMs }, (res) => {
+          res.resume();                       // drain, we only wanted the answer
+          finish(res.statusCode >= 200 && res.statusCode < 300);
+        });
+      } catch { finish(false); return; }
+      req.on('timeout', () => { try { req.destroy(); } catch {} finish(false); });
+      req.on('error', () => finish(false));
+      req.end();
+    });
+  }
+
+  /**
+   * Of everything we know about a peer, the address that actually answers.
+   *
+   * Ranking an address list is a guess, and some of the guesses look perfect
+   * and are hopeless. A Hyper-V or WSL switch gives its host a 172.x or 192.x
+   * address that passes every test for a real one and is reachable from
+   * precisely nowhere; a wired port with no DHCP gives out a 169.254 that at
+   * least announces what it is. Rather than reason harder about which is
+   * which, this asks all of them at once and believes whichever replies.
+   *
+   * One round trip on a local network, run only when a person has actually
+   * asked to pair or to send, and only when there is more than one to choose
+   * between. When nothing answers the original choice is returned untouched,
+   * so the attempt that follows produces the real error rather than a vaguer
+   * one invented here.
+   */
+  async function bestAddress(peer, extra = []) {
+    const addrPort = peer.port || TRANSFER_PORT;
+    const known = [peer.address, ...(peer.addresses || []), ...extra]
+      .filter((a) => typeof a === 'string' && a);
+    const list = [...new Set(known)];
+    if (list.length < 2) return peer.address ? peer : { ...peer, address: list[0] || peer.address };
+    const answered = await Promise.all(list.map((a) => knock(a, addrPort)));
+    const winner = list.find((_, i) => answered[i]);
+    return winner ? { ...peer, address: winner, port: addrPort } : peer;
+  }
+
   /** Send one board to a paired peer. Resolves to what the other end decided. */
   async function send(peer, board, onProgress = null) {
     const rec = paired.get(peer.deviceId);
@@ -503,6 +606,9 @@ function createSyncNode(opts) {
       throw new Error(`${rec.name || 'that computer'} has not been seen on this network yet, so there `
         + 'is no address to send to. Open sharing there, or add it by address.');
     }
+    // The address it announced may not be the one that answers. Ask first,
+    // before a whole board goes down a route that was never going to work.
+    peer = await bestAddress(peer, rec.lastAddress ? [rec.lastAddress] : []);
     const payload = Buffer.from(JSON.stringify(board));
     if (payload.length > MAX_BOARD_BYTES) throw new Error('board is too large to send');
 
@@ -647,6 +753,7 @@ function createSyncNode(opts) {
         const rec = paired.get(p.deviceId);
         return {
           deviceId: p.deviceId, name: p.name, address: p.address, port: p.port,
+          addresses: p.addresses || (p.address ? [p.address] : []),
           paired: !!rec,
           fingerprint: rec ? P.fingerprint(Buffer.from(rec.key, 'base64')) : null
         };
@@ -850,6 +957,9 @@ function createSyncNode(opts) {
 
   return {
     start, stop, peers: list, addByAddress,
+    // For the tests: hand this node an announcement as though it had arrived
+    // over the network, without needing a second machine to send one.
+    _notePeer: notePeer, _list: list,
     beginPairing, cancelPairing, pairWith, send, unpair, endSession,
     pairedDevices: () => paired.all().map((r) => ({
       deviceId: r.deviceId, name: r.name, remember: !!r.remember, pairedAt: r.pairedAt,

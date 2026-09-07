@@ -1002,6 +1002,83 @@ async function run() {
    * "you are not an administrator on this computer" its owner was shown a
    * screenful of angle brackets and reasonably assumed GazBoard had broken.
    */
+  /*
+   * The building network, which is where the ranking rule was not enough.
+   *
+   * A PC with a wired port that gets no address and wifi that does announces
+   * out of BOTH. On a university floor the wired broadcast reaches everything
+   * on that cabling carrying a useless 169.254 source, while the wifi
+   * broadcast never crosses to the wired side at all. So the listener sees
+   * exactly ONE announcement, from the address that cannot be dialled, and no
+   * better one is ever coming to replace it - the ranking rule needs two
+   * addresses to choose between and only ever gets the wrong one.
+   *
+   * So an announcement now carries the addresses outright. However the packet
+   * travelled, what it CARRIES is what gets dialled.
+   */
+  await section('an announcement says where to find the machine, not just that it exists', async () => {
+    const t = await pair();
+    try {
+      const say = (extra) => ({ t: 'gazboard', v: P.PROTOCOL, id: 'far-away',
+        name: 'Classroom PC', port: 53318, ...extra });
+
+      // Exactly the classroom case: it arrives from the invented address, and
+      // names the real one.
+      t.A._notePeer(say({ a: ['10.10.113.81'] }), '169.254.151.8');
+      const seen = t.A._list().find((p) => p.deviceId === 'far-away');
+      check('the address it named is the one offered, not the one it arrived from',
+        !!seen && seen.address === '10.10.113.81', seen && seen.address);
+      check('and the arrival address is kept behind it as a fallback',
+        !!seen && seen.addresses.includes('169.254.151.8'), (seen && seen.addresses || []).join(', '));
+
+      // An older version sends no addresses at all. Nothing may change for it.
+      t.A._notePeer(say({ id: 'old-version', name: 'Older GazBoard' }), '10.10.113.99');
+      const old = t.A._list().find((p) => p.deviceId === 'old-version');
+      check('a version that names none still works exactly as before',
+        !!old && old.address === '10.10.113.99', old && old.address);
+
+      // A machine with Hyper-V or WSL advertises addresses that LOOK real and
+      // reach nowhere. Ranking cannot tell; only asking can.
+      t.A._notePeer(say({ id: 'virtual-host', name: 'Office PC',
+        a: ['172.23.160.1', '172.18.208.105'] }), '172.18.208.105');
+      const virt = t.A._list().find((p) => p.deviceId === 'virtual-host');
+      check('every address a machine names is kept, so a wrong guess is recoverable',
+        !!virt && virt.addresses.includes('172.18.208.105')
+        && virt.addresses.includes('172.23.160.1'), (virt && virt.addresses || []).join(', '));
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * Which of them actually answers.
+   *
+   * Ranking is a guess and some guesses look perfect. A Hyper-V switch hands
+   * its host a 172.x that passes every test for a real address and is
+   * reachable from nowhere at all. Rather than reason harder, ask them all and
+   * believe whichever replies.
+   */
+  await section('the address that answers is the one used', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      // Two addresses: one with nothing on it, and the one B is really on.
+      // Port 1 is refused instantly, so this does not wait on a timeout.
+      const reached = await t.A.pairWith(
+        { deviceId: t.peerB.deviceId, name: t.peerB.name,
+          address: '127.0.0.1', port: t.B.port,
+          addresses: ['127.0.0.1'] }, showing.code);
+      check('pairing still works when there is only one address to try',
+        !!reached && !!reached.deviceId && !!reached.fingerprint, reached && reached.name);
+
+      const asA = t.aStore.all()[0];
+      const board = { id: 'b1', name: 'Board', objects: [] };
+      const ok = await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+        address: '203.0.113.9', port: t.B.port,
+        addresses: ['203.0.113.9', '127.0.0.1'] }, board);
+      check('and a send walks past an address that does not answer to one that does',
+        !!ok && ok.accepted === true, JSON.stringify(ok));
+    } finally { await t.stop(); }
+  });
+
   await section('a PowerShell error is turned into a sentence', async () => {
     const { plainPowerShellError } = require('../sync/firewall.js');
 
