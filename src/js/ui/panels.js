@@ -495,6 +495,10 @@ export function createPanels(app) {
     if (addrs.length) {
       const many = addrs.length > 1;
       const box = h('div', {
+        // Named so it can be told apart from the prose around it. What goes in
+        // here is the MACHINE's words - addresses, and Windows' own name for
+        // each adapter, which on one desk is literally "WiFi 2" - not ours.
+        class: 'addr-box',
         style: 'margin-top:9px;padding:9px 11px;border-radius:6px;background:var(--surface-2);'
           + 'border:1px solid var(--stroke)'
       }, h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' },
@@ -586,7 +590,7 @@ export function createPanels(app) {
 
     if (!seen.length) {
       host.appendChild(dim('Nothing found yet. The other computer needs GazBoard open with sharing switched '
-        + 'on, on the same wifi. If it never appears, a firewall is blocking the announcement - you can still '
+        + 'on, on the same network. If it never appears, a firewall is blocking the announcement - you can still '
         + 'add it by its address below.'));
     }
 
@@ -630,7 +634,7 @@ export function createPanels(app) {
         if (r && r.ok && r.peer) {
           if (selfAssigned) {
             app.toast('Found ' + r.peer.name + ' - but that address only works over a direct cable '
-              + 'between these two computers. Through wifi or a router it will not. If sharing '
+              + 'between these two computers. Over the ordinary network it will not. If sharing '
               + 'stops working later, ask for its other address.', 'help', 11000);
           } else app.toast('Found ' + r.peer.name);
           renderSync(host);
@@ -853,7 +857,7 @@ export function createPanels(app) {
             // "Windows may ask once" was here, on all three platforms. The
             // firewall banner below names the real one; this stays neutral.
             'Off unless you switch it on. When it is on, this computer says hello to other GazBoards on the '
-            + 'same wifi so you can hand a board straight across - no account, no internet, nothing leaves the '
+            + 'same network so you can hand a board straight across - no account, no internet, nothing leaves the '
             + 'room. Your computer may ask once whether to allow it through the firewall; say yes for private '
             + 'networks or nobody will be able to reach you. Nothing is ever saved without you being asked first.'),
           row('Sound when a board starts arriving', mkToggle(() => s.arrivalSound !== false,
@@ -1091,7 +1095,7 @@ export function createPanels(app) {
         ),
         h('div', { class: 'section' }, h('h5', {}, 'About'), info,
           h('p', { style: 'font-size:12px;color:var(--text-2);margin-top:10px;line-height:1.6' },
-            'Everything stays on this device. There is no sign-in, no account and no cloud: your boards are files in a folder on this computer. The one thing that ever reaches another machine is a board you hand it yourself, over your own wifi, with sharing switched on above — and even then it goes straight from here to there, never through anybody\'s server.'))
+            'Everything stays on this device. There is no sign-in, no account and no cloud: your boards are files in a folder on this computer. The one thing that ever reaches another machine is a board you hand it yourself, over your own network, with sharing switched on above — and even then it goes straight from here to there, never through anybody\'s server.'))
       );
     });
   }

@@ -1917,7 +1917,7 @@ class App {
       + 'folder here, and nothing about you or your work is ever uploaded.'
       + '<br><br>The one exception is <b>sharing on your own network</b>, which is off until you switch '
       + 'it on in Settings. With it on, you can hand a board straight to another GazBoard on the same '
-      + 'wifi — encrypted, device to device, never through anybody\'s server. Nothing is saved without '
+      + 'network — encrypted, device to device, never through anybody\'s server. Nothing is saved without '
       + 'you being asked first.' }));
     card.appendChild(h('div', {
       style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12.5px;line-height:1.8;color:var(--text-2)',
@@ -2567,7 +2567,7 @@ class App {
     card.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
       onWindows
         ? 'They allow this one program to be reached on your own private and work networks, '
-          + 'and nowhere else. If your wifi is marked Public in Windows, change it to Private '
+          + 'and nowhere else. If your network is marked Public in Windows, change it to Private '
           + 'first, or these will have no effect.'
         : onMac
           ? 'They add GazBoard to the list of apps allowed to accept incoming connections, and '

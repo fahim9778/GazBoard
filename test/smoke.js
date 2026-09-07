@@ -7180,6 +7180,43 @@ module.exports.run = async (win, app) => {
     sharingPanel.setHeads.join(' | '));
 
   /*
+   * "The same network", not "the same wifi".
+   *
+   * Half the machines this runs on are on a cable. A lecturer whose desktop is
+   * wired and whose laptop is on wifi reads "the same wifi" and concludes,
+   * reasonably, that sharing is not for them - when the two are on the same
+   * network and it would have worked perfectly.
+   *
+   * The address block is left out of this on purpose. What is printed there is
+   * the MACHINE talking - its addresses, and Windows' own name for each
+   * adapter, which on one real desk is literally "WiFi 2". Renaming somebody's
+   * network card is not ours to do, and a check that reads it as our prose
+   * fails on their computer and passes on ours, which is the least useful kind
+   * of test there is.
+   */
+  const saysNetwork = await js(`
+    const a = window.app;
+    a.panels.close();
+    a.panels.sharing();
+    await new Promise((r) => setTimeout(r, 350));
+    // Our words only: the addresses and adapter names are the machine's.
+    const body = document.getElementById('panelBody').cloneNode(true);
+    for (const el of body.querySelectorAll('.addr-box')) el.remove();
+    const text = body.textContent;
+    a.panels.close();
+    // Say WHICH sentence, not merely that there is one. The firewall part of
+    // this panel is written fresh on each operating system, so a machine can
+    // show wording that never renders on the machine the test was written on -
+    // and "still says wifi" sends somebody hunting through six files.
+    const m = /[^.]*wi-?fi[^.]*\./i.exec(text);
+    return { wifi: /wi-?fi/i.test(text), network: /same network/i.test(text),
+             where: m ? m[0].trim().slice(0, 140) : '' };
+  `);
+  check('the sharing panel says network rather than wifi, because a cable is neither',
+    saysNetwork.wifi === false && saysNetwork.network === true,
+    saysNetwork.wifi ? 'found: "' + saysNetwork.where + '"' : 'says network');
+
+  /*
    * The firewall check reads rules; it cannot prove another computer can get
    * in, because a connection to your own machine never crosses the firewall.
    * So it can say "allowed" about a machine nothing can reach, and when it
