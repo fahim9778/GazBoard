@@ -274,13 +274,34 @@ export function createPanels(app) {
     const showHelp = () => app.showFirewallHelp('failed', fw);
 
     if (fw.state === 'unknown') {
+      /*
+       * We could not read the rules. That is a normal state on a machine
+       * somebody else administers - a lab or classroom PC - and it is worth
+       * describing what it FEELS like rather than only what failed, because
+       * the shape of it is confusing on its own: sending works, receiving does
+       * not, and the other computer can see you while you cannot see it.
+       *
+       * Both halves have the same cause. Going out is allowed; coming in needs
+       * a rule this account cannot write.
+       */
+      const locked = /administrator|policy|not one/i.test(fw.detail || '');
       return h('div', {},
         banner('warn',
           (fw.detail
             ? fw.detail.charAt(0).toUpperCase() + fw.detail.slice(1) + '. '
             : `GazBoard could not read ${named} on this computer. `)
-          + 'So it cannot say whether other machines can reach you. If nobody can, the commands '
-          + 'to open the way are here.',
+          + 'So it cannot say whether other machines can reach you.'),
+        locked ? banner('warn',
+          h('b', {}, 'What that usually looks like.'),
+          ' This computer can send boards out and can be seen by others, while boards sent TO it '
+          + 'never arrive and its own list stays empty. Going out is always allowed; coming in '
+          + 'needs a rule only an administrator can add. Until somebody adds it, share the other '
+          + 'way round - send from this computer instead of to it.') : null,
+        banner('warn',
+          locked
+            ? 'The two commands that open the way are below. They need an administrator, so pass '
+              + 'them to whoever looks after this machine rather than trying them here.'
+            : 'If nobody can reach you, the commands to open the way are here.',
           smallBtn('Show the commands', showHelp, true)),
         programLine(fw),
         h('div', {}, smallBtn('Check again', () => checkFirewall(host))));
@@ -492,6 +513,15 @@ export function createPanels(app) {
           // The interface name is noise when there is only one address, and
           // the only way to tell them apart when there are two.
           many ? h('span', { style: 'font-size:11.5px;color:var(--text-2)' }, a.name) : null,
+          // An address the adapter invented for itself because nothing
+          // answered. It works down one cable and nowhere else, so it is
+          // listed last and labelled rather than left to be picked by mistake.
+          a.selfAssigned ? h('span', {
+            style: 'font-size:11px;color:var(--text-2);opacity:.85',
+            title: 'This computer gave itself this address because the network did not '
+              + 'answer. It only works over a direct cable between two computers - try '
+              + 'the other address first.'
+          }, 'direct cable only') : null,
           h('button', {
             class: 'btn',
             style: 'padding:2px 9px;font-size:11.5px;margin-left:auto;flex:none',
@@ -580,12 +610,38 @@ export function createPanels(app) {
       onclick: async () => {
         const addr = await app.promptText('Add a computer by address',
           'Type the address the other computer shows under its own name - four numbers with dots, '
-          + 'like 192.168.0.243. Use this when it never turns up in the list by itself.',
+          + 'like 192.168.0.243. Use this when it never turns up in the list by itself. '
+          + 'If the only address it shows starts with 169.254, that one reaches it over a direct '
+          + 'cable between the two computers and nowhere else.',
           { placeholder: '192.168.0.243', confirmLabel: 'Look for it' });
         if (!addr) return;
+        /*
+         * An address starting 169.254 is one the other computer gave ITSELF
+         * after asking the network for one and hearing nothing back.
+         *
+         * It is typed in and dialled like any other, because two laptops on
+         * one cable have nothing else to offer each other and it is the right
+         * answer there. But it is the right answer nowhere else, and it will
+         * stop working the moment either machine gets a real address - so
+         * whoever typed it is told, once, what they have just added.
+         */
+        const selfAssigned = /^\s*169\.254\./.test(addr);
         const r = await window.board.sync.addByAddress(addr);
-        if (r && r.ok && r.peer) { app.toast('Found ' + r.peer.name); renderSync(host); }
-        else app.toast('Nothing answered at that address: ' + ((r && r.error) || 'no answer'), 'help', 7000);
+        if (r && r.ok && r.peer) {
+          if (selfAssigned) {
+            app.toast('Found ' + r.peer.name + ' - but that address only works over a direct cable '
+              + 'between these two computers. Through wifi or a router it will not. If sharing '
+              + 'stops working later, ask for its other address.', 'help', 11000);
+          } else app.toast('Found ' + r.peer.name);
+          renderSync(host);
+        } else if (selfAssigned) {
+          app.toast('Nothing answered at that address. Addresses starting 169.254 are ones a '
+            + 'computer gives itself when the network does not answer, and only reach it over a '
+            + 'direct cable - ask that computer for the other address its sharing panel shows.',
+            'help', 11000);
+        } else {
+          app.toast('Nothing answered at that address: ' + ((r && r.error) || 'no answer'), 'help', 7000);
+        }
       }
     }, 'Add a computer by address…'));
 
@@ -775,6 +831,15 @@ export function createPanels(app) {
             : (s.inkPointer === 'arrow'
               ? 'The ordinary mouse pointer, the way most whiteboards do it. On a tablet it will disappear while the pen is down; that is Windows, not GazBoard.'
               : 'A crosshair for placing a mark exactly. Same caveat as the arrow on a tablet.')),
+          // Only worth offering where a finger can actually draw. On a
+          // mouse-only desktop this switch would do nothing at all, and a
+          // setting that does nothing is worse than no setting.
+          (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)
+            ? row('Show the nib when drawing with a finger',
+                mkToggle(() => s.nibOnTouch === true, (v) => { s.nibOnTouch = v;
+                  app.interaction.hideInkPointer(); }),
+                'Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.')
+            : null,
           row('Ruler snapping', mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
         h('div', { class: 'section' },

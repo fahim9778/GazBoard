@@ -21,6 +21,31 @@ const P = require('./protocol.js');
  * actually matters here. */
 const DISCOVERY_PORT = 53319;
 
+/**
+ * An address a computer gave ITSELF because nothing answered.
+ *
+ * When a Windows adapter asks the network for an address and gets no reply, it
+ * stops waiting and makes one up in the 169.254.x.x range.
+ *
+ * This is NOT a broken address, and it must never simply be thrown away. Two
+ * laptops joined by one ethernet cable with no router between them both end up
+ * here, and they can reach each other perfectly well: it is the only address
+ * either of them has, and it is the whole reason the range exists.
+ *
+ * What it must never do is WIN. A desktop with wifi plus an unplugged network
+ * port, or an idle Hyper-V or VPN adapter, has one of these sitting alongside
+ * a real address that works for everybody. If the invented one is announced
+ * and written down in preference to the real one, every send fails with
+ * "cannot reach" while a plain ping to the real address works - which is
+ * exactly the afternoon this rule was written to end.
+ *
+ * So: ranked last, never discarded. A real address beats it every time; when
+ * it is all there is, it is used without comment.
+ */
+function isSelfAssigned(address) {
+  return typeof address === 'string' && address.startsWith('169.254.');
+}
+
 /* The transfer port is FIXED, not ephemeral.
  *
  * Typing an address is the fallback for when discovery cannot see a device, and
@@ -104,15 +129,45 @@ function createSyncNode(opts) {
     }));
   }
 
-  function notePeer(msg, address) {
+  function notePeer(msg, address, opts = {}) {
     if (!msg || msg.t !== 'gazboard' || msg.id === deviceId) return;
     if (msg.v !== P.PROTOCOL) return;         // a version we cannot speak to
     const before = peers.get(msg.id);
+    /*
+     * An address somebody TYPED outranks one that arrived by itself.
+     *
+     * Announcements keep coming, and a machine with two adapters sends one out
+     * of each. Without this, a person types the address that works, watches it
+     * connect, and a few seconds later the next broadcast quietly replaces it
+     * with the other one - so the thing they fixed by hand breaks again on its
+     * own, which is impossible to explain to anybody.
+     */
+    const pinned = opts.pinned === true;
+    /*
+     * Two ways an address we already have can outrank the one just arriving.
+     *
+     * Pinned: somebody TYPED it. Announcements keep coming, and a machine with
+     * two adapters sends one out of each, so without this a person types the
+     * address that works, watches it connect, and a few seconds later the next
+     * broadcast quietly puts the other one back - the thing they fixed by hand
+     * breaking again on its own, which is impossible to explain to anybody.
+     *
+     * Real over invented: a 169.254 address never displaces one that is not.
+     * It is still accepted when it is the first or only thing we have heard,
+     * because two laptops on one cable have nothing else to offer each other.
+     */
+    const keepPinned = before && before.pinned && !pinned;
+    const keepReal = before && before.address && !isSelfAssigned(before.address)
+      && isSelfAssigned(address) && !pinned;
+    const keep = keepPinned || keepReal;
+    const useAddress = keep ? before.address : address;
+    const usePort = keep ? before.port : msg.port;
     peers.set(msg.id, {
       deviceId: msg.id, name: String(msg.name || 'Unknown device').slice(0, 64),
-      address, port: msg.port, seen: Date.now()
+      address: useAddress, port: usePort, seen: Date.now(),
+      pinned: pinned || (before ? before.pinned === true : false)
     });
-    if (!before || before.address !== address || before.name !== msg.name) onPeers(list());
+    if (!before || before.address !== useAddress || before.name !== msg.name) onPeers(list());
   }
 
   /**
@@ -146,6 +201,10 @@ function createSyncNode(opts) {
     const address = raw.startsWith('::ffff:') ? raw.slice(7) : raw;
     const rec = paired.get(id);
     if (!rec) return;
+    // They reached us from an invented address while we already hold a real
+    // one for them. The real one is the better bet; theirs still works for
+    // whichever cable they are on, but only for that cable.
+    if (isSelfAssigned(address) && rec.lastAddress && !isSelfAssigned(rec.lastAddress)) return;
     // Their listening port, not the one they happen to be calling from - that
     // is an ephemeral number that will not be there a second later. Older
     // versions do not send it; the usual port is the right guess for them.
@@ -709,7 +768,8 @@ function createSyncNode(opts) {
       req.end();
     });
     if (reply.v !== P.PROTOCOL || !reply.deviceId) throw new Error('not a GazBoard');
-    notePeer({ t: 'gazboard', v: reply.v, id: reply.deviceId, name: reply.name, port: addrPort }, address);
+    notePeer({ t: 'gazboard', v: reply.v, id: reply.deviceId, name: reply.name, port: addrPort },
+      address, { pinned: true });
     return list().find((p) => p.deviceId === reply.deviceId);
   }
 
@@ -823,7 +883,22 @@ function localAddresses() {
       out.push({ name, address: a.address });
     }
   }
-  return out;
+  /*
+   * Best first, and none of them hidden.
+   *
+   * A desktop with wifi and an unplugged network cable shows two: the one
+   * everybody can reach, and a 169.254 one the idle adapter invented for
+   * itself. Reading the wrong one off the screen is a guaranteed twenty
+   * minutes of "it says it cannot reach me", so the useful one goes at the
+   * top and the other is marked.
+   *
+   * Marked, not removed. Two laptops joined by one cable with no router have
+   * nothing BUT these addresses, and they reach each other perfectly well - so
+   * hiding it would break the one arrangement where it is the right answer.
+   */
+  return out
+    .map((a) => (isSelfAssigned(a.address) ? { ...a, selfAssigned: true } : a))
+    .sort((x, y) => (x.selfAssigned ? 1 : 0) - (y.selfAssigned ? 1 : 0));
 }
 
 module.exports = { createSyncNode, localAddresses, DISCOVERY_PORT, TRANSFER_PORT, MAX_BOARD_BYTES };

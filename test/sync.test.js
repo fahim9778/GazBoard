@@ -937,6 +937,104 @@ async function run() {
     } finally { await t.stop(); }
   });
 
+  /*
+   * The address a computer gives itself when nothing answers.
+   *
+   * When an adapter asks the network for an address and gets silence, it makes
+   * one up starting 169.254. Two laptops joined by one ethernet cable with no
+   * router both land here and reach each other perfectly well - so this is not
+   * a broken address and it is never thrown away.
+   *
+   * What it must not do is win. A desktop with wifi plus an unplugged network
+   * port has one of these sitting beside a real address, and it cost a real
+   * afternoon: the invented one got announced, every machine wrote it down,
+   * and every send failed with "cannot reach" while a plain ping to the real
+   * address worked - which made it look like GazBoard's fault.
+   */
+  await section('an invented address is ranked last, never thrown away', async () => {
+    const os = require('node:os');
+    const { localAddresses } = require('../sync/node.js');
+    const realInterfaces = os.networkInterfaces;
+
+    // Two laptops on one cable have nothing else. It has to still work.
+    const t = await pair();
+    try {
+      const found = await t.A.addByAddress('127.0.0.1', t.B.port);
+      check('an address typed by hand is still dialled, whatever it looks like',
+        !!found && found.name === 'Classroom tablet', found && found.name);
+    } finally { await t.stop(); }
+
+    // A machine with both: the one everybody can reach goes first, and the
+    // other is marked rather than hidden.
+    os.networkInterfaces = () => ({
+      'Ethernet': [{ family: 'IPv4', internal: false, address: '169.254.108.4', netmask: '255.255.0.0' }],
+      'Wi-Fi': [{ family: 'IPv4', internal: false, address: '10.16.4.21', netmask: '255.255.255.0' }],
+      'Loopback': [{ family: 'IPv4', internal: true, address: '127.0.0.1', netmask: '255.0.0.0' }]
+    });
+    const both = localAddresses();
+    check('the address everybody can reach is offered first',
+      both.length === 2 && both[0].address === '10.16.4.21',
+      both.map((a) => a.address).join(', '));
+    check('and the invented one is still listed, marked for what it is',
+      both[1].address === '169.254.108.4' && both[1].selfAssigned === true
+      && both[0].selfAssigned !== true);
+
+    // ...and a machine that has nothing else is not left with a blank panel.
+    os.networkInterfaces = () => ({
+      'Ethernet': [{ family: 'IPv4', internal: false, address: '169.254.108.4', netmask: '255.255.0.0' }]
+    });
+    const only = localAddresses();
+    check('a laptop on a direct cable is shown the address it actually has',
+      only.length === 1 && only[0].address === '169.254.108.4',
+      only.map((a) => a.address).join(', '));
+
+    os.networkInterfaces = realInterfaces;
+  });
+
+  /*
+   * What PowerShell writes when nobody is watching.
+   *
+   * With its output going to a pipe rather than a console, PowerShell does not
+   * print errors as text. It prints CLIXML - a wrapper starting "#< CLIXML"
+   * with the message buried in XML and the line breaks spelled _x000D__x000A_.
+   *
+   * That went straight onto the sharing panel of a classroom PC, so instead of
+   * "you are not an administrator on this computer" its owner was shown a
+   * screenful of angle brackets and reasonably assumed GazBoard had broken.
+   */
+  await section('a PowerShell error is turned into a sentence', async () => {
+    const { plainPowerShellError } = require('../sync/firewall.js');
+
+    const denied = '#< CLIXML\r\n<Objs Version="1.1.0.1" xmlns="http://schemas.microsoft.com/'
+      + 'powershell/2004/04"><S S="Error">Get-NetFirewallRule : Access is denied. _x000D__x000A_</S>'
+      + '<S S="Error">At line:1 char:1_x000D__x000A_</S>'
+      + '<S S="Error">+ CategoryInfo          : PermissionDenied_x000D__x000A_</S></Objs>';
+    const outDenied = plainPowerShellError(denied);
+    check('the CLIXML wrapper never reaches the panel',
+      !/CLIXML|<Objs|<S S=|_x000D_/.test(outDenied), outDenied);
+    check('and "access is denied" is said as who this account is not',
+      /administrator/i.test(outDenied) && /not one/i.test(outDenied), outDenied);
+
+    const missing = '#< CLIXML\r\n<Objs><S S="Error">The term \'Get-NetFirewallRule\' is not '
+      + 'recognized as the name of a cmdlet._x000D__x000A_</S></Objs>';
+    check('an old Windows without the commands says that, not a stack trace',
+      /does not have the firewall commands/i.test(plainPowerShellError(missing)),
+      plainPowerShellError(missing));
+
+    const policy = '#< CLIXML\r\n<Objs><S S="Error">File cannot be loaded because running '
+      + 'scripts is disabled on this system._x000D__x000A_</S></Objs>';
+    check('a machine with PowerShell switched off by policy says so',
+      /policy/i.test(plainPowerShellError(policy)), plainPowerShellError(policy));
+
+    // Plain stderr, from a shell that was not PowerShell at all.
+    check('an ordinary error is passed through, tidied',
+      plainPowerShellError('Set-NetFirewallRule : something odd happened')
+        === 'something odd happened',
+      plainPowerShellError('Set-NetFirewallRule : something odd happened'));
+    check('and nothing at all stays nothing, rather than becoming a sentence',
+      plainPowerShellError('') === '' && plainPowerShellError(null) === '');
+  });
+
   await section('what the installer actually contains', async () => {
     const fs = require('node:fs');
     const path = require('node:path');

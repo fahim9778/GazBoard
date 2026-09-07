@@ -2186,6 +2186,66 @@ async function run(win, app) {
   check('and it is still the overlap while it does that, not a second nib',
     trailing.stillUp && trailing.goneInTheEnd);
 
+  /*
+   * None of that applies to a finger.
+   *
+   * A stylus tip is thin and the hand is elsewhere, so a nib under it helps. A
+   * fingertip is already sitting on the mark: the nib is under the hand where
+   * nobody can see it, or sliding around the board on its own. A phone has no
+   * hover either, so between strokes it has nothing to point at.
+   *
+   * So: no nib for a finger by default, on any machine, while a pen on that
+   * same machine keeps its own. A touchscreen PC that wants one under the
+   * finger turns the setting on.
+   */
+  const finger = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const el = document.getElementById('inkNib');
+    const was = a.settings.nibOnTouch;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.setTool('pen');
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, type, buttons) => ({ pointerId: type === 'touch' ? 9 : 1, pointerType: type,
+      button: 0, buttons, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false, pressure: 0.5 });
+    const stroke = (type) => {
+      it.action = null; it.actionId = null; it.pointers.clear();
+      it.onDown(mk(300, 300, type, 1));
+      it.onMove(mk(340, 320, type, 1));
+      const up = !el.hidden;
+      it.onUp(mk(340, 320, type, 0));
+      it.action = null; it.pointers.clear();
+      return up;
+    };
+
+    a.settings.nibOnTouch = false;
+    const fingerNib = stroke('touch');
+    // ...and nothing is left stranded with no pointer at all afterwards.
+    const cursorAfterFinger = sf.canvas.style.cursor || '';
+
+    // The same machine, the same moment: a stylus still gets its nib.
+    a.notePenSeen();
+    const penNib = stroke('pen');
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    // Switched on, the finger gets one too.
+    a.settings.nibOnTouch = true;
+    const optedInNib = stroke('touch');
+
+    a.settings.nibOnTouch = was;
+    it.hideInkPointer();
+    a.store.clear(); a.penSeenThisSession = false; a.setTool('select');
+    it.action = null; it.pointers.clear();
+    return { fingerNib, penNib, optedInNib, cursorAfterFinger };
+  `);
+  check('a finger drawing gets no nib - the fingertip is already on the spot',
+    finger.fingerNib === false);
+  check('and it is not left with no pointer at all either',
+    finger.cursorAfterFinger !== 'none', finger.cursorAfterFinger.slice(0, 24));
+  check('while a stylus on that same machine still gets its nib', finger.penNib === true);
+  check('and a touchscreen PC can switch the nib back on for the finger',
+    finger.optedInNib === true);
+
   /* ---- what a busy board costs while you write on it ---- */
   const busy = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
@@ -6635,6 +6695,42 @@ module.exports.run = async (win, app) => {
     shownAddress.onScreen && shownAddress.explains, shownAddress.sample);
   check('with a button to copy it, because typing four numbers off a screen goes wrong',
     shownAddress.copy);
+
+  /*
+   * Typing in an address a computer gave itself.
+   *
+   * 169.254.x.x is what an adapter invents after asking the network for an
+   * address and hearing nothing. Two laptops on one cable have nothing else,
+   * so it is dialled like any other - but it works down that cable and nowhere
+   * else, and it stops working the moment either machine gets a real address.
+   * Somebody typing one in is told that, before they press the button.
+   */
+  const warnsOnSelfAssigned = await js(`
+    const body = document.getElementById('panelBody');
+    const sec = [...body.querySelectorAll('.section')].find((s) => {
+      const t = s.querySelector('h5');
+      return t && t.textContent === 'Share on this network';
+    });
+    const btn = sec && [...sec.querySelectorAll('button')]
+      .find((b) => /Add a computer by address/.test(b.textContent));
+    if (!btn) return { found: false };
+    btn.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const card = document.getElementById('overlayCard');
+    const text = card ? card.textContent : '';
+    // Put it back exactly as it was: Cancel, not a stray dialog left open.
+    const cancel = card && [...card.querySelectorAll('button')]
+      .find((b) => b.textContent === 'Cancel');
+    if (cancel) cancel.click();
+    await new Promise((r) => setTimeout(r, 200));
+    return { found: true, warns: /169\.254/.test(text) && /direct cable/i.test(text),
+             closed: !document.getElementById('overlay').classList.contains('show'),
+             text: text.slice(0, 40) };
+  `);
+  check('the add-by-address box warns about a 169.254 address before you type one',
+    warnsOnSelfAssigned.found && warnsOnSelfAssigned.warns, warnsOnSelfAssigned.text);
+  check('and the box closes again on Cancel, leaving nothing on screen',
+    warnsOnSelfAssigned.closed);
 
   const backOff = await js(`
     window.app.panels.close && window.app.panels.close();

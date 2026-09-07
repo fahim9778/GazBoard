@@ -43,6 +43,11 @@ const DEFAULT_SETTINGS = {
   // What you see while inking: 'nib' (drawn by us, so Windows cannot hide it
   // mid-stroke), 'arrow' or 'crosshair'. See inkPointerKind() in tools.js.
   inkPointer: 'nib',
+  // Whether that nib also follows a FINGER. Off: a fingertip already covers
+  // the spot, so the nib is hidden under the hand or sliding about on its own,
+  // and a phone has no hover for it to belong to. On is for a touchscreen PC
+  // whose owner wants it anyway. See showInkPointer() in tools.js.
+  nibOnTouch: false,
   // Sharing boards over the local network. Off, and off for everyone who
   // upgrades: nothing binds a port, announces itself or listens for anything
   // until this is switched on by hand. See initSync().

@@ -69,6 +69,66 @@ const q = (s) => "'" + String(s).replace(/'/g, "''") + "'";
 /** PowerShell's -EncodedCommand wants UTF-16LE base64, which sidesteps quoting entirely. */
 const encode = (script) => Buffer.from(script, 'utf16le').toString('base64');
 
+/**
+ * Turn whatever PowerShell wrote to its error channel into one plain sentence.
+ *
+ * PowerShell does not print errors as text when its output is a pipe rather
+ * than a console. It prints CLIXML - a wrapper that starts "#< CLIXML" and
+ * carries the message inside XML tags, with the line breaks written out as
+ * _x000D__x000A_. Handed to a person unchanged it looks like the app broke:
+ *
+ *   #< CLIXML <Objs Version="1.1.0.1" xmlns="http://schemas...
+ *
+ * ...which is what somebody on a locked-down university machine was shown in
+ * place of "you are not an administrator on this computer".
+ *
+ * So: unwrap it, throw away the parts that are for a programmer (the line and
+ * character position, the category, the fully-qualified error id), and where
+ * the cause is one of the handful that actually happen, say that instead.
+ */
+function plainPowerShellError(raw) {
+  let text = String(raw || '').trim();
+  if (!text) return '';
+
+  if (/^#<\s*CLIXML/i.test(text) || /<Objs\b/i.test(text)) {
+    const parts = [];
+    // Only the error strings. An <Objs> block also carries progress records
+    // and other machinery nobody needs to read.
+    const re = /<S\s+S="Error">([\s\S]*?)<\/S>/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) parts.push(m[1]);
+    text = parts.join('');
+    // _x000D_ is how CLIXML spells a carriage return, and the same escape
+    // covers every other character it did not want to put in an XML document.
+    text = text.replace(/_x([0-9A-Fa-f]{4})_/g,
+      (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    text = text.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+      .replace(/&amp;/g, '&');
+  }
+
+  // The first line that is the message rather than the machinery around it.
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const message = lines.find((l) =>
+    !/^At line:|^At [A-Za-z]:\\|^\+ /.test(l) && !/^~+$/.test(l)) || lines[0] || '';
+
+  // The causes worth naming. Everything else gets its own words back, tidied.
+  if (/access is denied|requires elevation|run as administrator|UnauthorizedAccessException/i.test(message)) {
+    return 'reading the firewall on this computer needs an administrator, and this account is not one';
+  }
+  if (/is not recognized as the name of a cmdlet|CommandNotFoundException/i.test(message)) {
+    return 'this version of Windows does not have the firewall commands GazBoard reads';
+  }
+  if (/running scripts is disabled|execution of scripts is disabled|ExecutionPolicy/i.test(message)) {
+    return 'PowerShell is switched off by a policy on this computer, so the firewall cannot be read';
+  }
+  if (/blocked by|restricted by|group policy|software restriction/i.test(message)) {
+    return 'a policy on this computer blocks GazBoard from reading the firewall';
+  }
+  // Strip the "Cmdlet-Name : " that PowerShell puts in front of its own errors.
+  return message.replace(/^[A-Za-z]+-[A-Za-z]+\s*:\s*/, '').slice(0, 200);
+}
+
 function runPowerShell(args, { timeoutMs = 25000 } = {}) {
   return new Promise((resolve) => {
     let child;
@@ -175,7 +235,7 @@ async function winInspect(exe) {
     // PowerShell missing, disabled by policy, or the cmdlets absent (they need
     // Windows 8 or Server 2012 upwards). Nothing is broken; we simply cannot see.
     return { supported: true, tool: 'Windows Firewall', state: 'unknown', program: exe,
-      detail: (r.err || '').trim().slice(0, 300) };
+      detail: plainPowerShellError(r.err) };
   }
 
   const networks = asArray(info.networks).filter(Boolean);
@@ -467,7 +527,7 @@ async function repair(exe = process.execPath) {
   if (wasCancelled(r)) return { ok: false, reason: 'cancelled', after: await inspect(exe) };
   const after = await inspect(exe);
   if (after.state === 'allowed') return { ok: true, after };
-  return { ok: false, reason: 'failed', detail: (r.err || '').trim().slice(0, 300), after };
+  return { ok: false, reason: 'failed', detail: plainPowerShellError(r.err), after };
 }
 
 /** Take our rules away again. Also one UAC prompt, and also only when asked. */
@@ -531,5 +591,6 @@ module.exports = {
   // exported for the tests, which check the scripts say what they must say
   // without a machine of that kind to run them on
   _scripts: { inspectScript, repairScript, removeScript, macScript, LINUX_SCRIPT,
-    macAppPath, fields, encode, q }
+    macAppPath, fields, encode, q },
+  plainPowerShellError
 };

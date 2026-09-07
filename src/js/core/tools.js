@@ -1265,6 +1265,26 @@ export class Interaction {
      */
     const drawing = !!(this.action && this.action.type === 'draw');
     const chosen = this.inkPointerKind();
+
+    /*
+     * A finger is its own pointer, and it does not want a nib.
+     *
+     * Everything above is about a stylus, where the tip is a millimetre wide
+     * and the hand is somewhere else. A fingertip already covers the spot it is
+     * marking: a nib drawn under it is hidden by the finger at best, and at
+     * worst it is a second object sliding around the board that nobody asked
+     * for. There is no hover on a touch screen either, so between strokes it
+     * has nothing to point at and simply sits there.
+     *
+     * So no nib for a finger, on any machine. A pen or a mouse on the same
+     * machine is untouched - a Surface still gets its nib under the stylus.
+     * Someone who wants one under their finger as well turns on the setting.
+     */
+    if (deviceType === 'touch' && !this.app.settings.nibOnTouch) {
+      this.setCursor(chosen === 'nib' ? this.inkCursor(t) : this.inkPointerCursor(t));
+      this.hideInkPointer();
+      return;
+    }
     // Only the NIB falls back to the system cursor outside a stroke. Someone who
     // asked for an arrow or a crosshair gets it whatever the pen is doing.
     const kind = (chosen === 'nib' && (deviceType === 'mouse' || !drawing)) ? 'css-nib' : chosen;
