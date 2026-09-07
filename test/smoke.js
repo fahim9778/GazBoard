@@ -7092,6 +7092,48 @@ module.exports.run = async (win, app) => {
     alerting.redraws === 0 && alerting.moved === false, alerting.redraws + ' repaints');
 
   /*
+   * Three states, three colours, told apart at a glance from the back of a room.
+   *
+   * Amber while it is coming, solid orange for the first couple of seconds so
+   * it is caught out of the corner of an eye, green once it has landed.
+   * Deliberately not the app's own blue: everything else on that toolbar is
+   * blue, and one more blue thing is one the eye slides straight off.
+   */
+  const rxColour = await js(`
+    const a = window.app;
+    const badge = document.getElementById('rxBadge');
+    const seen = {};
+    const grab = () => {
+      const cs = getComputedStyle(badge);
+      return { bg: cs.backgroundColor, border: cs.borderTopColor, colour: cs.color };
+    };
+    a._rxAnnounced = null;
+    a.showReceiving({ id: 'c1', name: 'Lab PC', percent: 5 });
+    seen.alert = grab();
+    seen.alertClass = badge.classList.contains('alert');
+    badge.classList.remove('alert');          // as it does after ~2.6s
+    seen.during = grab();
+    a.showReceiving({ id: 'c1', name: 'Lab PC', percent: 100, state: 'arrived', board: 'B' });
+    seen.done = grab();
+    seen.doneClass = badge.classList.contains('done');
+    badge.classList.remove('show', 'done');
+    return seen;
+  `);
+  const warm = (c) => {
+    const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(c || '');
+    return m ? Number(m[1]) > Number(m[3]) : false;      // more red than blue
+  };
+  check('a board on its way is amber, not one more blue thing on a blue toolbar',
+    warm(rxColour.during.border), rxColour.during.border);
+  check('the first seconds are filled in rather than outlined, to catch the eye',
+    rxColour.alertClass && rxColour.alert.bg !== rxColour.during.bg,
+    rxColour.alert.bg);
+  check('and a board that has landed goes green, so the two never look alike',
+    rxColour.doneClass && !warm(rxColour.done.border)
+    && rxColour.done.border !== rxColour.during.border,
+    rxColour.done.border);
+
+  /*
    * Sharing has a button of its own.
    *
    * It was a section of Settings, which was wrong twice: buried four screens

@@ -1282,18 +1282,29 @@ class App {
       const ctx = this._audio || (this._audio = new Ctx());
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       const now = ctx.currentTime;
-      [[660, 0], [880, 0.11]].forEach(([hz, at]) => {
+      /*
+       * Three rising notes rather than two, and a triangle wave rather than a
+       * sine.
+       *
+       * A sine is the quietest shape there is: all its energy sits at one
+       * frequency, so in a room with a projector fan and thirty students it
+       * simply vanishes. A triangle carries a few harmonics, which is what
+       * makes a sound carry - it is heard as clearer rather than harsher at
+       * the same volume. Three notes also read as deliberate; two can pass for
+       * a stray system beep.
+       */
+      [[659, 0], [880, 0.1], [1175, 0.2]].forEach(([hz, at]) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
-        osc.type = 'sine';
+        osc.type = 'triangle';
         osc.frequency.value = hz;
         // A gentle rise and fall. A square-edged blip reads as an error sound.
         gain.gain.setValueAtTime(0.0001, now + at);
-        gain.gain.exponentialRampToValueAtTime(0.09, now + at + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.16);
+        gain.gain.exponentialRampToValueAtTime(0.26, now + at + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.3);
         osc.connect(gain).connect(ctx.destination);
         osc.start(now + at);
-        osc.stop(now + at + 0.18);
+        osc.stop(now + at + 0.32);
       });
     } catch { /* no audio on this machine, or not allowed yet */ }
   }
@@ -1344,9 +1355,10 @@ class App {
       ? 'A board has just arrived' : `Receiving a board from ${info.name}`;
 
     clearTimeout(this._rxHide);
+    host.classList.toggle('done', info.state === 'arrived');
     if (info.state === 'arrived') {
       // Leave the finished name up long enough to read, then get out of the way.
-      this._rxHide = setTimeout(() => host.classList.remove('show'), 4000);
+      this._rxHide = setTimeout(() => host.classList.remove('show', 'done'), 4000);
     } else {
       // A sender that goes quiet - laptop shut, wifi dropped - must not leave a
       // ring stuck at 40% forever.

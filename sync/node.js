@@ -546,7 +546,12 @@ function createSyncNode(opts) {
     const known = (claimed && paired.get(claimed))
       || (callerIp && paired.all().find((r) => r.lastAddress === callerIp))
       || null;
-    let senderName = (known && known.name) || 'Another computer';
+    // A machine announcing itself right now is telling us its CURRENT name;
+    // the pairing record only knows the name it had when it paired. Prefer the
+    // live one for the badge - it is only a label, and the authenticated name
+    // in the envelope corrects it a moment later either way.
+    const live = known && peers.get(known.deviceId);
+    let senderName = (live && live.name) || (known && known.name) || 'Another computer';
     const transferId = 'rx-' + Math.random().toString(36).slice(2, 9);
     let lastAt = 0, lastPct = -1;
     const report = (got, total) => {
@@ -584,6 +589,19 @@ function createSyncNode(opts) {
     // The envelope opened, so this really is them: keep their address current.
     noteCallerAddress(req, from, envelope?.aad?.port);
 
+    /*
+     * ...and their name, which may have changed since the day they paired.
+     * Only now, because only now is it proven: the aad is signed with the
+     * board, so a name that arrives here cannot have been put there by anyone
+     * without the shared key.
+     */
+    const sentName = String(envelope?.aad?.name || '').slice(0, 64).trim();
+    if (sentName && sentName !== rec.name) {
+      paired.set(from, { ...paired.get(from), name: sentName });
+      rec.name = sentName;
+      onPeers(list());
+    }
+
     let board;
     try { board = JSON.parse(plain.toString()); } catch { done('failed'); return json(res, 400, { error: 'bad board' }); }
 
@@ -592,7 +610,7 @@ function createSyncNode(opts) {
      * If the guess above was wrong, or was the "Another computer" shrug, this
      * is where it gets put right, alongside the board's own name.
      */
-    senderName = rec.name || senderName;
+    senderName = sentName || rec.name || senderName;
     done('arrived', { board: String(board && board.name || '').slice(0, 80) });
     try {
       const outcome = await onBoard({ board, from: { deviceId: from, name: rec.name } });
@@ -722,8 +740,25 @@ function createSyncNode(opts) {
     const payload = Buffer.from(JSON.stringify(board));
     if (payload.length > MAX_BOARD_BYTES) throw new Error('board is too large to send');
 
+    /*
+     * The sender's name travels with the board, inside the envelope.
+     *
+     * A pairing record keeps the name the other machine had ON THE DAY IT
+     * PAIRED. Rename that computer six months later and every machine that
+     * knows it carries on calling it DESKTOP-27V8MQP forever - which is what
+     * ended up on the arrival badge while the device list showed the new name
+     * beside it, because the list reads live announcements and the record does
+     * not.
+     *
+     * This goes in the envelope's aad rather than a header. The aad is signed
+     * along with the board - change one byte of it and the whole thing fails
+     * to open - so a name arriving this way is as trustworthy as the board
+     * itself, and nobody on the network can rename somebody else's computer on
+     * your screen. It is not secret either way: names go out in announcements
+     * several times a minute already.
+     */
     const envelope = P.seal(Buffer.from(rec.key, 'base64'),
-      { from: deviceId, kind: 'board', v: P.PROTOCOL, port }, payload);
+      { from: deviceId, kind: 'board', v: P.PROTOCOL, port, name: deviceName }, payload);
 
     /*
      * This one waits on a PERSON, so it cannot share the ordinary timeout.

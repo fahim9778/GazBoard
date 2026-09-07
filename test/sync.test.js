@@ -1245,6 +1245,55 @@ async function run() {
     } finally { await t.stop(); }
   });
 
+  /*
+   * A computer that has been renamed since it paired.
+   *
+   * A pairing record keeps the name the other machine had ON THE DAY. Rename
+   * it later and every machine that knows it carries on using the old one -
+   * so the arrival badge said DESKTOP-27V8MQP while the device list beside it
+   * showed "Souharda's Desktop", because the list reads live announcements and
+   * the record does not.
+   *
+   * The name now travels inside the sealed envelope, where it is signed along
+   * with the board: change a byte of it and nothing opens at all.
+   */
+  await section('a computer renamed after pairing is called by its new name', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+
+      const before = t.bStore.all()[0];
+      check('B files A under the name it paired with', before.name === 'Desk PC', before.name);
+
+      // A is renamed. Nothing tells B - that is the whole problem.
+      const renamed = createSyncNode({
+        deviceId: before.deviceId, deviceName: "Souharda's Desktop", paired: t.aStore,
+        host: '127.0.0.1', broadcast: '127.0.0.1', discoveryPort: 0,
+        onBoard: async () => 'kept-both'
+      });
+      await renamed.start();
+      try {
+        const asA = t.aStore.all()[0];
+        await renamed.send({ deviceId: asA.deviceId, name: asA.name,
+          address: '127.0.0.1', port: t.B.port },
+        { id: 'r1', name: 'Renamed Board', objects: [] });
+      } finally { await renamed.stop(); }
+
+      const after = t.bStore.all()[0];
+      check('and calls it by the new one the moment it sends something',
+        after.name === "Souharda's Desktop", after.name);
+      const arrived = seen.filter((s) => s.state === 'arrived');
+      check('the badge says the new name too, not the one on the old record',
+        arrived.length === 1 && arrived[0].name === "Souharda's Desktop",
+        arrived[0] && arrived[0].name);
+      check('the device id is unchanged, so it is the same computer, not a second one',
+        after.deviceId === before.deviceId && t.bStore.all().length === 1,
+        t.bStore.all().length + ' record(s)');
+    } finally { await t.stop(); }
+  });
+
   await section('a PowerShell error is turned into a sentence', async () => {
     const { plainPowerShellError } = require('../sync/firewall.js');
 
