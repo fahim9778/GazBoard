@@ -562,13 +562,40 @@ function createSyncNode(opts) {
       // board carrying slides - and somebody may be mid-sentence on the board
       // while it arrives. Four times a second, and only when the number moved.
       if (pct === lastPct || now - lastAt < 250) return;
+      // Nobody we recognise: stay quiet. Otherwise anything that can reach
+      // this port could make somebody's board chime and flash mid-lesson,
+      // which is a doorbell for strangers.
+      if (!known) return;
       lastAt = now; lastPct = pct;
       onReceiving({ id: transferId, deviceId: (known && known.deviceId) || claimed || null,
         name: senderName, percent: pct, bytes: total });
     };
-    const done = (state, extra = {}) => onReceiving({ id: transferId,
-      deviceId: (known && known.deviceId) || claimed || null,
-      name: senderName, percent: 100, state, ...extra });
+    const done = (state, extra = {}) => {
+      // Same rule as report(): a caller we cannot place gets no badge at all,
+      // not even to say it failed. `rec` below is the proof of who they are,
+      // and by then `known` has been settled.
+      if (!known && state !== 'arrived') return;
+      onReceiving({ id: transferId, deviceId: (known && known.deviceId) || claimed || null,
+        name: senderName, percent: 100, state, ...extra });
+    };
+
+    /*
+     * Turned away at the door, rather than after the board has been read.
+     *
+     * A sender that names itself and is NOT on this machine's paired list gets
+     * nothing: no board read into memory, no ring on screen, no chime. This is
+     * what a device that was forgotten while it was switched off looks like -
+     * it never got the message, so it still shows a Send button and finds out
+     * by trying - and it is also what a stranger on the network looks like.
+     *
+     * Both were previously allowed to push a whole board up before being told
+     * no, which is tens of megabytes of somebody else's memory for the asking.
+     * A sender that names nobody is still read, because a version from before
+     * this release names nobody and is perfectly welcome.
+     */
+    if (claimed && !known) {
+      return json(res, 401, { error: 'not paired' });
+    }
 
     let envelope;
     try {
@@ -923,6 +950,7 @@ function createSyncNode(opts) {
       if (req.method === 'POST' && req.url === '/pair/hello') return handleHello(req, res).catch(() => json(res, 400, { error: 'bad request' }));
       if (req.method === 'POST' && req.url === '/pair/confirm') return handleConfirm(req, res).catch(() => json(res, 400, { error: 'bad request' }));
       if (req.method === 'POST' && req.url === '/send') return handleSend(req, res).catch(() => json(res, 400, { error: 'bad request' }));
+      if (req.method === 'POST' && req.url === '/paired') return handleStillPaired(req, res).catch(() => json(res, 200, { paired: false }));
       if (req.method === 'POST' && req.url === '/unpair') return handleUnpair(req, res).catch(() => json(res, 400, { error: 'bad request' }));
       return json(res, 404, { error: 'not found' });
     });
@@ -1066,6 +1094,64 @@ function createSyncNode(opts) {
   }
 
   /**
+   * "Are we still paired?" - asked by somebody who can prove they were.
+   *
+   * Forgetting only travels to a machine that is listening. Forget a desktop
+   * while it is switched off and it never hears; it opens the next morning
+   * still showing a Send button, and the only way it found out was to send a
+   * whole board and be turned away. Twice, in front of somebody trying to
+   * teach.
+   *
+   * This lets it ask instead. The question has to be answered carefully: "do
+   * you know device X" is not something a stranger gets to ask about anybody,
+   * so the only way to get `true` is to send an envelope sealed with the key
+   * the two machines share. Everyone else - wrong key, no key, an id nobody
+   * has heard of - gets the same `false`, which tells them nothing they did
+   * not already know about themselves.
+   */
+  async function handleStillPaired(req, res) {
+    let envelope;
+    try { envelope = JSON.parse((await readBody(req, MAX_PAIR_BYTES)).toString()); }
+    catch { return json(res, 200, { paired: false }); }
+    const from = envelope?.aad?.from;
+    const rec = from && paired.get(from);
+    if (!rec) return json(res, 200, { paired: false });
+    const plain = P.open(Buffer.from(rec.key, 'base64'), envelope);
+    // The envelope opened, so this is them and the pairing is real on this side.
+    if (!plain || plain.toString() !== from) return json(res, 200, { paired: false });
+    noteCallerAddress(req, from, envelope?.aad?.port);
+    return json(res, 200, { paired: true });
+  }
+
+  /**
+   * Ask a peer whether they still have us.
+   *
+   * Three answers, and the difference matters. `true` and `false` are them
+   * speaking. `null` is "could not ask" - they are off, or they are an older
+   * version with no such endpoint - and must never be read as a no, or every
+   * older machine on the network would look unpaired.
+   */
+  async function stillPaired(peer) {
+    const rec = paired.get(peer.deviceId);
+    if (!rec) return false;
+    try {
+      const envelope = P.seal(Buffer.from(rec.key, 'base64'),
+        { from: deviceId, kind: 'still-paired', v: P.PROTOCOL, port }, Buffer.from(deviceId));
+      const reply = await post(await bestAddress(peer), '/paired', envelope, { timeoutMs: 4000 });
+      if (!reply.ok || !reply.body || typeof reply.body.paired !== 'boolean') return null;
+      if (reply.body.paired === false) {
+        // They have forgotten us. Believing them now saves somebody finding
+        // out by sending a lesson's worth of board at a machine that will
+        // refuse it.
+        paired.remove(peer.deviceId);
+        onPeers(list());
+        return false;
+      }
+      return true;
+    } catch { return null; }
+  }
+
+  /**
    * The other end has forgotten us.
    *
    * Authenticated by the shared key - an envelope that will not open is simply
@@ -1106,7 +1192,7 @@ function createSyncNode(opts) {
   }
 
   return {
-    start, stop, peers: list, addByAddress,
+    start, stop, peers: list, addByAddress, stillPaired,
     // For the tests: hand this node an announcement as though it had arrived
     // over the network, without needing a second machine to send one.
     _notePeer: notePeer, _list: list,

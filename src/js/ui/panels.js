@@ -713,10 +713,35 @@ export function createPanels(app) {
       }, 'Pair…'));
     } else {
       if (!p.offline) {
-        actions.appendChild(h('button', {
+        const sendBtn = h('button', {
           class: 'btn primary', style: 'padding:4px 10px;font-size:12.5px',
           onclick: () => app.sendCurrentBoardTo(p)
-        }, 'Send this board'));
+        }, 'Send this board');
+        actions.appendChild(sendBtn);
+        /*
+         * Ask, quietly, whether they still have us.
+         *
+         * Forgetting only reaches a machine that is listening. Forget this one
+         * while it was switched off and it never heard - so it opens the next
+         * morning still offering to send, and the only way it found out was to
+         * send a whole board and be turned away. In front of a class.
+         *
+         * The answer is only given to somebody holding the shared key, so this
+         * asks nothing a stranger could ask. A machine too old to answer says
+         * nothing at all, and nothing changes for it.
+         */
+        if (p.paired && window.board.sync.stillPaired) {
+          Promise.resolve(window.board.sync.stillPaired(p))
+            .then((yes) => {
+              if (yes !== false || !sendBtn.isConnected) return;
+              sendBtn.remove();
+              actions.insertBefore(h('span', {
+                style: 'font-size:12px;color:var(--text-2);align-self:center'
+              }, 'has forgotten this computer - pair again'), actions.firstChild);
+              if (host && host.isConnected) setTimeout(() => renderSync(host), 1200);
+            })
+            .catch(() => {});
+        }
       }
       actions.appendChild(h('button', {
         class: 'btn', style: 'padding:4px 10px;font-size:12.5px',

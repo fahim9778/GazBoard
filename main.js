@@ -861,6 +861,9 @@ function ipc() {
   });
   // Resolves to whether the other machine was actually told. Forgetting here
   // has happened either way by the time this returns.
+  ipcMain.handle('sync:stillPaired', async (_e, peer) => {
+    try { return await sync().stillPaired(peer); } catch { return null; }
+  });
   ipcMain.handle('sync:unpair', async (_e, deviceId) => {
     try { return { ok: true, told: await sync().unpair(deviceId) }; }
     catch (e) { return { ok: true, told: false, error: e.message }; }

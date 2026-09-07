@@ -1294,6 +1294,190 @@ async function run() {
     } finally { await t.stop(); }
   });
 
+  /*
+   * A device that was forgotten while it was switched off.
+   *
+   * Forgetting travels - but only to a machine that is listening. Forget a
+   * desktop while it is closed and it never hears; it opens the next day still
+   * showing a Send button, presses it, and only then finds out. That part is
+   * unavoidable: this machine deliberately refuses to tell an unauthenticated
+   * caller whether it is paired with them, because that is a question a
+   * stranger could ask about anybody.
+   *
+   * What IS required: the board must not arrive, it must be refused before it
+   * is read rather than after, and it must not put a ring and a chime on
+   * somebody's screen on the way.
+   */
+  await section('a device forgotten while it was away cannot send after all', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+      const asB = t.bStore.all()[0];
+
+      // B forgets A with A unreachable, so A never hears about it. Removing the
+      // record directly is exactly what B's own unpair() does first.
+      t.bStore.remove(asB.deviceId);
+
+      let refused = '';
+      try {
+        await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+          address: '127.0.0.1', port: t.B.port },
+        { id: 'ghost', name: 'Should not arrive', objects: [{ id: 'x', type: 'note' }] });
+      } catch (e) { refused = e.message; }
+
+      check('the board is refused, not accepted', /forgotten this one/i.test(refused), refused);
+      check('and it never reached the other side', t.arrivals.every((m) => m.board.id !== 'ghost'),
+        t.arrivals.length + ' arrival(s)');
+      check('nothing rang or flashed on the receiving screen either',
+        seen.length === 0, seen.length + ' badge update(s)');
+      check('the sender takes the hint and forgets them back, rather than trying forever',
+        t.aStore.all().length === 0, t.aStore.all().length + ' record(s) left');
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * ...and the same for somebody nobody has ever paired with.
+   */
+  await section('a stranger cannot ring the doorbell', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const http = require('node:http');
+      const body = Buffer.from(JSON.stringify({ v: P.PROTOCOL, iv: 'x', tag: 'y',
+        aad: { from: 'nobody-has-met-this', kind: 'board', v: P.PROTOCOL }, body: 'z' }));
+      const status = await new Promise((resolve) => {
+        const req = http.request({ host: '127.0.0.1', port: t.B.port, path: '/send',
+          method: 'POST', timeout: 4000,
+          headers: { 'content-type': 'application/json', 'content-length': body.length,
+            'x-gazboard-from': 'nobody-has-met-this' } },
+        (res) => { res.resume(); resolve(res.statusCode); });
+        req.on('error', () => resolve(0));
+        req.on('timeout', () => { req.destroy(); resolve(0); });
+        req.end(body);
+      });
+      check('a sender nobody is paired with is turned away', status === 401, 'HTTP ' + status);
+      check('and does not get to put a ring on anybody\'s screen',
+        seen.length === 0, seen.length + ' badge update(s)');
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * Finding out you were forgotten WITHOUT having to send a board first.
+   *
+   * Tested twice, in front of a class: forget a desktop while it is closed, it
+   * opens the next morning still offering to Send, and the only way it learns
+   * otherwise is to push a whole board and be refused.
+   */
+  await section('a machine can ask whether it is still paired', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+      const peer = { deviceId: asA.deviceId, name: asA.name, address: '127.0.0.1', port: t.B.port };
+
+      check('while both ends agree, the answer is yes', await t.A.stillPaired(peer) === true);
+
+      // B forgets A with A unreachable, so A is never told.
+      t.bStore.remove(t.bStore.all()[0].deviceId);
+      const answer = await t.A.stillPaired(peer);
+      check('once the other end has forgotten, the answer is no - before any board moves',
+        answer === false, String(answer));
+      check('and this end takes the hint rather than offering to send into a wall',
+        t.aStore.all().length === 0, t.aStore.all().length + ' record(s) left');
+    } finally { await t.stop(); }
+  });
+
+  await section('asking is not a way to probe strangers', async () => {
+    const t = await pair();
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const realId = t.bStore.all()[0].deviceId;
+
+      // The right device id, but no key: exactly what an eavesdropper who has
+      // watched an announcement go past would have.
+      const http = require('node:http');
+      const ask = (aad) => new Promise((resolve) => {
+        const body = Buffer.from(JSON.stringify({ v: P.PROTOCOL, iv: 'AAAAAAAAAAAAAAAA',
+          tag: 'AAAAAAAAAAAAAAAAAAAAAA==', aad, body: '' }));
+        const req = http.request({ host: '127.0.0.1', port: t.B.port, path: '/paired',
+          method: 'POST', timeout: 4000,
+          headers: { 'content-type': 'application/json', 'content-length': body.length } },
+        (res) => {
+          const c = [];
+          res.on('data', (d) => c.push(d));
+          res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(c).toString())); }
+            catch { resolve(null); } });
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        req.end(body);
+      });
+
+      const known = await ask({ from: realId, kind: 'still-paired', v: P.PROTOCOL });
+      const unknown = await ask({ from: 'never-heard-of-this-one', kind: 'still-paired', v: P.PROTOCOL });
+      check('a device id without the key learns nothing', known && known.paired === false,
+        JSON.stringify(known));
+      check('and gets the same answer as an id nobody has ever paired with',
+        unknown && unknown.paired === false
+        && JSON.stringify(known) === JSON.stringify(unknown), JSON.stringify(unknown));
+    } finally { await t.stop(); }
+  });
+
+  /*
+   * The exact shape of it, reported from a real desk.
+   *
+   * A desktop still on an older build is forgotten while it is switched off.
+   * It never hears, so the next morning it offers to Send and does. It names
+   * nobody in its request - the header that carries a device id is newer than
+   * it is - so the receiver cannot place the caller until the envelope opens,
+   * and the envelope will never open because the record is gone.
+   *
+   * The board must be refused, and - this is the part that was wrong - the
+   * chime must not ring and the ring must not appear. Otherwise anything at
+   * all that can reach the port gets to interrupt a lesson.
+   */
+  await section('an older forgotten machine is refused in silence', async () => {
+    const seen = [];
+    const t = await pair({ onReceiving: (i) => seen.push(i) });
+    try {
+      const showing = t.B.beginPairing();
+      await t.A.pairWith(t.peerB, showing.code);
+      const asA = t.aStore.all()[0];
+
+      // B forgets A while A is unreachable. A is never told.
+      t.bStore.remove(t.bStore.all()[0].deviceId);
+
+      // A is an older build: no x-gazboard-from header on anything it sends.
+      const http = require('node:http');
+      const realRequest = http.request;
+      http.request = function (opts, ...rest) {
+        if (opts && opts.headers) delete opts.headers['x-gazboard-from'];
+        return realRequest.call(this, opts, ...rest);
+      };
+      let refused = '';
+      try {
+        const objects = [];
+        for (let i = 0; i < 200; i++) {
+          objects.push({ id: 'o' + i, type: 'note', x: i, y: i, w: 200, h: 200,
+            text: 'z'.repeat(600), color: '#ffd94a' });
+        }
+        await t.A.send({ deviceId: asA.deviceId, name: asA.name,
+          address: '127.0.0.1', port: t.B.port }, { id: 'ghost2', name: 'Nope', objects });
+      } catch (e) { refused = e.message; } finally { http.request = realRequest; }
+
+      check('the board is refused', /forgotten this one/i.test(refused), refused);
+      check('and nothing of it reached the board', t.arrivals.every((m) => m.board.id !== 'ghost2'),
+        t.arrivals.length + ' arrival(s)');
+      check('no chime, no ring - a refused sender does not get to interrupt anybody',
+        seen.length === 0, seen.length + ' badge update(s)');
+    } finally { await t.stop(); }
+  });
+
   await section('a PowerShell error is turned into a sentence', async () => {
     const { plainPowerShellError } = require('../sync/firewall.js');
 

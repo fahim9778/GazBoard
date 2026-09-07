@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('board', {
     send: (peer, board) => ipcRenderer.invoke('sync:send', { peer, board }),
     addByAddress: (address) => ipcRenderer.invoke('sync:addByAddress', address),
     unpair: (deviceId) => ipcRenderer.invoke('sync:unpair', deviceId),
+    stillPaired: (peer) => ipcRenderer.invoke('sync:stillPaired', peer),
     endSession: () => ipcRenderer.invoke('sync:endSession'),
     /*
      * Windows Firewall. `check` only reads and raises nothing; `repair` and

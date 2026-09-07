@@ -149,6 +149,9 @@ function createSyncService({ userDataDir, askAboutBoard, onPeers = () => {}, onR
       if (!node) throw new Error('sync is switched off');
       return node.addByAddress(address);
     },
+    // null means "could not ask", which is not the same as "no" - see the note
+    // on stillPaired() in node.js.
+    stillPaired: (peer) => (node ? node.stillPaired(peer) : null),
     // Awaited, so the caller knows when the other machine has been told and can
     // redraw a list that is now right on both computers.
     unpair: async (deviceId) => {
