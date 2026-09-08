@@ -103,7 +103,11 @@ export function inLasso(store, poly) {
 export function strokesAlong(store, a, b, radius) {
   const hits = [];
   const box = normalizeBox({ x: Math.min(a.x, b.x) - radius, y: Math.min(a.y, b.y) - radius, w: Math.abs(a.x - b.x) + radius * 2, h: Math.abs(a.y - b.y) + radius * 2 });
-  for (const o of store.objects) {
+  // In place, not through the `objects` getter: that copies the whole document
+  // into a fresh array, and this runs on every single pointer move of a scrub.
+  const objs = store.doc.objects;
+  for (const id of store.doc.order) {
+    const o = objs[id];
     if (!o || o.locked) continue;
     const ob = worldBounds(o);
     if (!boxesIntersect(box, ob)) continue;

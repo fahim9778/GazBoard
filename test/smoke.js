@@ -2469,6 +2469,56 @@ async function run(win, app) {
     inkCost.hlVaries === true);
 
   /*
+   * A big board, pulled back.
+   *
+   * This is the case the cost check above misses, and it cost somebody a real
+   * afternoon: 300 strokes at one zoom level, where culling hides the problem.
+   * Zoom out on 2688 strokes and NOTHING is culled - every object is on screen
+   * at once - and splitting each of them into runs multiplied the work by
+   * eleven. Nobody could see the difference at that size. They could see the
+   * frame rate.
+   */
+  const bigBoard = await js(`
+    const a = window.app, sf = a.surface;
+    a.settings.autosave = false;
+    a.newBoard(true);
+
+    const bulk = [];
+    for (let i = 0; i < 2688; i++) {
+      const pts = [];
+      for (let j = 0; j < 40; j++) {
+        const t = j / 39;
+        pts.push({ x: (i % 64) * 130 + j * 3, y: Math.floor(i / 64) * 90 + Math.sin(t * 5) * 6,
+          p: 0.15 + Math.sin(t * Math.PI) * 0.8 });
+      }
+      bulk.push({ id: 'bb' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4,
+        effect: 'none', opacity: 1, rotation: 0, points: pts,
+        bbox: { x: (i % 64) * 130, y: Math.floor(i / 64) * 90, w: 120, h: 14 } });
+    }
+    a.store.addMany ? a.store.addMany(bulk) : bulk.forEach((o) => a.store.add(o));
+
+    const time = (fn) => { const t0 = performance.now(); fn(); return performance.now() - t0; };
+    const frameAt = (z) => {
+      sf.cam.z = z; sf.cam.x = 0; sf.cam.y = 0;
+      sf.invalidate(); sf.draw();
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) best = Math.min(best, time(() => { sf.invalidate(); sf.draw(); }));
+      return best;
+    };
+
+    const out = frameAt(0.12);
+    const near = frameAt(1);
+
+    a.store.clear(); a.settings.autosave = true;
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
+    return { out, near, objects: bulk.length };
+  `);
+  check('a 2688-object board still redraws inside a frame when pulled right back',
+    bigBoard.out < 16, bigBoard.out.toFixed(1) + ' ms per frame at 12% zoom');
+  check('and close up, where most of it is off screen, it costs almost nothing',
+    bigBoard.near < 16, bigBoard.near.toFixed(1) + ' ms per frame at 100%');
+
+  /*
    * Watching what is actually drawn, rather than what ought to be.
    *
    * Everything above reasons about the geometry. This wraps the real canvas

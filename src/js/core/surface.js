@@ -165,8 +165,19 @@ export class Surface {
     const pad = 64 / cam.z;
     const vbox = { x: view.x - pad, y: view.y - pad, w: view.w + pad * 2, h: view.h + pad * 2 };
 
+    /*
+     * Walk the document in place rather than building a copy of it.
+     *
+     * `store.objects` is a getter that maps and filters the whole order array
+     * into a NEW array every time it is read - 2688 objects allocated, on
+     * every frame, only to be thrown away. Reading the same two fields
+     * directly costs nothing and allocates nothing, which matters most on
+     * exactly the boards where the frame was already tight.
+     */
     const visible = [];
-    for (const o of this.store.objects) {
+    const objs = this.store.doc.objects;
+    for (const id of this.store.doc.order) {
+      const o = objs[id];
       if (!o) continue;
       if (!boxesIntersect(vbox, worldBounds(o))) continue;
       visible.push(o);

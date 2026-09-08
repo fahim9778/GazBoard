@@ -42,9 +42,31 @@ const PRESSURE_RANGE = 0.36;   // ... plus this much at the heaviest
 const VARY_FLOOR = 0.55;
 const VARY_RANGE = 0.90;
 
-/** How many distinct widths a stroke is allowed. Enough to read as smooth,
- *  few enough that a page of handwriting is still a handful of draw calls. */
-const WIDTH_STEPS = 7;
+/*
+ * How many distinct widths a stroke is allowed.
+ *
+ * Seven was chosen for how it looked and without asking what it cost. A real
+ * pen mark swells and fades, so it crossed nearly every step on the way up and
+ * again on the way down: eleven runs for one stroke, where the old constant
+ * width was one. On a board of 2688 strokes zoomed out - where nothing is
+ * culled because everything is on screen - that is thirty thousand draw calls
+ * a frame instead of three, and erasing crawled.
+ *
+ * Five is the same taper to look at. Below that a swell starts to read as
+ * steps rather than a curve.
+ */
+const WIDTH_STEPS = 5;
+
+/*
+ * ...and none of them when the difference is too small to see.
+ *
+ * The whole range of a 4px pen is about 3.6px. Zoomed out to a fifth, that is
+ * two thirds of one screen pixel from the thinnest part of a stroke to the
+ * thickest - a difference nobody can see, being paid for five times over on
+ * every object on the board. Under this many screen pixels of swing, a stroke
+ * is drawn the old way: one width, one call.
+ */
+const VISIBLE_SWING_PX = 1.25;
 
 /** Pressure jitters sample to sample; the width people SEE should not. */
 function smoothPressure(pts) {
@@ -175,7 +197,13 @@ function runPath(pts) {
  *
  * @returns {Array<{path: Path2D, width: number}>}
  */
-export function pressureRuns(points, size) {
+export function pressureRuns(points, size, scale = 1) {
+  // Not worth splitting: at this size on this screen the whole swing is
+  // narrower than a pixel or so, and one call draws it identically.
+  if (size * VARY_RANGE * (scale || 1) < VISIBLE_SWING_PX) {
+    return [{ path: centrelinePath(points, size),
+      width: strokeWeight(points, size, true) }];
+  }
   const pts = preparePoints(points, size);
   if (pts.length < 2) return [{ path: runPath(pts), width: size }];
 
@@ -212,14 +240,19 @@ const cache = new WeakMap();
 const runCache = new WeakMap();
 
 /** The runs for a committed stroke, kept the same way inkPath keeps its path. */
-export function inkRuns(stroke) {
+export function inkRuns(stroke, scale = 1) {
   const pts = stroke.points;
   if (!pts || !pts.length) return null;
   const size = stroke.width || 4;
+  // Zoom is part of the key: the same stroke is one run when the board is
+  // pulled back and several when it is close, and the cached answer for one
+  // must not be handed to the other. Rounded, so ordinary panning and small
+  // zoom nudges still hit the cache.
+  const band = Math.round(Math.log2(Math.max(0.05, scale)) * 2);
   const hit = runCache.get(pts);
-  if (hit && hit.len === pts.length && hit.size === size) return hit.runs;
-  const runs = pressureRuns(pts, size);
-  runCache.set(pts, { len: pts.length, size, runs });
+  if (hit && hit.len === pts.length && hit.size === size && hit.band === band) return hit.runs;
+  const runs = pressureRuns(pts, size, scale);
+  runCache.set(pts, { len: pts.length, size, band, runs });
   return runs;
 }
 

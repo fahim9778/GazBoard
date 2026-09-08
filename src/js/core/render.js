@@ -219,7 +219,20 @@ export function drawStroke(ctx, o) {
    */
   const varying = !highlighter && o.pressure !== false && hasPressureVariation(pts);
   if (varying) {
-    const runs = inkRuns(o);
+    /*
+     * How big this stroke actually is on the glass, not in the document.
+     *
+     * Splitting a stroke into runs is only worth paying for when somebody can
+     * see the result. Pulled back to a bird's-eye view the whole swing of a
+     * pen is a fraction of one screen pixel, and paying for it on every object
+     * at once is what made a big board crawl.
+     */
+    let scale = 1;
+    try {
+      const m = ctx.getTransform();
+      scale = Math.hypot(m.a, m.b) || 1;
+    } catch { scale = 1; }               // an old canvas without getTransform
+    const runs = inkRuns(o, scale);
     for (const r of runs) { ctx.lineWidth = r.width; ctx.stroke(r.path); }
   } else {
     ctx.lineWidth = highlighter ? (o.width || 20) : strokeWeight(pts, o.width || 4, o.pressure !== false);
