@@ -62,7 +62,28 @@ export class Surface {
    */
   editing = null;
 
-  invalidate() { this.dirty = true; }
+  invalidate() { this.dirty = true; this._band = null; this._bandOnly = false; this._fullAsked = true; }
+
+  /*
+   * Repaint only this world-space box on the next frame.
+   *
+   * Anything that calls plain invalidate() before the frame lands wins - a
+   * band and a whole board asked for in the same breath is a whole board, and
+   * that is the safe way round. Several bands in one frame are merged, so a
+   * fast scrub that reports six times between frames still costs one repaint
+   * of the area it covered.
+   */
+  invalidateBand(box) {
+    this.dirty = true;
+    // Somebody has already asked for the whole board this frame. A band cannot
+    // undo that - the safe direction is always towards painting more.
+    if (this._fullAsked) return;
+    if (!this._band) { this._band = { ...box }; this._bandOnly = true; return; }
+    const b = this._band;
+    const x = Math.min(b.x, box.x), y = Math.min(b.y, box.y);
+    const r = Math.max(b.x + b.w, box.x + box.w), t = Math.max(b.y + b.h, box.y + box.h);
+    this._band = { x, y, w: r - x, h: t - y };
+  }
 
   /**
    * Sync the drawing buffer to the element's real layout box.
@@ -81,6 +102,7 @@ export class Surface {
     if (!force && w === this.width && h === this.height && dpr === this.dpr) return false;
 
     this.width = w; this.height = h; this.dpr = dpr;
+    this._painted = false;         // the buffer was thrown away with the old size
     const bw = Math.max(1, Math.round(w * dpr)), bh = Math.max(1, Math.round(h * dpr));
     if (this.canvas.width !== bw) this.canvas.width = bw;
     if (this.canvas.height !== bh) this.canvas.height = bh;
@@ -153,10 +175,30 @@ export class Surface {
   screenTransform(ctx = this.ctx) { ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0); }
 
   /** Background and every object, in world space. No selection chrome. */
-  drawScene(ctx, w = this.width, h = this.height, onload = () => this.invalidate()) {
+  drawScene(ctx, w = this.width, h = this.height, onload = () => this.invalidate(), clip = null) {
     const cam = this.cam;
     this.screenTransform(ctx);
     const pages = this.store.doc.pages;
+    /*
+     * `clip` is a world-space box: paint ONLY that, and leave the rest of the
+     * canvas holding the pixels it already had.
+     *
+     * An eraser changes the document on every move, so the frozen copy a pen
+     * stroke leans on is void and the whole board was being repainted - on
+     * 2688 objects pulled right back, far more than a frame's worth, every
+     * move. But an eraser only ever changes the ink it is passing over. The
+     * band under it is a few hundred pixels; the other several million have
+     * not changed and do not need touching.
+     */
+    if (clip) {
+      const a = cam.toScreen(clip.x, clip.y);
+      const b = cam.toScreen(clip.x + clip.w, clip.y + clip.h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(Math.floor(a.x), Math.floor(a.y),
+        Math.ceil(b.x - a.x) + 1, Math.ceil(b.y - a.y) + 1);
+      ctx.clip();
+    }
     drawBackground(ctx, this.store.doc.background, cam, w, h, pages);
 
     ctx.setTransform(this.dpr * cam.z, 0, 0, this.dpr * cam.z, this.dpr * cam.x, this.dpr * cam.y);
@@ -179,12 +221,16 @@ export class Surface {
     for (const id of this.store.doc.order) {
       const o = objs[id];
       if (!o) continue;
-      if (!boxesIntersect(vbox, worldBounds(o))) continue;
+      const wb = worldBounds(o);
+      if (!boxesIntersect(vbox, wb)) continue;
+      // Outside the band being repainted: its pixels are already right.
+      if (clip && !boxesIntersect(clip, wb)) continue;
       visible.push(o);
     }
 
     if (!pages.length) {
       for (const o of visible) drawObject(ctx, o, onload, this.editing);
+      if (clip) ctx.restore();
       return;
     }
 
@@ -211,16 +257,29 @@ export class Surface {
       for (const o of buckets[i]) drawObject(ctx, o, onload, this.editing);
       ctx.restore();
     }
+    if (clip) ctx.restore();
   }
 
   /** Paint the scene into an offscreen buffer we can blit while inking. */
   _freezeScene(key) {
     const bw = Math.max(1, Math.round(this.width * this.dpr));
     const bh = Math.max(1, Math.round(this.height * this.dpr));
-    let c = this._ink && this._ink.canvas;
+    /*
+     * The buffer is kept between strokes even though the FRAME in it is not.
+     *
+     * The frozen frame is deliberately dropped the moment the pen lifts - the
+     * document can change while nobody is drawing, and a stale copy of the
+     * board is worse than no copy. But the canvas it was painted into is just
+     * memory the right size, and allocating a fresh full-screen one for every
+     * stroke is real work at the exact moment somebody is putting pen to
+     * board. On a big display that is several megabytes a stroke, cleared and
+     * thrown away, all day.
+     */
+    let c = this._inkCanvas;
     if (!c || c.width !== bw || c.height !== bh) {
       c = document.createElement('canvas');
       c.width = bw; c.height = bh;
+      this._inkCanvas = c;
     }
     const g = c.getContext('2d');
     g.setTransform(1, 0, 0, 1, 0, 0);
@@ -274,10 +333,35 @@ export class Surface {
       this.screenTransform();
       ctx.drawImage(this._ink.canvas, 0, 0, w, h);
       if (this.wet) this._drawWet(ctx);
+    } else if (this._bandOnly && this._band && this._painted) {
+      /*
+       * Only the band that changed. The rest of the canvas keeps the pixels it
+       * already has, which is the whole point: on a big board an eraser move
+       * costs the area under the eraser rather than the entire document.
+       *
+       * `_painted` is the guard. A band is only meaningful on top of a frame
+       * that is already correct, so the very first paint after a resize, a
+       * board load or a camera move is always the full one.
+       */
+      this._ink = null;
+      this.drawScene(ctx, w, h, () => this.invalidate(), this._band);
     } else {
       this._ink = null;
       this.drawScene(ctx, w, h);
+      this._painted = true;
     }
+
+    /*
+     * "How much needs painting" is a question about ONE frame.
+     *
+     * Cleared here rather than in the frame loop, because draw() is reached by
+     * other routes - an export, a test, a forced repaint - and a flag left
+     * standing from a previous frame quietly turns every later band request
+     * into a whole-board repaint. Which is exactly what it did.
+     */
+    this._fullAsked = false;
+    this._band = null;
+    this._bandOnly = false;
 
     // ---- screen-space overlays (CSS pixels) ----
     // Never cached: selection handles, hover and lock badges have to track the

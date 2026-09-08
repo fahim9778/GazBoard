@@ -406,7 +406,15 @@ export class Interaction {
     this.lastMotion = { sp, mods: { shift: e.shiftKey, alt: e.altKey }, pressure: this.pressure(e) };
     this.applyMotion(sp, this.lastMotion.mods, e);
     this.updateEdgePan();
-    this.surface.invalidate();
+    /*
+     * Every other gesture asks for the whole board here, as it always has.
+     *
+     * An erase does not, because eraseSweep() has just asked for the exact
+     * band it touched - and a plain invalidate() on top of that would throw
+     * that away and repaint everything, which is precisely the thing being
+     * avoided. Nothing else about the frame differs.
+     */
+    if (this.action.type !== 'erase') this.surface.invalidate();
   }
 
   /**
@@ -1051,7 +1059,50 @@ export class Interaction {
         changed = true;
       }
     }
-    if (changed) this.surface.invalidate();
+    /*
+     * Repaint the band the eraser just crossed, not the whole board.
+     *
+     * Three things have to be inside it, or something stale is left on screen:
+     * the segment itself with the eraser's radius around it; the ring where it
+     * was drawn LAST frame, which must be painted over; and the ring where it
+     * is now. The ring is screen chrome drawn after the scene, so if its old
+     * position falls outside the band it stays there as a ghost.
+     *
+     * A generous margin on top, because ink is drawn with a width of its own
+     * and round caps that reach past the centreline.
+     */
+    const ringWorld = (r) => r / this.surface.cam.z;
+    const ringR = ringWorld(a.radiusPx) + 6 / this.surface.cam.z;
+    const boxes = [{
+      x: Math.min(from.x, to.x) - r - 4,
+      y: Math.min(from.y, to.y) - r - 4,
+      w: Math.abs(to.x - from.x) + (r + 4) * 2,
+      h: Math.abs(to.y - from.y) + (r + 4) * 2
+    }, {
+      x: to.x - ringR, y: to.y - ringR, w: ringR * 2, h: ringR * 2
+    }];
+    if (a.lastRing) {
+      boxes.push({ x: a.lastRing.x - a.lastRing.r, y: a.lastRing.y - a.lastRing.r,
+        w: a.lastRing.r * 2, h: a.lastRing.r * 2 });
+    }
+    a.lastRing = { x: to.x, y: to.y, r: ringR };
+    let band = boxes[0];
+    for (const b of boxes.slice(1)) {
+      const x = Math.min(band.x, b.x), y = Math.min(band.y, b.y);
+      const x2 = Math.max(band.x + band.w, b.x + b.w), y2 = Math.max(band.y + band.h, b.y + b.h);
+      band = { x, y, w: x2 - x, h: y2 - y };
+    }
+    /*
+     * One case takes the whole board anyway: something is selected.
+     *
+     * Selection chrome is drawn over the scene every frame and is partly
+     * see-through. Painting it on top of itself without the pixels underneath
+     * being cleared first would darken it a little more each frame. It is a
+     * rare thing to be erasing with a selection live, and correct beats fast.
+     */
+    if (this.surface.invalidateBand && !this.surface.selection.size) {
+      this.surface.invalidateBand(band);
+    } else this.surface.invalidate();
   }
 
   finishErase(a) {
@@ -1432,7 +1483,23 @@ export class Interaction {
       else if (zone === 'move') cursor = 'move';
       else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
     }
-    if (t === 'eraser') { this.eraserCursor = sp; this.surface.invalidate(); }
+    if (t === 'eraser') {
+      // The hover ring, when no button is down. Only the ring moved, so only
+      // where it was and where it is now need repainting - on a heavy board
+      // that is the difference between a ring that glides and one that stutters.
+      const prev = this.eraserCursor;
+      this.eraserCursor = sp;
+      const rPx = this.app.settings.eraserSize / 2 + 6;
+      const z = this.surface.cam.z;
+      const boxOf = (p) => { const w = this.surface.cam.toWorld(p.x - rPx, p.y - rPx);
+        return { x: w.x, y: w.y, w: (rPx * 2) / z, h: (rPx * 2) / z }; };
+      if (prev && this.surface.invalidateBand) {
+        const a = boxOf(prev), b = boxOf(sp);
+        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+        this.surface.invalidateBand({ x, y,
+          w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y });
+      } else this.surface.invalidate();
+    }
     this.setCursor(cursor);
   }
 

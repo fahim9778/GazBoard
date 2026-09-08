@@ -2519,6 +2519,106 @@ async function run(win, app) {
     bigBoard.near < 16, bigBoard.near.toFixed(1) + ' ms per frame at 100%');
 
   /*
+   * The two things a whiteboard is actually for, on that same board.
+   *
+   * They cost different amounts and it matters which is which.
+   *
+   * INKING leans on a frozen copy: nothing in the document can change while a
+   * stroke is in flight, so the board is painted once and blitted after that.
+   * The price is one full paint as the pen lands, then almost nothing.
+   *
+   * ERASING cannot do that. It changes the document on every move, so the
+   * frozen copy is void and the board is repainted each time. That is the
+   * harder half, and this measures it honestly rather than assuming the ink
+   * fix covered it.
+   */
+  const bothTools = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.settings.autosave = false;
+    a.newBoard(true);
+    const bulk = [];
+    for (let i = 0; i < 2688; i++) {
+      const pts = [];
+      for (let j = 0; j < 40; j++) {
+        const t = j / 39;
+        pts.push({ x: (i % 64) * 130 + j * 3, y: Math.floor(i / 64) * 90 + Math.sin(t * 5) * 6,
+          p: 0.15 + Math.sin(t * Math.PI) * 0.8 });
+      }
+      bulk.push({ id: 'tb' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4,
+        effect: 'none', opacity: 1, rotation: 0, points: pts,
+        bbox: { x: (i % 64) * 130, y: Math.floor(i / 64) * 90, w: 120, h: 14 } });
+    }
+    a.store.addMany ? a.store.addMany(bulk) : bulk.forEach((o) => a.store.add(o));
+
+    sf.cam.z = 0.12; sf.cam.x = 0; sf.cam.y = 0;
+    sf.invalidate(); sf.draw();
+    const time = (fn) => { const t0 = performance.now(); fn(); return performance.now() - t0; };
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons, type) => ({ pointerId: 21, pointerType: type || 'pen', button: 0,
+      buttons, pressure: 0.6, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false });
+
+    /* ---- inking ---- */
+    a.setTool('pen'); a.notePenSeen();
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(300, 300, 1));
+    const inkFirst = time(() => { sf.invalidate(); sf.draw(); });   // the freeze
+    let inkAfter = Infinity;
+    for (let i = 1; i <= 12; i++) {
+      it.onMove(mk(300 + i * 9, 300 + i * 4, 1));
+      inkAfter = Math.min(inkAfter, time(() => { sf.invalidate(); sf.draw(); }));
+    }
+    it.onUp(mk(410, 350, 0));
+
+    /* ---- erasing ---- */
+    // Driven the way the app drives it: the move decides for itself how much
+    // needs repainting. Forcing invalidate() here would ask for the whole
+    // board every time and measure something the app never does.
+    a.setTool('eraser');
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(500, 300, 1));
+    sf.draw();
+    let eraseWorst = 0, eraseBest = Infinity, banded = 0, full = 0;
+    for (let i = 1; i <= 12; i++) {
+      it.onMove(mk(500 + i * 11, 300 + i * 3, 1));
+      if (sf._bandOnly && sf._band && sf._painted) banded++; else full++;
+      const t = time(() => sf.draw());
+      if (t > eraseWorst) eraseWorst = t;
+      if (t < eraseBest) eraseBest = t;
+    }
+    it.onUp(mk(632, 336, 0));
+
+    a.store.clear(); a.settings.autosave = true;
+    a.penSeenThisSession = false; a.setTool('select');
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
+    it.action = null; it.pointers.clear();
+    return { inkFirst, inkAfter, eraseBest, eraseWorst, banded, full };
+  `);
+  /*
+   * These two are measured, and only the SECOND is asserted hard.
+   *
+   * Once a stroke is under way it costs nothing - the frozen copy does its
+   * job, and that is worth defending with a real threshold.
+   *
+   * The paint as the pen lands is still a whole board, and is meant to be:
+   * that one frame is what everything after it is blitted from.
+   *
+   * An eraser move is NOT, any more. It repaints only the band it crossed -
+   * the segment plus the eraser's own radius, plus where the ring was last
+   * frame and where it is now, so nothing stale is left behind. On 2688
+   * objects pulled right back that took a move from 88ms to about 1ms, and
+   * the count below is the proof it is really taking that path rather than
+   * quietly falling back to painting everything.
+   */
+  check('once a stroke is under way, a huge board costs nothing per move',
+    bothTools.inkAfter < 4,
+    `${bothTools.inkAfter.toFixed(2)} ms a move, after ${bothTools.inkFirst.toFixed(1)} ms as the pen lands`);
+  check('and erasing on that board costs the band under the eraser, not the board',
+    bothTools.eraseWorst < 6 && bothTools.banded === 12 && bothTools.full === 0,
+    `${bothTools.eraseBest.toFixed(1)}-${bothTools.eraseWorst.toFixed(1)} ms a move, `
+      + `${bothTools.banded} banded / ${bothTools.full} full`);
+
+  /*
    * Watching what is actually drawn, rather than what ought to be.
    *
    * Everything above reasons about the geometry. This wraps the real canvas
