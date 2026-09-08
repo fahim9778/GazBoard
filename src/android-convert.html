@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data: blob:; font-src 'self' data:; connect-src 'self';">
+<title>Converting document</title>
+<script src="./vendor/jszip.min.js"></script>
+<script src="./vendor/mammoth.browser.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body { font-family: Calibri, 'Segoe UI', system-ui, sans-serif; color: #111; }
+  .doc { padding: 20mm; font-size: 11pt; line-height: 1.42; }
+  .doc h1 { font-size: 20pt; margin: 0 0 .5em; }
+  .doc h2 { font-size: 16pt; margin: 1em 0 .4em; }
+  .doc p { margin: 0 0 .6em; }
+  .doc table { border-collapse: collapse; width: 100%; margin: .8em 0; }
+  .doc td, .doc th { border: 1px solid #9aa0a6; padding: 4px 7px; vertical-align: top; }
+  .doc img { max-width: 100%; height: auto; }
+  .doc pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; }
+  .slide { position: relative; overflow: hidden; page-break-after: always; break-after: page; }
+  .slide:last-child { page-break-after: auto; break-after: auto; }
+  .sh { position: absolute; box-sizing: border-box; font-size: 14pt; line-height: 1.2; overflow: hidden; }
+  .sh p { margin: 0 0 .28em; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="./js/platform/android-convert.js"></script>
+</body>
+</html>

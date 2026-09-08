@@ -3,6 +3,7 @@
 
 import { createWebAdapter, emitOpenFile } from './web-adapter.js';
 import { registerSessionFile } from './web-files.js';
+import { createAndroidAdapter } from './android-adapter.js';
 
 export function initPlatform() {
   if (typeof window === 'undefined') return;
@@ -10,6 +11,12 @@ export function initPlatform() {
   // 1. Electron Runtime Detection
   if (window.board && typeof window.board.info === 'function') {
     // Electron's preload script has already mounted window.board.
+    return;
+  }
+
+  // Android's origin-scoped message object exists before the first script.
+  if (window.GazBoardNative && typeof window.GazBoardNative.postMessage === 'function') {
+    window.board = createAndroidAdapter();
     return;
   }
 

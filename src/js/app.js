@@ -2016,6 +2016,29 @@ class App {
       requestAnimationFrame(() => { this.surface.resize(); this.textEditor.reposition(); this.syncUI(); });
     });
 
+    // Android's Share/Open with and Back actions meet the same import and
+    // dismissal paths as the toolbar. No second editor or document model.
+    window.addEventListener('gazboard:import-file', async ({ detail: path }) => {
+      try {
+        if (/\.(gazboard|openboard|json)$/i.test(path)) {
+          this.boardOpenedExplicitly = true;
+          const data = JSON.parse(new TextDecoder().decode(await window.board.readFile(path)));
+          data.origin = window.board.fileOrigin(path);
+          await this.loadBoard(data, { asCopy: false });
+        } else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
+        else if (isDocPath(path)) await insertDocument(this, path);
+        else this.toast('Choose a board, image, PDF, or supported document', 'help');
+      } catch (e) { this.toast('Could not open file: ' + e.message, 'help'); }
+    });
+    window.addEventListener('gazboard:back', () => {
+      if (document.getElementById('overlay')?.classList.contains('show')) { this.dismissOverlay(); return; }
+      if (popoverOpen()) { closePopover(); return; }
+      if (this.textEditor.active) { this.textEditor.commit(); return; }
+      if (this.panels.open) { this.panels.close(); return; }
+      if (this.surface.selection.size) { this.setSelection([]); return; }
+      window.board.background?.();
+    });
+
     document.addEventListener('keydown', (e) => this.onKeyDown(e));
     document.addEventListener('keyup', (e) => { if (e.code === 'Space') this.interaction.spaceDown = false; });
     window.addEventListener('blur', () => { this.interaction.spaceDown = false; });
