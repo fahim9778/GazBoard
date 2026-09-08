@@ -115,6 +115,25 @@ export class Interaction {
   effectiveTool(e) {
     if (this.spaceDown || e.button === 1) return 'pan';
     if (e.pointerType === 'pen' && (e.buttons & 32 || e.button === 5)) return 'eraser';  // pen tail
+    /*
+     * The side button on a stylus, held while the tip is writing.
+     *
+     * The line above only knows about a pen's TAIL - flip a Wacom over and the
+     * blunt end reports itself as an eraser. An S Pen has no tail. It has a
+     * button on its side, and on Samsung's own apps holding that button while
+     * you draw is how you rub something out. Somebody tried it in GazBoard,
+     * found annotating worked and erasing did not, and reasonably assumed the
+     * feature was missing.
+     *
+     * A browser calls that the barrel button, and it is bit 2 of `buttons`.
+     * The tip being down at the same time is what makes this unambiguous: the
+     * whole value is 3, primary AND secondary. A barrel press with the tip in
+     * the air never reaches here - onDown() returns early for that, which is
+     * what keeps right-drag panning and the context menu working exactly as
+     * they did on a Wacom whose owner has mapped the button to right-click.
+     */
+    if (e.pointerType === 'pen' && this.app.settings.penButtonErases !== false
+        && (e.buttons & 2)) return 'eraser';
     if (e.button === 2) return 'select';
     // Whiteboard's rule: once a stylus is in play the mouse stops being a pen
     // and becomes a POINTER - it selects and drags objects, and pans the empty

@@ -52,6 +52,10 @@ export const DEFAULT_SETTINGS = {
   // thing it prevents is being halfway through a sentence when an "accept
   // this board?" dialog appears out of nowhere. See showReceiving().
   arrivalSound: true,
+  // Holding a stylus's side button while writing rubs out, the way it does in
+  // Samsung's own apps. A pen's flip-over tail always erases and is not
+  // affected by this. See effectiveTool() in tools.js.
+  penButtonErases: true,
   // Sharing boards over the local network. Off, and off for everyone who
   // upgrades: nothing binds a port, announces itself or listens for anything
   // until this is switched on by hand. See initSync().

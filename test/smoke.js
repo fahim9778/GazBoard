@@ -2340,6 +2340,68 @@ async function run(win, app) {
     `${pressure.flatWidths} width`);
 
   /*
+   * The button on the side of a stylus.
+   *
+   * GazBoard understood a pen's TAIL - flip a Wacom over and its blunt end
+   * reports itself as an eraser. An S Pen has no tail; it has a side button,
+   * and on Samsung's own apps holding that while you draw is how you rub out.
+   * Somebody tried it, found annotating worked and erasing did not, and
+   * reasonably assumed the feature was missing.
+   *
+   * A browser calls it the barrel button - bit 2 of `buttons`. With the tip
+   * also down the value is 3: primary AND secondary, which is what makes it
+   * unambiguous.
+   */
+  const sideButton = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.setTool('pen'); a.notePenSeen();
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons, button) => ({ pointerId: 11, pointerType: 'pen',
+      button: button === undefined ? 0 : button, buttons, pressure: 0.5,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false });
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+
+    // Something to rub out.
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(200, 200, 1));
+    for (let i = 1; i <= 10; i++) it.onMove(mk(200 + i * 14, 200, 1));
+    it.onUp(mk(340, 200, 0));
+    const drawn = strokes();
+
+    // Now the same pen, tip down, with the side button held: buttons = 3.
+    it.action = null; it.pointers.clear();
+    const asErase = it.effectiveTool(mk(200, 200, 3));
+    it.onDown(mk(190, 200, 3));
+    for (let i = 1; i <= 12; i++) it.onMove(mk(190 + i * 14, 200, 3));
+    it.onUp(mk(358, 200, 0));
+    const afterErase = strokes();
+
+    // Switched off, that same grip draws instead of erasing.
+    a.settings.penButtonErases = false;
+    const asDraw = it.effectiveTool(mk(200, 300, 3));
+    a.settings.penButtonErases = true;
+
+    // A tail-first pen still erases whatever the setting says.
+    a.settings.penButtonErases = false;
+    const tail = it.effectiveTool(mk(200, 300, 32));
+    a.settings.penButtonErases = true;
+
+    a.store.clear(); a.penSeenThisSession = false; a.setTool('select');
+    it.action = null; it.pointers.clear();
+    return { drawn, afterErase, asErase, asDraw, tail };
+  `);
+  check('holding a stylus side button while writing rubs out',
+    sideButton.asErase === 'eraser', sideButton.asErase);
+  check('and it really removes the ink, not just picks the tool',
+    sideButton.drawn === 1 && sideButton.afterErase === 0,
+    `${sideButton.drawn} stroke drawn, ${sideButton.afterErase} left`);
+  check('switched off, that same grip draws - for anyone who maps that button to right-click',
+    sideButton.asDraw === 'pen', sideButton.asDraw);
+  check('a pen turned over to its blunt end erases whatever the setting says',
+    sideButton.tail === 'eraser', sideButton.tail);
+
+  /*
    * What varying the width costs, and what it must not undo.
    *
    * Two things were paid for once and must not be spent again:
