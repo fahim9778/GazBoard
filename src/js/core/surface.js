@@ -86,6 +86,58 @@ export class Surface {
   }
 
   /**
+   * What the frozen copy is a picture OF.
+   *
+   * Everything that could change the picture is in here: the document
+   * revision, where the camera is, how big the buffer is, and which object is
+   * being typed into - a cell being edited is deliberately left off the canvas
+   * while the textarea shows the same words in the same place. If any of it
+   * moves, the copy is a picture of a board that no longer exists, and the
+   * board is repainted rather than blitted.
+   */
+  freezeKey() {
+    const cam = this.cam;
+    const ed = this.editing ? `${this.editing.id}:${this.editing.cell || ''}` : '';
+    return `${this.store.rev}|${cam.x}|${cam.y}|${cam.z}|${this.width}|${this.height}|${this.dpr}|${ed}`;
+  }
+
+  /**
+   * Paint one finished stroke INTO the frozen copy instead of voiding it.
+   *
+   * Lifting the pen commits the stroke to the document, which moves the
+   * revision, which made the frozen copy stale - so the NEXT stroke had to
+   * repaint every object on the board before it could draw anything. Writing a
+   * word is a dozen short strokes, not one long one, so a crowded board paid
+   * that price a dozen times over and the pen visibly stuttered between
+   * letters. On 2688 objects pulled right back that was about 48ms a stroke.
+   *
+   * The stroke just finished is the only thing that changed, so painting only
+   * it into the copy leaves the copy correct, and the next stroke starts by
+   * blitting a board that is already right. Called by finishStroke(); anything
+   * else that changes the document still moves the key and gets a real
+   * repaint, which is the safe direction.
+   */
+  extendFreeze(obj) {
+    if (!this._ink || !obj) return false;
+    const cam = this.cam;
+    const g = this._ink.canvas.getContext('2d');
+    g.setTransform(this.dpr * cam.z, 0, 0, this.dpr * cam.z, this.dpr * cam.x, this.dpr * cam.y);
+    const onload = () => { this._ink = null; this.invalidate(); };
+    const pages = this.store.doc.pages;
+    const i = pages.length ? pageIndexForBox(pages, boundsOf(obj)) : -1;
+    if (i >= 0) {
+      // ink has to be clipped to its own sheet here exactly as it is on screen,
+      // or a stroke that ran off the paper would be baked into the copy
+      const r = pageRects(pages)[i];
+      g.save(); g.beginPath(); g.rect(r.x, r.y, r.w, r.h); g.clip();
+      drawObject(g, obj, onload, this.editing);
+      g.restore();
+    } else drawObject(g, obj, onload, this.editing);
+    this._ink.key = this.freezeKey();
+    return true;
+  }
+
+  /**
    * Sync the drawing buffer to the element's real layout box.
    *
    * The element's SIZE is left entirely to CSS (`inset: 0`), so it can never
@@ -265,15 +317,14 @@ export class Surface {
     const bw = Math.max(1, Math.round(this.width * this.dpr));
     const bh = Math.max(1, Math.round(this.height * this.dpr));
     /*
-     * The buffer is kept between strokes even though the FRAME in it is not.
+     * The buffer is reused between strokes.
      *
-     * The frozen frame is deliberately dropped the moment the pen lifts - the
-     * document can change while nobody is drawing, and a stale copy of the
-     * board is worse than no copy. But the canvas it was painted into is just
-     * memory the right size, and allocating a fresh full-screen one for every
-     * stroke is real work at the exact moment somebody is putting pen to
-     * board. On a big display that is several megabytes a stroke, cleared and
-     * thrown away, all day.
+     * Allocating a fresh full-screen canvas for every stroke is real work at
+     * the exact moment somebody is putting pen to board - on a big display,
+     * several megabytes a stroke, cleared and thrown away, all day. The frame
+     * inside it is never trusted on age: freezeKey() decides whether it is
+     * still a picture of the board as it is now, and it is repainted the
+     * moment it is not.
      */
     let c = this._inkCanvas;
     if (!c || c.width !== bw || c.height !== bh) {
@@ -328,7 +379,7 @@ export class Surface {
      * crawl on a heavy board; it now blits the same frozen copy a stroke uses.
      */
     if (this.wet || this.laser.length) {
-      const key = `${this.store.rev}|${cam.x}|${cam.y}|${cam.z}|${w}|${h}|${this.dpr}`;
+      const key = this.freezeKey();
       if (!this._ink || this._ink.key !== key) this._ink = this._freezeScene(key);
       this.screenTransform();
       ctx.drawImage(this._ink.canvas, 0, 0, w, h);
@@ -343,11 +394,34 @@ export class Surface {
        * that is already correct, so the very first paint after a resize, a
        * board load or a camera move is always the full one.
        */
-      this._ink = null;
       this.drawScene(ctx, w, h, () => this.invalidate(), this._band);
+    } else if (this._ink && this._ink.key === this.freezeKey()) {
+      /*
+       * Nothing has changed since the copy was taken, so blit it.
+       *
+       * This is the frame AFTER a pen lift, and on a crowded board it was the
+       * whole remaining cost of handwriting. Printing rather than joining
+       * letters means a lift after every letter, and each lift landed here and
+       * repainted all 2688 objects - measured at 32ms a letter, worst case
+       * over 100ms, while the strokes themselves cost 0.02ms a move.
+       *
+       * The key is what makes this safe rather than a stale-picture bug: it
+       * carries the document revision, the camera, the buffer size and the
+       * cell being typed into, and every document change goes through the
+       * store and moves the revision. If the key still matches, the copy is
+       * this board, and blitting it is the same picture as painting it.
+       */
+      this.screenTransform();
+      ctx.drawImage(this._ink.canvas, 0, 0, w, h);
+      this._painted = true;
     } else {
-      this._ink = null;
-      this.drawScene(ctx, w, h);
+      /*
+       * A late-decoding image has to drop the frozen copy as well as ask for a
+       * repaint. Asking for a repaint alone would find the key unchanged - an
+       * image arriving is not a document change - and blit the copy that was
+       * taken before the picture existed, so it would never appear.
+       */
+      this.drawScene(ctx, w, h, () => { this._ink = null; this.invalidate(); });
       this._painted = true;
     }
 

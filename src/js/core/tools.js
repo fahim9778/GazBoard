@@ -952,6 +952,15 @@ export class Interaction {
     // the shape was the only thing ever added to the document.
     this.store.add(obj, 'draw');
 
+    /*
+     * Add the finished stroke to the frozen copy of the board rather than
+     * letting the commit above make that copy stale. Writing a word is a dozen
+     * strokes with a lift between each - more so if you print rather than join
+     * your letters - and without this every one of them repainted the whole
+     * board before it could draw a thing.
+     */
+    this.surface.extendFreeze?.(obj);
+
     if (this.app.settings.inkToShape && obj.tool === 'pen') {
       const r = recognize(obj.points);
       // classified AND actually shaped like the thing it was classified as
@@ -967,6 +976,8 @@ export class Interaction {
           { t: 'del', id: obj.id, obj: structuredClone(obj), index: this.store.indexOf(obj.id) },
           { t: 'add', obj: shape }
         ]);
+        // the ink we just added to the frozen copy is no longer on the board
+        this.surface._ink = null;
         this.app.setSelection([shape.id]);
         this.app.toast(`Straightened into a ${r.kind} — undo (Ctrl+Z) keeps your ink`, 'shape', 3600);
       }
