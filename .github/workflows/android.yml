@@ -34,7 +34,7 @@ jobs:
           npm ci --ignore-scripts
           node test/tablet-layout.test.js
           node test/sync.test.js
-          node --test test/android-adapter.test.js
+          node --test test/android-*.test.js
           node scripts/build-web.js
           node test/web-pwa.test.js
       - name: Build and check Android

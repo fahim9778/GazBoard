@@ -223,6 +223,9 @@ export class Interaction {
     }
     if (this.pointers.size > 2) return;
 
+    // Remember what this press could dismiss. Finishing a text edit clears
+    // its selection, before pointerup gets a chance to recognise the tap.
+    const selectionAtDown = this.surface.selection.size ? new Set(this.surface.selection) : null;
     // commit first: committing hands the board back to the pen, and the tool
     // must be resolved after that or the first stylus touch after typing runs
     // the old tool
@@ -296,7 +299,10 @@ export class Interaction {
         this.surface.laser = [{ x: wp.x, y: wp.y, t: performance.now() }];
         this.action = { type: 'laser' };
         break;
-      case 'pen': case 'highlighter': this.startStroke(e, wp, tool); break;
+      case 'pen': case 'highlighter':
+        this.startStroke(e, wp, tool);
+        if (this.action) this.action.selectionAtDown = selectionAtDown;
+        break;
       case 'eraser': this.startErase(wp); break;
       case 'lasso':
         // after a lasso select, dragging inside the selection moves it
@@ -620,8 +626,8 @@ export class Interaction {
     switch (a.type) {
       case 'laser': break;            // the trail fades on its own
       case 'draw':
-        // A finger TAP on something already there means "I want that thing",
-        // not "leave a dot on it". See tappedAnObject().
+        // A tap can dismiss a selection, or pick something up with a finger.
+        // Neither should become ink or an undo entry. See tappedAnObject().
         if (!this.tappedAnObject(a, e)) this.finishStroke(a);
         break;
       case 'erase': this.finishErase(a); break;
@@ -877,7 +883,7 @@ export class Interaction {
   }
 
   /**
-   * Did this stroke turn out to be a finger tapping something?
+   * Did this stroke turn out to be a tap on selection controls?
    *
    * With an ink tool chosen, touching the board draws - which is right, and is
    * how a whiteboard has to behave on a tablet where the finger is the pen.
@@ -892,15 +898,17 @@ export class Interaction {
    * stop landing exactly on top of an existing object is rare enough, and
    * cheap enough to redo, to be worth trading.
    *
-   * A PEN is left alone. Someone holding a stylus over a note and tapping it
-   * means to mark it; that is what a stylus is for, and pens can reach the
-   * Select tool without losing their place. This is a rule about fingers.
+   * A pen or mouse can also tap outside a selection to put it away. Inside
+   * the selected object, or with nothing selected, their dots remain ink.
+   * Fingers additionally pick up an object or open its text for editing.
    *
    * Returns true when it dealt with the tap, and the caller should not turn it
    * into ink.
    */
   tappedAnObject(a, e) {
-    if (e.pointerType !== 'touch') return false;
+    const finger = e.pointerType === 'touch';
+    const selected = a.selectionAtDown;
+    if (!finger && !selected?.size) return false;
     const pts = a.obj && a.obj.points;
     if (!pts || !pts.length) return false;
 
@@ -912,13 +920,21 @@ export class Interaction {
 
     const hit = pick(this.store, p0, 8 / z);
 
+    if (!finger) {
+      if (hit && selected.has(hit.id)) return false;
+      this.discardTapMark();
+      this.app.setSelection([]);
+      this.surface.invalidate();
+      return true;
+    }
+
     // Tapped bare board. With something selected, the floating toolbar is
     // sitting over the board and the tap means "put that away" - which is what
     // a tap on empty space means in every other app. Clearing the selection
     // hides the bar (see updateSelectionBar). With nothing selected there is
     // nothing to dismiss, so a dot is a dot.
     if (!hit) {
-      if (!this.surface.selection.size) return false;
+      if (!selected?.size && !this.surface.selection.size) return false;
       this.discardTapMark();
       this.app.setSelection([]);
       this.surface.invalidate();

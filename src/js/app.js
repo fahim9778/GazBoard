@@ -1992,8 +1992,8 @@ class App {
      */
     card.appendChild(h('p', { html:
       'A free-form digital whiteboard for pen, sticky notes, shapes, text, images and documents.'
-      + '<br><br>Runs on this computer — no account, no sign-in, no cloud. Your boards are files in a '
-      + 'folder here, and nothing about you or your work is ever uploaded.'
+      + '<br><br>Runs on this device — no account or sign-in. Boards save automatically on this device. '
+      + 'Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose.'
       + '<br><br>The one exception is <b>sharing on your own network</b>, which is off until you switch '
       + 'it on in Settings. With it on, you can hand a board straight to another GazBoard on the same '
       + 'network — encrypted, device to device, never through anybody\'s server. Nothing is saved without '
@@ -2006,7 +2006,9 @@ class App {
         `Created with <span style="color:#e81123">&hearts;</span> with Claude Cowork` }));
     const platformDetails = i.electron
       ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>Electron ${i.electron} · Chromium ${i.chrome}`
-      : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;
+      : i.isAndroid
+        ? 'Runtime: <b>Android</b> · WebView editor<br>Persistence: <b>Private board and image files on this device</b>'
+        : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;
     card.appendChild(h('div', {
       style: 'margin-top:12px;font-size:11.5px;color:var(--text-2);line-height:1.7',
       html: platformDetails
@@ -2045,6 +2047,12 @@ class App {
           else window.board.showItem(i.userData + '/boards');
         });
         where.appendChild(openIt);
+      } else if (i.isAndroid) {
+        where.appendChild(h('p', {}, 'Uninstalling GazBoard or clearing its app storage deletes local boards. Save a copy exports the open board and its images to a location you choose. Export again to keep later edits.'));
+        where.appendChild(h('button', { class: 'btn', onclick: () => {
+          this.dismissOverlay();
+          this.command('board.save');
+        } }, 'Save a copy…'));
       }
       card.appendChild(where);
     }

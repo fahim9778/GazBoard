@@ -1119,7 +1119,7 @@ export function createPanels(app) {
         ),
         h('div', { class: 'section' }, h('h5', {}, 'About'), info,
           h('p', { style: 'font-size:12px;color:var(--text-2);margin-top:10px;line-height:1.6' },
-            'Everything stays on this device. There is no sign-in, no account and no cloud: your boards are files in a folder on this computer. The one thing that ever reaches another machine is a board you hand it yourself, over your own network, with sharing switched on above — and even then it goes straight from here to there, never through anybody\'s server.'))
+            'Boards save automatically on this device. Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose. There is no sign-in or account. Local network sharing sends a board directly to another GazBoard when you choose to share it, never through anybody\'s server.'))
       );
     });
   }
@@ -1150,6 +1150,14 @@ export function createPanels(app) {
             if (window.board.openBoardsFolder) window.board.openBoardsFolder();
             else window.board.showItem(i.userData + '/boards');
           } }, 'Open that folder'));
+        host.appendChild(foot);
+      } else if (i.isAndroid) {
+        const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
+          h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, saved in GazBoard’s private storage on this Android device.`),
+          h('p', {}, 'Boards and images save automatically and reopen here. Android’s Files app cannot browse this private folder.'),
+          h('p', {}, 'Save a copy exports the open board, including its images, as a .gazboard file. Choose Downloads, Documents or another location in the Android file picker. Use Open a board file to bring a copy back.'),
+          h('p', {}, 'Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.'),
+          h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, 'Save a copy…'));
         host.appendChild(foot);
       } else {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },

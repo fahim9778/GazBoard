@@ -92,6 +92,99 @@ class EditorTest {
       }
     }
   }
+  @Test fun dismissesSelectionAndExportsAPortableBoard() {
+    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+      until(scenario, "!!window.app && !!window.app.store")
+      until(scenario, "document.getElementById('savedBadge').textContent !== 'Saving…'")
+      lateinit var copy: File
+      lateinit var handle: String
+      scenario.onActivity { activity ->
+        copy = File(File(activity.cacheDir, "exports").apply { mkdirs() }, "storage-test.gazboard")
+        copy.writeText("")
+        val uri = FileProvider.getUriForFile(activity, BuildConfig.APPLICATION_ID + ".files", copy)
+        handle = (activity.application as GazBoardApplication).files.register(uri, writable = true)
+      }
+      try {
+        js(scenario, """
+          window.storageTestDone = false;
+          (async () => {
+            try {
+              app.settings.inkWithMouse = 'yes'; app.settings.inkWithFinger = 'yes';
+              app.settings.inkToShape = false;
+              await app.loadBoard({ id: 'selection-storage-test', name: 'Portable বাংলা', objects: [],
+                pages: [], camera: { x: 0, y: 0, z: 1 } });
+              app.store.add({ id: 'selected-note', type: 'note', x: 100, y: 100, w: 160, h: 160,
+                color: '#ffd94a', text: 'Before', rotation: 0, align: 'center', font: 'ui' });
+              const canvas = document.getElementById('c');
+              let index = 0;
+              for (const tool of ['pen', 'highlighter']) for (const pointerType of ['pen', 'touch', 'mouse']) {
+                const tap = () => {
+                  const r = canvas.getBoundingClientRect();
+                  const p = app.surface.cam.toScreen(450 + index * 24, 320);
+                  for (const type of ['pointerdown', 'pointerup']) canvas.dispatchEvent(new PointerEvent(type, {
+                    pointerId: 51, pointerType, isPrimary: true, bubbles: true, button: 0,
+                    clientX: r.left + p.x, clientY: r.top + p.y,
+                    buttons: type === 'pointerup' ? 0 : 1, pressure: .5
+                  }));
+                };
+                app.setTool(tool); app.setSelection(['selected-note']);
+                const before = app.store.count, undo = app.store.undoStack.length;
+                tap();
+                if (app.store.count !== before || app.store.undoStack.length !== undo) throw Error(pointerType + ' dismissal left ink');
+                if (app.selection.size || app.surface.wet) throw Error('Selection or wet ink remained');
+                if (document.getElementById('ctxbar').classList.contains('show')) throw Error('Selection bar remained');
+                app.setSelection(['selected-note']); app.armToolRestore(); app.setTool('select');
+                app.beginTextEdit(app.store.get('selected-note'));
+                app.textEditor.el.value = 'Saved words ' + index;
+                tap();
+                if (app.textEditor.active || app.selection.size || app.tool !== tool) throw Error('Text edit did not finish');
+                if (app.store.count !== before || app.store.undoStack.length !== undo + 1) throw Error('Text dismissal left ink');
+                if (app.store.get('selected-note').text !== 'Saved words ' + index) throw Error('Text was lost');
+                tap();
+                if (app.store.count !== before + 1) throw Error('Intentional dot was swallowed');
+                index++;
+              }
+              const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1kAAAAASUVORK5CYII=';
+              app.store.add({ id: 'copy-image', type: 'image', x: 700, y: 100, w: 50, h: 50, rotation: 0, src: image });
+              await app.persist();
+              await app.panels.boards();
+              for (let n = 0; n < 50 && !document.getElementById('boardList').textContent.includes('private storage'); n++)
+                await new Promise(resolve => setTimeout(resolve, 100));
+              const host = document.getElementById('boardList');
+              if (host.textContent.includes('browser persistence') || !host.textContent.includes('private storage')) throw Error('Wrong Android storage description');
+              const save = [...host.querySelectorAll('button')].find(b => b.textContent === 'Save a copy…');
+              if (!save) throw Error('Save a copy is missing');
+              const originalDialog = board.saveDialog, originalWrite = board.writeFile;
+              let finish, reject;
+              const written = new Promise((resolve, fail) => { finish = resolve; reject = fail; });
+              // Supply the same granted content handle as the Android picker.
+              // The real exporter, message bridge and content-provider write run below.
+              board.saveDialog = async () => ${JsonPrimitive(handle)};
+              board.writeFile = async (...args) => {
+                try { const result = await originalWrite(...args); finish(); return result; }
+                catch (e) { reject(e); throw e; }
+              };
+              try { save.click(); await written; }
+              finally { board.saveDialog = originalDialog; board.writeFile = originalWrite; }
+              const exported = JSON.parse(new TextDecoder().decode(await board.readFile(${JsonPrimitive(handle)})));
+              if (exported.name !== 'Portable বাংলা' || exported.objects.length !== app.store.count) throw Error('Export lost board contents');
+              if (exported.objects.find(o => o.id === 'copy-image').src !== image) throw Error('Export lost its image');
+              await app.loadBoard(exported);
+              if (app.store.get('copy-image').src !== image) throw Error('Copy did not reopen');
+              await app.showAbout();
+              const about = document.getElementById('overlayCard').textContent;
+              if (!about.includes('Runtime: Android') || about.includes('IndexedDB')) throw Error('About mislabels Android storage');
+              app.dismissOverlay();
+              window.storageTestDone = true;
+            } catch (e) { window.storageTestError = e.stack; }
+          })();
+        """.trimIndent())
+        until(scenario, "window.storageTestDone === true || !!window.storageTestError")
+        assertEquals("null", js(scenario, "window.storageTestError || null"))
+        assertTrue("Export must reach its chosen document provider", copy.length() > 0)
+      } finally { copy.delete() }
+    }
+  }
   @Test fun boardStoragePreservesBackgroundImportsAndImages() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val storage = BoardStorage(context)

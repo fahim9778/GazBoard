@@ -33,6 +33,30 @@ regression suites, runs protocol interoperability tests, and then runs emulator
 tests. Its artifacts contain the APKs, lint reports, test reports, and an editor
 screenshot when the device test succeeds.
 
+## Where Android saves boards
+
+Boards and their images save automatically in GazBoard's private internal storage.
+Open **My boards** to reopen them. They survive closing the app, restarting the
+device, and a normal app update. Android's Files app cannot browse this folder.
+
+To keep a copy outside the app, open the board, then choose **My boards → Save a
+copy…** (also available in Settings and About). Android's file picker lets you
+choose Downloads, Documents, or another document provider. The `.gazboard` file
+includes the board's images and can be opened on Android or desktop using
+**Open a board file…**. Exports are snapshots: later edits continue to autosave
+privately, so export again to update your copy.
+
+Uninstalling GazBoard or choosing **Clear storage / Clear data** in Android
+Settings removes private boards, images, and settings. Android backup is disabled
+in this app. Export any boards you want to keep before doing either. Clearing
+only the cache does not delete saved boards; files exported through the picker
+remain in the location you chose.
+
+Implementation: `BoardStorage` uses `filesDir/boards`, `filesDir/assets`, and an
+atomic last-board pointer. File import/export uses Android's Storage Access
+Framework with access granted by the file picker; no broad storage permission is
+needed.
+
 ## Sharing with the desktop
 
 1. Connect both devices to the same local network and open GazBoard on each.
