@@ -83,6 +83,7 @@ jobs:
           # looked for at the repo root, where it does not exist. Each line has
           # to stand on its own.
           script: |
+            adb shell settings put secure show_ime_with_hard_keyboard 1
             ./android/gradlew -p android :app:connectedDebugAndroidTest --stacktrace
             mkdir -p android/app/build/reports/androidTests
             adb pull /sdcard/Android/data/com.gazboard.app/files/. android/app/build/reports/androidTests/screenshots/ || echo "no screenshots to pull"
