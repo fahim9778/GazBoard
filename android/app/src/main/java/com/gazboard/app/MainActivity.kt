@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
   private lateinit var bridge: NativeBridge
   private var ready = false
   private var pendingIntent: Intent? = null
+  var startupFilePending = false; private set
   private var picker: CompletableFuture<List<String>>? = null
   private var saving = false
   private val flushes = ConcurrentHashMap<String, CompletableFuture<Boolean>>()
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
       insets
     }
     pendingIntent = intent
+    startupFilePending = intent.action in listOf(Intent.ACTION_VIEW, Intent.ACTION_SEND)
     try {
       web = createWebView()
       frame.addView(web, FrameLayout.LayoutParams(-1, -1))
@@ -102,7 +104,7 @@ class MainActivity : ComponentActivity() {
       settings.textZoom = 100
       settings.useWideViewPort = true
       isFocusableInTouchMode = true
-      overScrollMode = OVER_SCROLL_NEVER
+      overScrollMode = android.view.View.OVER_SCROLL_NEVER
       WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
       webChromeClient = object : WebChromeClient() {
         override fun onPermissionRequest(request: PermissionRequest) { request.deny() }

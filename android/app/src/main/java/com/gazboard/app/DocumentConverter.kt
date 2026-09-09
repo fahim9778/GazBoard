@@ -1,8 +1,7 @@
 package com.gazboard.app
 
-import android.os.CancellationSignal
-import android.os.ParcelFileDescriptor
-import android.print.*
+import android.graphics.Color
+import android.graphics.pdf.PdfDocument
 import android.webkit.WebView
 import android.widget.FrameLayout
 import com.gazboard.sync.*
@@ -10,18 +9,17 @@ import java.io.File
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonObject
+import kotlin.math.roundToInt
 
-/** The desktop's DOCX/PPTX readers, followed by Android's PDF print backend. */
+/** The shared DOCX/PPTX readers, paginated in an isolated WebView and drawn
+ * into Android's public PdfDocument API. No hidden printing callbacks.
+ */
 class DocumentConverter(private val activity: MainActivity, val fileHandle: String) {
   private val app = activity.application as GazBoardApplication
-  private val completion = CompletableFuture<File>()
-  private val cancellation = CancellationSignal()
+  private val completion = CompletableFuture<JsonObject>()
   private var web: WebView? = null
   private var bridge: NativeBridge? = null
-  private var adapter: PrintDocumentAdapter? = null
-  private var descriptor: ParcelFileDescriptor? = null
   private val output = File(activity.cacheDir, "conversion-${Protocol.deviceId()}.pdf")
-  private var printing = false
   fun convert(): JsonObject {
     val name = app.files.grant(fileHandle).name
     val extension = name.substringAfterLast('.').lowercase()
@@ -33,20 +31,50 @@ class DocumentConverter(private val activity: MainActivity, val fileHandle: Stri
         val view = activity.createWebView()
         web = view
         bridge = NativeBridge(activity, view, this).also { it.attach() }
-        // Behind the editor, but attached and laid out so fonts and images can
-        // finish loading before WebView creates its print document.
         activity.frame.addView(view, 0, FrameLayout.LayoutParams(800, 1132))
         view.loadUrl("${MainActivity.ORIGIN}/assets/board/android-convert.html?file=" +
           android.net.Uri.encode(fileHandle) + "&kind=" + extension)
       }
-      val file = completion.get(120, TimeUnit.SECONDS)
-      require(file.length() > 0) { "Android produced an empty PDF" }
-      return json("ok" to true, "engine" to "builtin", "name" to name, "token" to app.files.copy(file.inputStream()))
+      val options = completion.get(90, TimeUnit.SECONDS)
+      val width = options["widthMm"]?.toString()?.toDoubleOrNull() ?: 210.0
+      val height = options["heightMm"]?.toString()?.toDoubleOrNull() ?: 297.0
+      val pages = options.num("pages", 1)
+      require(width in 10.0..1000.0 && height in 10.0..1000.0 && pages in 1..300) { "This document is too large to convert" }
+      val density = activity.resources.displayMetrics.density
+      val pixelWidth = (width / 25.4 * 96 * density).roundToInt()
+      val pixelHeight = (height / 25.4 * 96 * density).roundToInt()
+      activity.onMain { web!!.layoutParams = FrameLayout.LayoutParams(pixelWidth, pixelHeight) }
+      PdfDocument().use { pdf ->
+        for (index in 0 until pages) {
+          val painted = CompletableFuture<Boolean>()
+          activity.onMain {
+            val view = web ?: error("Conversion closed")
+            view.evaluateJavascript("window.gazboardConvertPage($index)") {
+              view.postVisualStateCallback(index.toLong(), object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) {
+                  try {
+                    val page = pdf.startPage(PdfDocument.PageInfo.Builder((width / 25.4 * 72).roundToInt(),
+                      (height / 25.4 * 72).roundToInt(), index + 1).create())
+                    page.canvas.drawColor(Color.WHITE)
+                    page.canvas.save()
+                    page.canvas.scale(page.info.pageWidth.toFloat() / view.width, page.info.pageHeight.toFloat() / view.height)
+                    view.draw(page.canvas)
+                    page.canvas.restore()
+                    pdf.finishPage(page)
+                    painted.complete(true)
+                  } catch (e: Exception) { painted.completeExceptionally(e) }
+                }
+              })
+            }
+          }
+          painted.get(15, TimeUnit.SECONDS)
+        }
+        output.outputStream().use { pdf.writeTo(it) }
+      }
+      require(output.length() > 0) { "Android produced an empty PDF" }
+      return json("ok" to true, "engine" to "builtin", "name" to name, "token" to app.files.copy(output.inputStream()))
     } finally {
       activity.onMain {
-        cancellation.cancel()
-        descriptor?.close(); descriptor = null
-        adapter?.onFinish()
         bridge?.dispose()
         web?.let { activity.frame.removeView(it); it.destroy() }; web = null
       }
@@ -54,37 +82,5 @@ class DocumentConverter(private val activity: MainActivity, val fileHandle: Stri
     }
   }
   fun failed(message: String) { completion.completeExceptionally(IllegalStateException(message)) }
-  fun ready(options: JsonObject) {
-    app.main.post {
-      if (printing || completion.isDone) return@post
-      printing = true
-      try {
-        val width = (options["widthMm"]?.toString()?.toDoubleOrNull() ?: 210.0)
-        val height = (options["heightMm"]?.toString()?.toDoubleOrNull() ?: 297.0)
-        require(width in 10.0..2000.0 && height in 10.0..2000.0)
-        val attributes = PrintAttributes.Builder()
-          .setMediaSize(PrintAttributes.MediaSize("gazboard", "Document", (width / 25.4 * 1000).toInt(), (height / 25.4 * 1000).toInt()))
-          .setResolution(PrintAttributes.Resolution("pdf", "PDF", 300, 300))
-          .setMinMargins(PrintAttributes.Margins.NO_MARGINS).setColorMode(PrintAttributes.COLOR_MODE_COLOR).build()
-        val printer = web!!.createPrintDocumentAdapter("GazBoard document")
-        adapter = printer
-        printer.onStart()
-        printer.onLayout(null, attributes, cancellation, object : PrintDocumentAdapter.LayoutResultCallback() {
-          override fun onLayoutFinished(info: PrintDocumentInfo, changed: Boolean) {
-            try {
-              val fd = ParcelFileDescriptor.open(output, ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE)
-              descriptor = fd
-              printer.onWrite(arrayOf(PageRange.ALL_PAGES), fd, cancellation, object : PrintDocumentAdapter.WriteResultCallback() {
-                override fun onWriteFinished(pages: Array<out PageRange>) { completion.complete(output) }
-                override fun onWriteFailed(error: CharSequence?) { failed(error?.toString() ?: "Could not write document PDF") }
-                override fun onWriteCancelled() { failed("Document conversion was cancelled") }
-              })
-            } catch (e: Exception) { failed(e.message ?: "Could not write document PDF") }
-          }
-          override fun onLayoutFailed(error: CharSequence?) { failed(error?.toString() ?: "Could not lay out this document") }
-          override fun onLayoutCancelled() { failed("Document conversion was cancelled") }
-        }, null)
-      } catch (e: Exception) { failed(e.message ?: "Could not convert this document") }
-    }
-  }
+  fun ready(options: JsonObject) { completion.complete(options) }
 }

@@ -67,6 +67,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "app:info" -> json("version" to BuildConfig.VERSION_NAME, "platform" to "android", "electron" to null,
         "chrome" to WebViewCompat.getCurrentWebViewPackage(activity)?.versionName, "libreoffice" to false,
         "userData" to "On this Android device", "smoke" to false, "isWeb" to false, "isAndroid" to true,
+        "pendingBoardFile" to activity.startupFilePending,
         "capabilities" to json("lan" to true, "nativeFiles" to true, "office" to listOf("docx", "pptx", "txt")))
       "blob:begin" -> json("token" to f.begin(obj().long("size", -1)))
       "blob:append" -> f.append(obj().str("token"), obj().long("offset", -1), obj().str("data"))

@@ -52,6 +52,31 @@ try {
   await document.fonts.ready;
   await Promise.all([...document.images].map((img) => img.complete ? null
     : new Promise((resolve) => { img.onload = img.onerror = resolve; })));
+  const widthPx = widthMm / 25.4 * 96, heightPx = heightMm / 25.4 * 96;
+  root.style.cssText = `width:${widthPx}px;height:${heightPx}px;overflow:hidden;position:relative`;
+  let pages;
+  if (kind === 'pptx') {
+    const slides = [...root.querySelectorAll('.slide')];
+    pages = slides.length;
+    window.gazboardConvertPage = (index) => {
+      slides.forEach((slide, i) => { slide.style.display = i === index ? 'block' : 'none'; });
+      window.scrollTo(0, 0);
+    };
+  } else {
+    // Fixed-height CSS columns paginate using the browser's own text layout.
+    // One column per page, with the original 20 mm Word margins on each side.
+    const doc = root.querySelector('.doc');
+    const margin = 20 / 25.4 * 96;
+    doc.style.cssText = `padding:0;margin:${margin}px;width:${widthPx - 2 * margin}px;`
+      + `height:${heightPx - 2 * margin}px;column-width:${widthPx - 2 * margin}px;`
+      + `column-gap:${2 * margin}px;column-fill:auto;overflow:visible`;
+    pages = Math.max(1, Math.ceil((doc.scrollWidth + 2 * margin) / widthPx));
+    window.gazboardConvertPage = (index) => {
+      doc.style.transform = `translateX(${-index * widthPx}px)`;
+      window.scrollTo(0, 0);
+    };
+  }
+  window.gazboardConvertPage(0);
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  await board.convertReady({ widthMm, heightMm });
+  await board.convertReady({ widthMm, heightMm, pages });
 } catch (e) { await board.convertError({ message: e.message || 'Could not read document' }); }

@@ -946,6 +946,10 @@ export function createPanels(app) {
           ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
             `Office conversion: <b>${i.libreoffice ? 'LibreOffice detected' : 'built-in converter'}</b><br>` +
             `Boards folder: <code style="font-size:11px">${i.userData}</code>`
+          : i.isAndroid
+          ? `Android · WebView ${i.chrome}<br>` +
+            `Office conversion: <b>built-in converter</b><br>` +
+            `Boards storage: <code style="font-size:11px">${i.userData}</code>`
           : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>` +
             `Boards storage: <code style="font-size:11px">${i.userData}</code>`;
 

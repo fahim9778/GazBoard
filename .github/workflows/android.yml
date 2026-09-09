@@ -28,14 +28,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+          cache-read-only: false
       - name: Shared editor checks
         run: |
           node test/tablet-layout.test.js
           node test/sync.test.js
           node --test test/android-adapter.test.js
+          node scripts/build-web.js
+          node test/web-pwa.test.js
       - name: Build and check Android
         working-directory: android
-        run: gradle :sync:test :app:assembleDebug :app:assembleRelease :app:lintDebug --stacktrace
+        run: ./gradlew :sync:test :app:assembleDebug :app:assembleRelease :app:lintDebug --stacktrace
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -58,6 +61,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+          cache-read-only: false
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -69,7 +73,10 @@ jobs:
           arch: x86_64
           profile: pixel_tablet
           disable-animations: true
-          script: cd android && gradle :app:connectedDebugAndroidTest --stacktrace
+          script: |
+            cd android
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace
+            adb pull /sdcard/Android/data/com.gazboard.app/files/android-editor.png app/build/reports/androidTests/android-editor.png
       - uses: actions/upload-artifact@v4
         if: always()
         with:

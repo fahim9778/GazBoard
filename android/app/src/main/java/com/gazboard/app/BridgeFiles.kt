@@ -65,7 +65,7 @@ class BridgeFiles(private val context: Context) {
         }
       } }
       val token = begin(target.length())
-      target.inputStream().use { source -> blobs[token]!!.file.outputStream().use(source::copyTo) }
+      target.inputStream().use { source -> blobs[token]!!.file.outputStream().use { out -> source.copyTo(out) } }
       finish(token)
       return token
     } finally { target.delete() }
