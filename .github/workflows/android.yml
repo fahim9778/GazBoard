@@ -74,10 +74,14 @@ jobs:
           arch: x86_64
           profile: pixel_tablet
           disable-animations: true
+          # Every line here is run as its OWN shell (`sh -c "<line>"`), so a
+          # `cd` on one line is gone by the next one and `./gradlew` is then
+          # looked for at the repo root, where it does not exist. Each line has
+          # to stand on its own.
           script: |
-            cd android
-            ./gradlew :app:connectedDebugAndroidTest --stacktrace
-            adb pull /sdcard/Android/data/com.gazboard.app/files/android-editor.png app/build/reports/androidTests/android-editor.png
+            ./android/gradlew -p android :app:connectedDebugAndroidTest --stacktrace
+            mkdir -p android/app/build/reports/androidTests
+            adb pull /sdcard/Android/data/com.gazboard.app/files/android-editor.png android/app/build/reports/androidTests/android-editor.png || echo "no screenshot to pull"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
