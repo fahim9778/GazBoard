@@ -32,7 +32,18 @@ export const DEFAULT_SETTINGS = {
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d', showToolKeys: true,
+  edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d',
+  /*
+   * The letters under the tool icons.
+   *
+   * They are there so a shortcut gets FOUND - nobody memorises a sheet
+   * mid-lesson, but they do notice a "P" under the pen. That reasoning needs a
+   * keyboard to be worth anything. On a phone the letters are decoration on a
+   * bar that has no room for decoration, so they start off; on a tablet with a
+   * keyboard attached, or any machine with a real pointer, they start on.
+   */
+  showToolKeys: !(typeof matchMedia === 'function'
+    && matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 760px)').matches),
   rightDragPans: true, hintsSeen: {},
   // null = never asked. Nothing reaches the network until this is true.
   updateCheck: null, lastUpdateCheck: 0, skippedVersion: null, updateAskedAt: 0,
@@ -1904,7 +1915,26 @@ class App {
   }
 
   showShortcuts() {
+    /*
+     * A list of keys is no use to a phone with no keyboard, and worse than no
+     * use if it is the only thing behind a menu item called "Keyboard
+     * shortcuts". It is not removed outright, because plugging a keyboard into
+     * a tablet is a normal thing to do and the keys all still work when you
+     * do - so the sheet leads with the gestures that ARE available, and the
+     * keys follow for whoever has them.
+     */
+    const noKeyboard = typeof matchMedia === 'function'
+      && matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 760px)').matches;
     const rows = [
+      ...(noKeyboard ? [
+        ['h', 'On this screen'],
+        ['Draw', 'Pen, or your finger'],
+        ['Move the board', 'One finger — or two, if your finger draws'],
+        ['Zoom', 'Pinch with two fingers'],
+        ['Pick something up', 'Press and hold it'],
+        ['Rub out', 'The eraser, or the button on an S Pen'],
+        ['h', 'With a keyboard attached']
+      ] : []),
       ['h', 'Tools'],
       ['Select', 'V'], ['Lasso select', 'L'], ['Laser pointer', 'X'], ['Pan the canvas', 'G'],
       ['Pen (last colour used)', 'P'], ['Highlighter', 'H'], ['Eraser', 'E'],

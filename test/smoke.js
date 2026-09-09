@@ -7846,6 +7846,7 @@ module.exports.run = async (win, app) => {
    */
   const onPhone = [];
   let typingOnPhone = null;
+  let phoneBar = null;
   try {
     win.webContents.debugger.attach('1.3');
     const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
@@ -7864,8 +7865,54 @@ module.exports.run = async (win, app) => {
         return out;
       `));
     }
-    // Still in phone mode: the toolbar has to stand down while the keyboard is
-    // up, or it sits on the very box being typed into.
+    /*
+     * Still in phone mode: the toolbar itself.
+     *
+     * The desktop tray is seventeen buttons and becomes a side-scroller on a
+     * handset, which puts the pen you want behind a swipe. The compact bar has
+     * one job and this measures it: everything fits, and what fits is the
+     * writing kit rather than the pointing tools.
+     *
+     * initToolbar() reads the screen once at start-up, so it is rebuilt here
+     * now that Chromium is reporting a phone - and rebuilt again below, once
+     * the emulation is off, or every later check inherits a phone toolbar.
+     */
+    await cdp('Emulation.setDeviceMetricsOverride',
+      { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true });
+    await sleep(300);
+    phoneBar = await js(`
+      const a = window.app;
+      const tb = await import('app://board/js/ui/toolbar.js');
+      tb.initToolbar(a);
+      a.syncUI();
+      await new Promise((r) => requestAnimationFrame(r));
+      const bar = document.getElementById('toolbar');
+      const kids = [...bar.children].filter((el) => el.tagName === 'BUTTON');
+      const pens = [...bar.querySelectorAll('.pen[data-pen]')].map((b) => b.dataset.pen);
+      const order = kids.map((b) => b.dataset.pen || b.dataset.cmd || b.dataset.tool || b.dataset.pop || '?');
+      const keys = [...bar.querySelectorAll('.kbd')]
+        .filter((k) => getComputedStyle(k).display !== 'none').length;
+      return {
+        compact: bar.classList.contains('phone'),
+        buttons: kids.length,
+        // the whole point: no horizontal scrolling, nothing off the edge
+        fits: bar.scrollWidth <= bar.clientWidth + 1,
+        widthUsed: Math.round(bar.getBoundingClientRect().width),
+        screen: window.innerWidth,
+        pens,
+        order,
+        visibleKeys: keys,
+        // the writing kit comes first, the pointing tools are not on the bar
+        pensFirst: order.slice(0, 3).join(',') === 'black,red,blue',
+        eraserWithPens: order.indexOf('eraser') === 4,
+        noPointingTools: !order.some((o) => ['select', 'lasso', 'pan', 'laser'].includes(o)),
+        hasAddMenu: order.includes('add'),
+        hasMoreMenu: order.includes('more')
+      };
+    `);
+
+    // The toolbar has to stand down while the keyboard is up, or it sits on
+    // the very box being typed into.
     typingOnPhone = await js(`
       const a = window.app;
       const bar = document.getElementById('toolbar');
@@ -7887,6 +7934,12 @@ module.exports.run = async (win, app) => {
     await cdp('Emulation.setTouchEmulationEnabled', { enabled: false });
     win.webContents.debugger.detach();
     await sleep(300);
+    // Back to a desktop screen, so put the desktop tray back. Leaving a phone
+    // toolbar behind would quietly change what every later check is looking at.
+    await js(`
+      const tb = await import('app://board/js/ui/toolbar.js');
+      tb.initToolbar(window.app); window.app.syncUI();
+    `);
   } catch (e) {
     onPhone.push({ label: 'emulation unavailable: ' + e.message });
   }
@@ -7898,6 +7951,21 @@ module.exports.run = async (win, app) => {
   // stylesheet said `auto`, so it cannot answer this question.
   const withKeyboard = onPhone.find((p) => p.label === 'phone with keyboard');
   const movedToTheTop = !!withKeyboard && withKeyboard.zoombar.top < 120;
+  if (phoneBar) {
+    check('the phone gets a compact toolbar, not the desktop tray squeezed',
+      phoneBar.compact && phoneBar.buttons <= 10,
+      `${phoneBar.buttons} buttons: ${phoneBar.order.join(' ')}`);
+    check('and all of it fits the screen with nothing to scroll to',
+      phoneBar.fits, `${phoneBar.widthUsed}px used of ${phoneBar.screen}px`);
+    check('the pens come first, with the eraser beside them',
+      phoneBar.pensFirst && phoneBar.eraserWithPens, phoneBar.order.join(' '));
+    check('select, lasso, hand and laser are off the bar, not in the way',
+      phoneBar.noPointingTools, phoneBar.order.join(' '));
+    check('and the rest is behind two menus rather than gone',
+      phoneBar.hasAddMenu && phoneBar.hasMoreMenu, phoneBar.order.join(' '));
+    check('no shortcut letters on a screen with no keyboard',
+      phoneBar.visibleKeys === 0, `${phoneBar.visibleKeys} letters showing`);
+  }
   check('a phone really is treated as a touch device', coarseEverywhere,
     onPhone.map((p) => p.label + ':' + p.coarse).join(' '));
   check('the zoom and page readouts stay their own size, keyboard open or not',

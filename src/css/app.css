@@ -626,6 +626,46 @@ kbd {
 
 #rxBadge .rx-label { overflow: hidden; text-overflow: ellipsis; }
 
+/* =================================================================
+ *  The compact phone bar.
+ *
+ *  Nine buttons, no scrolling, no wrapping. The whole point is that the pen
+ *  you want is where your thumb already is, so nothing here is allowed to push
+ *  the row wider than the screen: the buttons share what space there is and
+ *  shrink together rather than sliding out of reach.
+ * ================================================================= */
+#toolbar.phone {
+  left: 6px; right: 6px;
+  /* The wider-screen rules above set `width: max-content`, which lets the row
+     decide its own width and push past the edge of a handset. Both edges are
+     pinned here instead, so the screen decides and the buttons share it. */
+  width: auto;
+  box-sizing: border-box;
+  max-width: none;
+  transform: none;
+  margin: 0;
+  gap: 2px;
+  padding: 8px 6px 9px;
+  justify-content: space-evenly;
+  overflow: visible;                 /* a raised pen must not be clipped */
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+}
+#toolbar.phone .pen,
+#toolbar.phone .tool {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+#toolbar.phone .tool-sm { width: 38px; height: 38px; margin-bottom: 4px; }
+/* No keyboard on a phone, so no letters to advertise. */
+#toolbar.phone .kbd { display: none; }
+#toolbar.phone .sep { margin: 0 1px; }
+
+/* Narrow handsets: give the row the last few pixels rather than a scrollbar. */
+@media (max-width: 400px) {
+  #toolbar.phone { gap: 0; padding-left: 3px; padding-right: 3px; }
+  #toolbar.phone .tool-sm { width: 34px; height: 34px; }
+}
+
 /*
  * On a phone it leaves the bar and becomes a strip of its own.
  *
