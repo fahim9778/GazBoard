@@ -2509,14 +2509,54 @@ async function run(win, app) {
     const out = frameAt(0.12);
     const near = frameAt(1);
 
+    // Count the work separately from the stopwatch. The same scene can miss
+    // 16ms on a software rasteriser and pass on a GPU without a code change.
+    // A fixed viewport fits EVERY stroke at 12%, even on a small laptop.
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const stroke = ctx.stroke;
+    let calls = 0;
+    ctx.stroke = function (...args) {
+      if (args[0] instanceof Path2D) calls++;   // ink, not the background grid
+      return stroke.apply(this, args);
+    };
+    const countAt = (z, dpr, x = 0) => {
+      sf.dpr = dpr; sf.cam.z = z; sf.cam.x = x; sf.cam.y = 0;
+      canvas.width = 1200 * dpr; canvas.height = 800 * dpr;
+      calls = 0;
+      sf.drawScene(ctx, 1200, 800);
+      return calls;
+    };
+    const dpr = sf.dpr;
+    let outCalls, retinaCalls, nearCalls, awayCalls;
+    try {
+      outCalls = countAt(0.12, 1);
+      retinaCalls = countAt(0.12, 2);
+      nearCalls = countAt(1, 1);
+      awayCalls = countAt(1, 1, 100000);
+    } finally {
+      sf.dpr = dpr;
+      ctx.stroke = stroke;
+    }
+
     a.store.clear(); a.settings.autosave = true;
     sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
-    return { out, near, objects: bulk.length };
+    return { out, near, objects: bulk.length, outCalls, retinaCalls, nearCalls, awayCalls };
   `);
-  check('a 2688-object board still redraws inside a frame when pulled right back',
-    bigBoard.out < 16, bigBoard.out.toFixed(1) + ' ms per frame at 12% zoom');
-  check('and close up, where most of it is off screen, it costs almost nothing',
-    bigBoard.near < 16, bigBoard.near.toFixed(1) + ' ms per frame at 100%');
+  check('a 2688-object board uses one draw call per stroke when pulled right back',
+    bigBoard.outCalls === bigBoard.objects && bigBoard.retinaCalls === bigBoard.objects,
+    `${bigBoard.outCalls} calls at 1x, ${bigBoard.retinaCalls} at 2x; ${bigBoard.out.toFixed(1)} ms per frame at 12% zoom`);
+  check('and close up, off-screen ink is culled before drawing',
+    bigBoard.nearCalls > 0 && bigBoard.nearCalls < bigBoard.outCalls && bigBoard.awayCalls === 0,
+    `${bigBoard.nearCalls} calls at 100%, ${bigBoard.awayCalls} away from the board; ${bigBoard.near.toFixed(1)} ms per frame at 100%`);
+  // Optional hardware benchmark: npm run smoke -- --strict-performance
+  // Normal smoke runs defend draw cost, just like the handwriting checks below.
+  if (process.argv.includes('--strict-performance')) {
+    check('a 2688-object board redraws within the strict 16ms budget at 12%',
+      bigBoard.out < 16, bigBoard.out.toFixed(1) + ' ms per frame');
+    check('a 2688-object board redraws within the strict 16ms budget at 100%',
+      bigBoard.near < 16, bigBoard.near.toFixed(1) + ' ms per frame');
+  }
 
   /*
    * The two things a whiteboard is actually for, on that same board.
