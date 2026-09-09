@@ -1,8 +1,10 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
   <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
     <item name="android:fontFamily">sans</item>
     <item name="android:windowLightStatusBar">true</item>
-    <item name="android:windowLightNavigationBar">true</item>
+    <!-- Added in API 27. minSdk is 26, where the attribute is simply ignored,
+         so this is safe to leave in the base theme. -->
+    <item name="android:windowLightNavigationBar" tools:targetApi="27">true</item>
     <item name="android:statusBarColor">#F5F5F8</item>
     <item name="android:navigationBarColor">#F5F5F8</item>
     <item name="android:windowActionModeOverlay">true</item>
