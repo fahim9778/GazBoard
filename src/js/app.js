@@ -32,7 +32,18 @@ export const DEFAULT_SETTINGS = {
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d', showToolKeys: true,
+  edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d',
+  /*
+   * The letters under the tool icons.
+   *
+   * They are there so a shortcut gets FOUND - nobody memorises a sheet
+   * mid-lesson, but they do notice a "P" under the pen. That reasoning needs a
+   * keyboard to be worth anything. On a phone the letters are decoration on a
+   * bar that has no room for decoration, so they start off; on a tablet with a
+   * keyboard attached, or any machine with a real pointer, they start on.
+   */
+  showToolKeys: !(typeof matchMedia === 'function'
+    && matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 760px)').matches),
   rightDragPans: true, hintsSeen: {},
   // null = never asked. Nothing reaches the network until this is true.
   updateCheck: null, lastUpdateCheck: 0, skippedVersion: null, updateAskedAt: 0,
@@ -52,6 +63,8 @@ export const DEFAULT_SETTINGS = {
   // thing it prevents is being halfway through a sentence when an "accept
   // this board?" dialog appears out of nowhere. See showReceiving().
   arrivalSound: true,
+  // 'auto' | 'yes' | 'no' - see fingerInks(). Auto lets the hardware answer.
+  inkWithFinger: 'auto',
   // Holding a stylus's side button while writing rubs out, the way it does in
   // Samsung's own apps. A pen's flip-over tail always erases and is not
   // affected by this. See effectiveTool() in tools.js.
@@ -740,6 +753,49 @@ class App {
     if (m === 'yes') return true;
     if (m === 'no') return false;
     return !this.penSeenThisSession;         // 'auto' - the default
+  }
+
+  /**
+   * Does a FINGER draw, or move the board?
+   *
+   * The same question as mouseInks, asked of the other hand, and it has to be
+   * asked because one finger cannot do both. Panning with two fingers is what
+   * GazBoard did, and on a phone it is friction on the commonest movement
+   * there is: you reposition the board far more often than you write on it.
+   *
+   * 'auto' answers it from the hardware, the way OneNote and Samsung Notes do.
+   * No stylus has touched this screen, so there is nothing else to draw with -
+   * the finger draws, and a phone with no pen works with nothing to find. An
+   * S Pen has touched it, so the pen draws and the finger is free to move the
+   * board underneath.
+   *
+   * Whatever the answer, a tap still selects and a press-and-hold still picks
+   * things up: those are how a finger reaches an object, and losing them would
+   * trade one kind of friction for a worse one.
+   */
+  get fingerInks() {
+    const f = this.settings.inkWithFinger;
+    if (f === 'yes') return true;
+    if (f === 'no') return false;
+    // 'auto'. Only a touch-first device answers this from the hardware: a
+    // phone or a tablet, where the finger and the pen are the only two things
+    // there are and one of them has to move the board. A laptop with a
+    // touchscreen has a mouse for that already, and quietly changing what its
+    // screen does the first time somebody picks up a stylus would break a
+    // machine that was working.
+    const touchFirst = typeof matchMedia === 'function'
+      && matchMedia('(pointer: coarse)').matches;
+    return !(touchFirst && this.penSeenThisSession);
+  }
+
+  /** The toolbar button: flip it, and the guess stops second-guessing you. */
+  toggleFingerInk() {
+    this.settings.inkWithFinger = this.fingerInks ? 'no' : 'yes';
+    this.saveSettings();
+    this.toast(this.fingerInks
+      ? 'Your finger draws — two fingers move the board'
+      : 'Your finger moves the board — draw with the pen', 'pen', 2600);
+    this.syncUI?.();
   }
 
   /**
@@ -1859,7 +1915,26 @@ class App {
   }
 
   showShortcuts() {
+    /*
+     * A list of keys is no use to a phone with no keyboard, and worse than no
+     * use if it is the only thing behind a menu item called "Keyboard
+     * shortcuts". It is not removed outright, because plugging a keyboard into
+     * a tablet is a normal thing to do and the keys all still work when you
+     * do - so the sheet leads with the gestures that ARE available, and the
+     * keys follow for whoever has them.
+     */
+    const noKeyboard = typeof matchMedia === 'function'
+      && matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 760px)').matches;
     const rows = [
+      ...(noKeyboard ? [
+        ['h', 'On this screen'],
+        ['Draw', 'Pen, or your finger'],
+        ['Move the board', 'One finger — or two, if your finger draws'],
+        ['Zoom', 'Pinch with two fingers'],
+        ['Pick something up', 'Press and hold it'],
+        ['Rub out', 'The eraser, or the button on an S Pen'],
+        ['h', 'With a keyboard attached']
+      ] : []),
       ['h', 'Tools'],
       ['Select', 'V'], ['Lasso select', 'L'], ['Laser pointer', 'X'], ['Pan the canvas', 'G'],
       ['Pen (last colour used)', 'P'], ['Highlighter', 'H'], ['Eraser', 'E'],
@@ -1917,8 +1992,8 @@ class App {
      */
     card.appendChild(h('p', { html:
       'A free-form digital whiteboard for pen, sticky notes, shapes, text, images and documents.'
-      + '<br><br>Runs on this computer — no account, no sign-in, no cloud. Your boards are files in a '
-      + 'folder here, and nothing about you or your work is ever uploaded.'
+      + '<br><br>Runs on this device — no account or sign-in. Boards save automatically on this device. '
+      + 'Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose.'
       + '<br><br>The one exception is <b>sharing on your own network</b>, which is off until you switch '
       + 'it on in Settings. With it on, you can hand a board straight to another GazBoard on the same '
       + 'network — encrypted, device to device, never through anybody\'s server. Nothing is saved without '
@@ -1931,7 +2006,9 @@ class App {
         `Created with <span style="color:#e81123">&hearts;</span> with Claude Cowork` }));
     const platformDetails = i.electron
       ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>Electron ${i.electron} · Chromium ${i.chrome}`
-      : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;
+      : i.isAndroid
+        ? 'Runtime: <b>Android</b> · WebView editor<br>Persistence: <b>Private board and image files on this device</b>'
+        : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;
     card.appendChild(h('div', {
       style: 'margin-top:12px;font-size:11.5px;color:var(--text-2);line-height:1.7',
       html: platformDetails
@@ -1970,6 +2047,12 @@ class App {
           else window.board.showItem(i.userData + '/boards');
         });
         where.appendChild(openIt);
+      } else if (i.isAndroid) {
+        where.appendChild(h('p', {}, 'Uninstalling GazBoard or clearing its app storage deletes local boards. Save a copy exports the open board and its images to a location you choose. Export again to keep later edits.'));
+        where.appendChild(h('button', { class: 'btn', onclick: () => {
+          this.dismissOverlay();
+          this.command('board.save');
+        } }, 'Save a copy…'));
       }
       card.appendChild(where);
     }
@@ -2014,6 +2097,29 @@ class App {
       // the window changed shape - re-measure now and again after layout settles
       this.surface.resize();
       requestAnimationFrame(() => { this.surface.resize(); this.textEditor.reposition(); this.syncUI(); });
+    });
+
+    // Android's Share/Open with and Back actions meet the same import and
+    // dismissal paths as the toolbar. No second editor or document model.
+    window.addEventListener('gazboard:import-file', async ({ detail: path }) => {
+      try {
+        if (/\.(gazboard|openboard|json)$/i.test(path)) {
+          this.boardOpenedExplicitly = true;
+          const data = JSON.parse(new TextDecoder().decode(await window.board.readFile(path)));
+          data.origin = window.board.fileOrigin(path);
+          await this.loadBoard(data, { asCopy: false });
+        } else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
+        else if (isDocPath(path)) await insertDocument(this, path);
+        else this.toast('Choose a board, image, PDF, or supported document', 'help');
+      } catch (e) { this.toast('Could not open file: ' + e.message, 'help'); }
+    });
+    window.addEventListener('gazboard:back', () => {
+      if (document.getElementById('overlay')?.classList.contains('show')) { this.dismissOverlay(); return; }
+      if (popoverOpen()) { closePopover(); return; }
+      if (this.textEditor.active) { this.textEditor.commit(); return; }
+      if (this.panels.open) { this.panels.close(); return; }
+      if (this.surface.selection.size) { this.setSelection([]); return; }
+      window.board.background?.();
     });
 
     document.addEventListener('keydown', (e) => this.onKeyDown(e));

@@ -1,0 +1,94 @@
+name: Android
+on:
+  push:
+    branches: [main, 'android/**']
+    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', '.github/workflows/android.yml']
+  pull_request:
+    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', '.github/workflows/android.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-read-only: false
+      - name: Shared editor checks
+        run: |
+          npm ci --ignore-scripts
+          node test/tablet-layout.test.js
+          node test/sync.test.js
+          node --test test/android-*.test.js
+          node scripts/build-web.js
+          node test/web-pwa.test.js
+      - name: Build and check Android
+        working-directory: android
+        run: ./gradlew :sync:test :app:assembleDebug :app:assembleRelease :app:lintDebug --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GazBoard-Android
+          path: |
+            android/app/build/outputs/apk/
+            android/app/build/reports/
+            android/sync/build/reports/tests/
+          retention-days: 14
+  device:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [pixel_5, pixel_tablet]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-read-only: false
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: ${{ matrix.profile }}
+          disable-animations: true
+          # Every line here is run as its OWN shell (`sh -c "<line>"`), so a
+          # `cd` on one line is gone by the next one and `./gradlew` is then
+          # looked for at the repo root, where it does not exist. Each line has
+          # to stand on its own.
+          script: |
+            adb shell settings put secure show_ime_with_hard_keyboard 1
+            ./android/gradlew -p android :app:connectedDebugAndroidTest --stacktrace
+            mkdir -p android/app/build/reports/androidTests
+            adb pull /sdcard/Android/data/com.gazboard.app/files/. android/app/build/reports/androidTests/screenshots/ || echo "no screenshots to pull"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GazBoard-Android-device-tests-${{ matrix.profile }}
+          path: android/app/build/reports/androidTests/

@@ -164,6 +164,7 @@ function placeBar(bar, box) {
   left = Math.max(8, Math.min(left, stage.width - w - 8));
   let top = box.y - bar.offsetHeight - 44;
   if (top < 8) top = Math.min(box.y + box.h + 12, stage.height - bar.offsetHeight - 80);
+  top = Math.max(8, Math.min(top, stage.height - bar.offsetHeight - 8));
   bar.style.left = left + 'px';
   bar.style.top = top + 'px';
 }

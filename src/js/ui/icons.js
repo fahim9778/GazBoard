@@ -27,6 +27,8 @@ const P = {
   close: 'M6 6l12 12M18 6L6 18',
   back: 'M15 5l-7 7 7 7',
   chevronDown: 'M6 9l6 6 6-6',
+  chevronUp: 'M6 15l6-6 6 6',
+  plus: 'M12 5v14M5 12h14',
   chevronRight: 'M9 6l6 6-6 6',
   trash: 'M4.5 7h15M9.5 7V5h5v2M6.5 7l1 13h9l1-13M10 10.5v6.5M14 10.5v6.5',
   copy: 'M8 8h11v11H8zM5 16V5h11',

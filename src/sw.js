@@ -41,6 +41,7 @@ const PRECACHE_ASSETS = [
   './js/ui/textedit.js',
   './js/ui/toolbar.js',
   './js/platform/platform.js',
+  './js/platform/android-adapter.js',
   './js/platform/web-adapter.js',
   './js/platform/web-storage.js',
   './js/platform/web-files.js',

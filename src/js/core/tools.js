@@ -93,7 +93,7 @@ export class Interaction {
        * out of reach either way: the bar that floats above a selection has the
        * same actions, and on a touch device it carries a "..." for the rest.
        */
-      if (this._lastDownType === 'touch') return;
+      if (this._lastDownType === 'touch' || this.action?.holdMenu) return;
       // A right-DRAG panned the canvas, so it is not a right-CLICK: swallow the
       // menu this once. A plain right-click never sets this and is unaffected.
       if (this._eatNextMenu) { this._eatNextMenu = false; return; }
@@ -140,6 +140,18 @@ export class Interaction {
     // canvas. It is not a plain pan tool: dragging a picture has to move the
     // picture, not the whole board.
     if (e.pointerType === 'mouse' && !this.app.mouseInks && (this.tool === 'pen' || this.tool === 'highlighter'))
+      return 'mousePointer';
+    /*
+     * And the same rule for a finger, which is how one-finger panning works.
+     *
+     * It routes to the SAME pointer behaviour as the mouse: on an object the
+     * finger drags that object, on bare board it moves the board. Not a plain
+     * pan tool - dragging a picture has to move the picture. The eraser is
+     * deliberately not in this list: a finger reaching for the eraser means to
+     * erase, and there is no ambiguity to resolve.
+     */
+    if (e.pointerType === 'touch' && !this.app.fingerInks
+        && (this.tool === 'pen' || this.tool === 'highlighter'))
       return 'mousePointer';
     return this.tool;
   }
@@ -211,6 +223,10 @@ export class Interaction {
     }
     if (this.pointers.size > 2) return;
 
+    // Remember what this press could dismiss. Finishing a text edit clears
+    // its selection, before pointerup gets a chance to recognise the tap.
+    const selectionAtDown = this.surface.selection.size ? new Set(this.surface.selection) : null;
+    const handleSelection = !this.spaceDown && e.button !== 1 && this.handleAt(sp) ? selectionAtDown : null;
     // commit first: committing hands the board back to the pen, and the tool
     // must be resolved after that or the first stylus touch after typing runs
     // the old tool
@@ -231,8 +247,12 @@ export class Interaction {
       }
     }
 
+    // Committing text can restore the pen and clear its selection. A handle
+    // pressed before that commit still belongs to the object being edited.
+    if (handleSelection) this.app.setSelection([...handleSelection]);
     // a visible handle is always draggable, whatever tool is active
     if (!this.spaceDown && e.button !== 1 && tool !== 'select' && this.startHandleGesture(sp, wp)) {
+      this.actionId = e.pointerId;
       this.surface.invalidate();
       return;
     }
@@ -251,9 +271,19 @@ export class Interaction {
         // Say so, once. Someone with no stylus who picks the pen and drags the
         // mouse gets a moving canvas and no ink, and there is nothing on screen
         // to explain why. A silent no-op is the whole bug this rule replaced.
-        this.app.showHint('mouse-pans',
-          'The <b>pen</b> draws and the <b>mouse</b> moves the canvas — both at once. '
-          + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
+        // The same behaviour reaches here from a mouse and from a finger, and
+        // they need different words: telling a phone user about their mouse
+        // explains nothing.
+        if (e.pointerType === 'touch') {
+          this.app.showHint('finger-pans',
+            'The <b>pen</b> draws and your <b>finger</b> moves the board — both at once. '
+            + 'Want to draw with a finger? Tap the hand on the toolbar, '
+            + 'or Settings › <b>Draw with a finger</b>.');
+        } else {
+          this.app.showHint('mouse-pans',
+            'The <b>pen</b> draws and the <b>mouse</b> moves the canvas — both at once. '
+            + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
+        }
         const hit = pick(this.store, wp, 8 / this.surface.cam.z);
         if (hit && !hit.locked) {
           const objs = withAttached(this.store, [hit.id])
@@ -274,7 +304,10 @@ export class Interaction {
         this.surface.laser = [{ x: wp.x, y: wp.y, t: performance.now() }];
         this.action = { type: 'laser' };
         break;
-      case 'pen': case 'highlighter': this.startStroke(e, wp, tool); break;
+      case 'pen': case 'highlighter':
+        this.startStroke(e, wp, tool);
+        if (this.action) this.action.selectionAtDown = selectionAtDown;
+        break;
       case 'eraser': this.startErase(wp); break;
       case 'lasso':
         // after a lasso select, dragging inside the selection moves it
@@ -511,6 +544,10 @@ export class Interaction {
       }
       case 'move': {
         let dx = wp.x - a.start.x, dy = wp.y - a.start.y;
+        if (a.holdMenu && Math.hypot(dx, dy) * this.surface.cam.z > TAP_SLOP) {
+          this.app.hideMenus();
+          a.holdMenu = false;
+        }
         if (mods.shift) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
         for (const o of a.objs) {
           const b = a.origin.get(o.id);
@@ -589,7 +626,7 @@ export class Interaction {
     if (this.secondaryPan && e.pointerId === this.secondaryPan.id) { this.secondaryPan = null; return; }
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; return; }
     const a = this.action;
-    if (!a) return;
+    if (!a || (this.actionId != null && e.pointerId !== this.actionId)) return;
     this.stopEdgePan();
     this.lastMotion = null;
     const sp = this.surface.screenPoint(e);
@@ -598,8 +635,8 @@ export class Interaction {
     switch (a.type) {
       case 'laser': break;            // the trail fades on its own
       case 'draw':
-        // A finger TAP on something already there means "I want that thing",
-        // not "leave a dot on it". See tappedAnObject().
+        // A tap can dismiss a selection, or pick something up with a finger.
+        // Neither should become ink or an undo entry. See tappedAnObject().
         if (!this.tappedAnObject(a, e)) this.finishStroke(a);
         break;
       case 'erase': this.finishErase(a); break;
@@ -652,7 +689,7 @@ export class Interaction {
     if (!box) return null;
     const hp = handlePositions(box);
     for (const k of [...HANDLES, 'rot'])
-      if (Math.hypot(hp[k].x - sp.x, hp[k].y - sp.y) <= HANDLE_GRAB) return k;
+      if (Math.hypot(hp[k].x - sp.x, hp[k].y - sp.y) <= (this._lastDownType === 'touch' ? 22 : HANDLE_GRAB)) return k;
     return null;
   }
 
@@ -690,30 +727,42 @@ export class Interaction {
   /**
    * Start the clock on a press-and-hold, if this could be one.
    *
-   * Only a finger, only while an ink tool is drawing, and only over something
-   * that can actually be picked up. Anything else - a stylus, the select tool,
-   * empty board - is left exactly as it was.
+   * A finger or stylus can select an object without leaving the ink tool.
+   * This also covers a finger set to pan, where touching an object begins
+   * a transient move. A quick tap or a stroke keeps its usual meaning.
    */
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
-    if (e.pointerType !== 'touch') return;
-    if (!this.action || this.action.type !== 'draw') return;
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
+      || (this.action.type === 'move' && this.action.transient));
+    // A drawing finger, or a panning one. Once the finger stopped drawing and
+    // started moving the board, "hold it to pick it up" was the only way left
+    // to get hold of an object without going to the toolbar - so it has to
+    // work from a pan too, not just from a stroke.
+    if (!eligible()) return;
     const hit = pick(this.store, wp, 8 / this.surface.cam.z);
-    if (!hit || hit.locked) return;
+    if (!hit) return;
     this._holdFrom = sp;
     this._holdId = e.pointerId;
     this._hold = setTimeout(() => {
       this._hold = null;
-      // The finger may have lifted or begun a real stroke in the meantime.
-      if (!this.action || this.action.type !== 'draw') return;
-      // The mark never becomes an object, so there is nothing to undo.
+      // The finger may have lifted, begun a real stroke, or dragged the board
+      // away in the meantime.
+      if (!eligible()) return;
+      // The mark never becomes an object, so there is nothing to undo. A pan
+      // has moved nothing either - the slop check above cancels the hold long
+      // before the board travels far enough to notice.
       this.surface.wet = null;
       this.action = null;
       this.app.setSelection([hit.id]);
-      if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
+      if (hit.locked) this.action = { type: 'holdSelect' };
+      else if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
       this.actionId = this._holdId;
+      this.action.holdMenu = true;
+      this.app.showContextMenu(e);
       // A hidden gesture nobody is told about is a gesture nobody uses.
-      this.app.toast('Picked up — drag it where you want it', 'check', 1400);
+      this.app.toast(hit.locked ? 'Locked — choose Unlock to resize or move' : 'Selected — drag a handle to resize', 'check', 1400);
       this.surface.invalidate();
     }, HOLD_MS);
   }
@@ -848,7 +897,7 @@ export class Interaction {
   }
 
   /**
-   * Did this stroke turn out to be a finger tapping something?
+   * Did this stroke turn out to be a tap on selection controls?
    *
    * With an ink tool chosen, touching the board draws - which is right, and is
    * how a whiteboard has to behave on a tablet where the finger is the pen.
@@ -863,15 +912,17 @@ export class Interaction {
    * stop landing exactly on top of an existing object is rare enough, and
    * cheap enough to redo, to be worth trading.
    *
-   * A PEN is left alone. Someone holding a stylus over a note and tapping it
-   * means to mark it; that is what a stylus is for, and pens can reach the
-   * Select tool without losing their place. This is a rule about fingers.
+   * A pen or mouse can also tap outside a selection to put it away. Inside
+   * the selected object, or with nothing selected, their dots remain ink.
+   * Fingers additionally pick up an object or open its text for editing.
    *
    * Returns true when it dealt with the tap, and the caller should not turn it
    * into ink.
    */
   tappedAnObject(a, e) {
-    if (e.pointerType !== 'touch') return false;
+    const finger = e.pointerType === 'touch';
+    const selected = a.selectionAtDown;
+    if (!finger && !selected?.size) return false;
     const pts = a.obj && a.obj.points;
     if (!pts || !pts.length) return false;
 
@@ -883,13 +934,21 @@ export class Interaction {
 
     const hit = pick(this.store, p0, 8 / z);
 
+    if (!finger) {
+      if (hit && selected.has(hit.id)) return false;
+      this.discardTapMark();
+      this.app.setSelection([]);
+      this.surface.invalidate();
+      return true;
+    }
+
     // Tapped bare board. With something selected, the floating toolbar is
     // sitting over the board and the tap means "put that away" - which is what
     // a tap on empty space means in every other app. Clearing the selection
     // hides the bar (see updateSelectionBar). With nothing selected there is
     // nothing to dismiss, so a dot is a dot.
     if (!hit) {
-      if (!this.surface.selection.size) return false;
+      if (!selected?.size && !this.surface.selection.size) return false;
       this.discardTapMark();
       this.app.setSelection([]);
       this.surface.invalidate();

@@ -19,9 +19,27 @@ const CMD_ICON = { undo: 'undo', redo: 'redo', insert: 'insert', ruler: 'ruler',
  * data-driven: each pen is its own button carrying its own colour, the way
  * Whiteboard lays them out, and the one in your hand lifts out of the bar.
  */
+/**
+ * Is this a phone-shaped screen being poked with a finger?
+ *
+ * Both halves matter. A coarse pointer alone catches a 12" tablet, which has
+ * room for the whole tray; a narrow window alone catches a half-width desktop
+ * window, where the mouse is still the pointer and the keys still work. The
+ * compact bar is for the case where neither the width nor the pointer is
+ * generous - and it is read once, at start-up, because rebuilding a toolbar
+ * under somebody's thumb while they rotate the phone is worse than a bar that
+ * is slightly too small until the next launch.
+ */
+export function isPhoneLayout() {
+  if (typeof matchMedia !== 'function') return false;
+  return matchMedia('(pointer: coarse)').matches
+    && (matchMedia('(max-width: 760px)').matches || matchMedia('(max-height: 460px)').matches);
+}
+
 export function initToolbar(app) {
   const bar = document.getElementById('toolbar');
   bar.innerHTML = '';
+  if (isPhoneLayout()) { initPhoneToolbar(app, bar); wireTopBar(app); return; }
 
   const sep = () => bar.appendChild(h('div', { class: 'sep' }));
 
@@ -104,7 +122,162 @@ export function initToolbar(app) {
   iconTool({ cmd: 'redo', icon: 'redo', title: 'Redo (Ctrl+Y)', onClick: () => app.command('redo') });
   iconTool({ cmd: 'more', icon: 'more', pop: 'more', title: 'More', onClick: (e, b) => openMorePopover(app, b) });
 
-  /* ---- top bar and zoom controls ---- */
+  wireTopBar(app);
+}
+
+/* ==================================================================
+ *  The phone bar.
+ *
+ *  The desktop tray is seventeen buttons wide. On a phone that becomes a
+ *  horizontal scroller: the thing you reach for most - a pen - is as much work
+ *  to find as the thing you reach for once a month, and both of them are a
+ *  swipe away from where your thumb already is.
+ *
+ *  So this is a different bar, not the same bar squeezed. What survives on it
+ *  is what a person writing on a board actually touches: three pens, the
+ *  rubber, undo. Everything else earns its place behind one of two menus, and
+ *  the pointing tools - select, lasso, hand, laser - go to the back, because
+ *  none of them puts a mark on the board.
+ *
+ *  The desktop bar above is untouched. This is chosen once at start-up by
+ *  isPhoneLayout(), so a laptop, a tablet and a half-width window all keep the
+ *  tray they have always had.
+ * ================================================================== */
+
+/** The three pens that live on the bar; the rest are one tap deeper. */
+const PHONE_PENS = ['black', 'red', 'blue'];
+
+function initPhoneToolbar(app, bar) {
+  bar.classList.add('phone');
+
+  const btn = (cls, title, html) => {
+    const b = h('button', { class: cls, title });
+    b.innerHTML = html;
+    bar.appendChild(b);
+    return b;
+  };
+  const sep = () => bar.appendChild(h('div', { class: 'sep' }));
+
+  const choosePen = (pen, b) => {
+    const s = app.settings;
+    const held = app.tool === 'pen' && s.penColor === pen.color && s.penEffect === pen.effect;
+    s.penColor = pen.color;
+    s.penEffect = pen.effect;
+    app.saveSettings();
+    app.setTool('pen');
+    app.syncUI();
+    if (held && b) openToolPopover(app, b, 'pen'); else closePopover();
+  };
+
+  /* ---- the three everyday pens ---- */
+  for (const id of PHONE_PENS) {
+    const pen = PENS.find((p) => p.id === id);
+    if (!pen) continue;
+    const b = btn('pen', `${pen.label} — tap again for thickness`,
+      penIcon(pen.color, pen.effect) + '<span class="size-dot"></span>');
+    b.dataset.pen = pen.id;
+    if (pen.id === 'black') b.dataset.tool = 'pen';
+    b.addEventListener('click', () => choosePen(pen, b));
+  }
+
+  /* ---- everything else that makes a mark, one tap deeper ---- */
+  const rest = btn('tool tool-sm', 'More pens and the highlighter', icon('chevronUp', 18));
+  rest.dataset.pop = 'pens';
+  rest.addEventListener('click', () => {
+    const body = h('div', { class: 'menu' });
+    for (const pen of PENS) {
+      if (PHONE_PENS.includes(pen.id)) continue;
+      const row = h('button', { class: 'menu-item' },
+        h('span', { html: penIcon(pen.color, pen.effect), style: 'display:flex;width:17px' }),
+        h('span', {}, pen.label));
+      row.addEventListener('click', () => { closePopover(); choosePen(pen, null); });
+      body.appendChild(row);
+    }
+    body.appendChild(h('div', { class: 'menu-sep' }));
+    body.appendChild(menuItem('Highlighter', 'highlighter', () => { app.setTool('highlighter'); app.syncUI(); }));
+    openPopover(rest, body, { key: 'pens' });
+  });
+
+  /* ---- the rubber, beside the pens where it belongs ---- */
+  const er = btn('pen', 'Eraser — tap again for options',
+    penIcon('#f7a8c4', 'none', 'eraser'));
+  er.dataset.tool = 'eraser';
+  er.addEventListener('click', () => {
+    const was = app.tool === 'eraser';
+    app.setTool('eraser');
+    app.syncUI();
+    if (was) openToolPopover(app, er, 'eraser'); else closePopover();
+  });
+  sep();
+
+  /*
+   * Finger draws / finger moves the board.
+   *
+   * Only shown once a pen has actually touched this screen. On a phone with no
+   * stylus the finger is the only thing there is, it draws, and a button
+   * offering to take that away would be a trap rather than a choice.
+   */
+  const fingerBtn = btn('tool tool-sm', 'Finger draws or moves the board', icon('hand', 18));
+  fingerBtn.dataset.cmd = 'fingerInk';
+  fingerBtn.addEventListener('click', () => { app.toggleFingerInk(); syncToolbar(app); });
+
+  /* ---- undo and redo, the other thing a hand reaches for constantly ---- */
+  const un = btn('tool tool-sm', 'Undo', icon('undo', 18));
+  un.dataset.cmd = 'undo';
+  un.addEventListener('click', () => app.command('undo'));
+  const re = btn('tool tool-sm', 'Redo', icon('redo', 18));
+  re.dataset.cmd = 'redo';
+  re.addEventListener('click', () => app.command('redo'));
+  sep();
+
+  /* ---- things you add to the board ---- */
+  const add = btn('tool tool-sm', 'Add a note, text, shape, ruler or picture', icon('plus', 18));
+  add.dataset.pop = 'add';
+  add.addEventListener('click', () => {
+    const pickTool = (t) => () => { app.setTool(t); app.syncUI(); };
+    openPopover(add, h('div', { class: 'menu' },
+      menuItem('Sticky note', 'note', pickTool('note')),
+      menuItem('Text', 'text', pickTool('text')),
+      menuItem('Shape', 'shapes', pickTool('shape')),
+      menuItem(app.ruler.visible ? 'Hide ruler' : 'Ruler', 'ruler', () => app.command('ruler')),
+      h('div', { class: 'menu-sep' }),
+      menuItem('Picture…', 'image', () => app.command('insert.image')),
+      menuItem('Document (Word, PowerPoint, PDF)…', 'doc', () => app.command('insert.document')),
+      menuItem('Table', 'table', () => app.command('insert.table'))
+    ), { key: 'add' });
+  });
+
+  /* ---- and the rest: pointing tools first, then the old More menu ---- */
+  const more = btn('tool tool-sm', 'More', icon('more', 18));
+  more.dataset.pop = 'more';
+  more.addEventListener('click', () => {
+    const pickTool = (t) => () => { app.setTool(t); app.syncUI(); };
+    openPopover(more, h('div', { class: 'menu' },
+      menuItem('Select', 'select', pickTool('select')),
+      menuItem('Lasso select', 'lasso', pickTool('lasso')),
+      menuItem('Move the board', 'hand', pickTool('pan')),
+      menuItem('Laser pointer', 'laser', pickTool('laser')),
+      h('div', { class: 'menu-sep' }),
+      menuItem('Boards…', 'board', () => app.panels.boards()),
+      menuItem('Templates…', 'template', () => app.panels.templates()),
+      menuItem('Format background…', 'palette', () => app.panels.background()),
+      menuItem('Select all', 'select', () => app.command('edit.selectAll')),
+      h('div', { class: 'menu-sep' }),
+      menuItem('Export as PNG…', 'export', () => app.command('export.png')),
+      menuItem('Export as PDF…', 'doc', () => app.command('export.pdf')),
+      menuItem('Save a copy…', 'doc', () => app.command('board.save')),
+      menuItem('Open board…', 'board', () => app.command('board.open')),
+      h('div', { class: 'menu-sep' }),
+      menuItem('Share on this network…', 'share', () => app.panels.sharing()),
+      menuItem('Settings', 'settings', () => app.panels.settings()),
+      menuItem('About GazBoard', 'board', () => app.showAbout()),
+      menuItem('Clear canvas', 'trash', () => app.command('edit.clear'), { danger: true })
+    ), { key: 'more' });
+  });
+}
+
+/* ---- top bar and zoom controls ---- */
+function wireTopBar(app) {
   const top = [
     ['btnBoards', 'board', () => app.panels.boards()],
     ['btnTemplates', 'template', () => app.panels.templates()],
@@ -428,6 +601,28 @@ export function syncToolbar(app) {
   }
   const er = bar.querySelector('.pen[data-tool="eraser"]');
   if (er) er.classList.toggle('active', app.tool === 'eraser');
+
+  /*
+   * The finger button says which way round things are RIGHT NOW, and appears
+   * only once there is a pen to be the other option. Its icon is the thing the
+   * finger will do if you press it - a hand when the finger draws, a pen when
+   * the finger is moving the board - which is the way a toggle reads when you
+   * are looking at it rather than remembering it.
+   */
+  const fb = bar.querySelector('.tool[data-cmd="fingerInk"]');
+  if (fb) {
+    const offer = app.penSeenThisSession || s.inkWithFinger === 'no';
+    fb.style.display = offer ? '' : 'none';
+    const drawing = app.fingerInks;
+    // Only repaint when it actually flips: syncUI runs on every tool change,
+    // and rewriting a button's contents that often is work for nothing.
+    const want = drawing ? 'hand' : 'pen';
+    if (fb.dataset.face !== want) { fb.innerHTML = icon(want, 18); fb.dataset.face = want; }
+    fb.classList.toggle('active', !drawing);
+    fb.title = drawing
+      ? 'Your finger draws — tap to move the board with it instead'
+      : 'Your finger moves the board — tap to draw with it instead';
+  }
 
   for (const btn of bar.querySelectorAll('.tool')) {
     const t = btn.dataset.tool, c = btn.dataset.cmd;

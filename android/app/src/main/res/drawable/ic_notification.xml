@@ -1,0 +1,21 @@
+<!--
+  The status bar icon, and the themed-icon layer of the launcher icon.
+
+  Android draws a notification's small icon as a SILHOUETTE: every non-
+  transparent pixel is repainted in the system's own colour. A full-colour
+  square therefore arrives in the status bar as a solid white block, which is
+  what the app icon was being used for. This is the same board drawn as a
+  shape, so it survives that treatment.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"
+ >
+  <!-- the board, hollow so the ink inside it reads -->
+  <path android:fillColor="#FFFFFF"
+    android:pathData="M3,4h18a1,1 0 0 1 1,1v11a1,1 0 0 1 -1,1h-18a1,1 0 0 1 -1,-1v-11a1,1 0 0 1 1,-1zM4,6v9h16v-9z" />
+  <!-- the stand -->
+  <path android:fillColor="#FFFFFF" android:pathData="M11,17h2v2h-2zM7,19h10v1.6h-10z" />
+  <!-- the ink stroke across it -->
+  <path android:fillColor="#FFFFFF"
+    android:pathData="M5.6,12.6l3,-3.2 2.6,2.7 3.4,-3.7 1.2,1.1 -4.6,5 -2.6,-2.7 -1.8,1.9z" />
+</vector>

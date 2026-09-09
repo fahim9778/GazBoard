@@ -4,6 +4,7 @@ import { h } from './popover.js';
 import { icon } from './icons.js';
 import { TEMPLATES, templateThumb } from '../templates.js';
 import { PAPER, paperForPage } from './pdfdialog.js';
+import { exportBoards } from '../board-export.js';
 import { BOARD_COLORS, PATTERNS } from './palettes.js';
 
 /**
@@ -946,6 +947,10 @@ export function createPanels(app) {
           ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
             `Office conversion: <b>${i.libreoffice ? 'LibreOffice detected' : 'built-in converter'}</b><br>` +
             `Boards folder: <code style="font-size:11px">${i.userData}</code>`
+          : i.isAndroid
+          ? `Android · WebView ${i.chrome}<br>` +
+            `Office conversion: <b>built-in converter</b><br>` +
+            `Boards storage: <code style="font-size:11px">${i.userData}</code>`
           : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>` +
             `Boards storage: <code style="font-size:11px">${i.userData}</code>`;
 
@@ -981,6 +986,17 @@ export function createPanels(app) {
             : s.inkWithMouse === 'yes'
               ? 'The mouse always inks, like a stylus. Pan with space and drag, the middle button, right-drag, or the pan tool. Choose this if you draw with a mouse and have no pen.'
               : 'Never (default): the pen inks and the mouse moves the canvas and drags objects — both at the same time, whichever tool is chosen.'),
+          row('Draw with a finger', mkChoice(
+            [['auto', 'Auto'], ['yes', 'Always'], ['no', 'Never']],
+            () => s.inkWithFinger || 'auto',
+            (v) => { s.inkWithFinger = v; app.saveSettings(); rerender(); }
+          ), (s.inkWithFinger || 'auto') === 'auto'
+            ? (app.penSeenThisSession
+              ? 'A pen has been used since the app started, so one finger moves the board and the pen draws. Your finger draws again next time you open GazBoard without a pen.'
+              : 'No pen has touched the screen, so your finger draws and two fingers move the board. The moment a pen is used they swap over \u2014 only for this session.')
+            : (s.inkWithFinger === 'yes'
+              ? 'Your finger always draws. Move the board with two fingers, or with the hand tool.'
+              : 'One finger always moves the board and never draws \u2014 tap to select, hold to pick something up. Choose this if you always write with a pen and keep resting a hand on the screen.')),
           row('Pointer while inking', mkChoice(
             [['nib', 'Pen nib'], ['arrow', 'Arrow'], ['crosshair', 'Crosshair']],
             () => s.inkPointer || 'nib',
@@ -1104,7 +1120,7 @@ export function createPanels(app) {
         ),
         h('div', { class: 'section' }, h('h5', {}, 'About'), info,
           h('p', { style: 'font-size:12px;color:var(--text-2);margin-top:10px;line-height:1.6' },
-            'Everything stays on this device. There is no sign-in, no account and no cloud: your boards are files in a folder on this computer. The one thing that ever reaches another machine is a board you hand it yourself, over your own network, with sharing switched on above — and even then it goes straight from here to there, never through anybody\'s server.'))
+            'Boards save automatically on this device. Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose. There is no sign-in or account. Local network sharing sends a board directly to another GazBoard when you choose to share it, never through anybody\'s server.'))
       );
     });
   }
@@ -1113,6 +1129,9 @@ export function createPanels(app) {
   async function boards() {
     open('boards', 'My boards', () => h('div', { id: 'boardList' }, h('p', { style: 'color:var(--text-2)' }, 'Loading…')));
     const list = await window.board.boards.list();
+    if (!list.some((b) => b.id === app.store.doc.id)) list.unshift({
+      id: app.store.doc.id, name: app.store.doc.name, objects: app.store.count, modified: app.store.doc.modified
+    });
     const host = document.getElementById('boardList');
     if (!host) return;
     host.innerHTML = '';
@@ -1120,6 +1139,39 @@ export function createPanels(app) {
     // Opening a .gazboard file had a keyboard shortcut and nothing to click,
     // which is no use to anyone who does not already know it is there.
     host.appendChild(h('button', { class: 'btn', style: 'width:100%;margin-bottom:14px', onclick: () => { app.command('board.open'); close(); } }, 'Open a board file…'));
+    const chosen = new Set();
+    const boxes = [];
+    const exportButton = h('button', { class: 'btn primary', disabled: true }, 'Export selected (0)');
+    const selectAll = h('input', { type: 'checkbox', 'aria-label': 'Select all boards' });
+    const syncChosen = () => {
+      exportButton.disabled = !chosen.size;
+      exportButton.textContent = `Export selected (${chosen.size})${chosen.size > 1 ? ' as ZIP…' : '…'}`;
+      selectAll.checked = chosen.size === list.length && !!list.length;
+      selectAll.indeterminate = chosen.size > 0 && chosen.size < list.length;
+    };
+    selectAll.addEventListener('change', () => {
+      chosen.clear();
+      for (const { input, id } of boxes) { input.checked = selectAll.checked; if (input.checked) chosen.add(id); }
+      syncChosen();
+    });
+    exportButton.addEventListener('click', async () => {
+      const ids = [...chosen];
+      exportButton.disabled = true;
+      selectAll.disabled = true;
+      boxes.forEach(({ input }) => { input.disabled = true; });
+      exportButton.textContent = 'Exporting…';
+      try { await exportBoards(app, ids); }
+      catch (e) { app.toast(e.message || 'Could not export the selected boards', 'help', 6000); }
+      finally {
+        selectAll.disabled = false;
+        boxes.forEach(({ input }) => { input.disabled = false; });
+        syncChosen();
+      }
+    });
+    host.appendChild(h('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px' },
+      h('label', { style: 'display:flex;align-items:center;gap:8px;min-height:44px' }, selectAll, 'Select all'), exportButton));
+    host.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
+      'Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'));
     if (!list.length) host.appendChild(h('p', { style: 'color:var(--text-2);font-size:13px' }, 'No saved boards yet.'));
 
     // Every board this app has ever saved is a plain file in one folder. Showing
@@ -1136,6 +1188,14 @@ export function createPanels(app) {
             else window.board.showItem(i.userData + '/boards');
           } }, 'Open that folder'));
         host.appendChild(foot);
+      } else if (i.isAndroid) {
+        const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
+          h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, saved in GazBoard’s private storage on this Android device.`),
+          h('p', {}, 'Boards and images save automatically and reopen here. Android’s Files app cannot browse this private folder.'),
+          h('p', {}, 'Select boards above to export them with their images. Choose Downloads, Documents or another location in the Android file picker.'),
+          h('p', {}, 'Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.'),
+          h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, 'Save current board…'));
+        host.appendChild(foot);
       } else {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, `${list.length} board${list.length === 1 ? '' : 's'}, stored in browser persistence:`),
@@ -1144,7 +1204,13 @@ export function createPanels(app) {
       }
     });
     for (const b of list) {
-      const row = h('button', { class: 'board-row' },
+      const input = h('input', { type: 'checkbox', 'aria-label': `Export ${b.name || 'Untitled board'}` });
+      boxes.push({ input, id: b.id });
+      input.addEventListener('change', () => {
+        if (input.checked) chosen.add(b.id); else chosen.delete(b.id);
+        syncChosen();
+      });
+      const row = h('button', { class: 'board-row', style: 'flex:1;min-width:0' },
         h('span', { html: icon('board', 20), style: 'color:var(--text-2);display:flex' }),
         h('span', { class: 'meta' },
           h('b', {}, b.name || 'Untitled board'),
@@ -1155,7 +1221,8 @@ export function createPanels(app) {
         const data = await window.board.boards.load(b.id);
         if (data) { await app.loadBoard(data); close(); }
       });
-      host.appendChild(row);
+      host.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' },
+        h('label', { style: 'display:grid;place-items:center;min-width:40px;min-height:48px' }, input), row));
     }
   }
 
