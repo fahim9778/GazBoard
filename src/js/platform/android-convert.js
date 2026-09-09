@@ -70,7 +70,21 @@ try {
     doc.style.cssText = `padding:0;margin:${margin}px;width:${widthPx - 2 * margin}px;`
       + `height:${heightPx - 2 * margin}px;column-width:${widthPx - 2 * margin}px;`
       + `column-gap:${2 * margin}px;column-fill:auto;overflow:visible`;
-    pages = Math.max(1, Math.ceil((doc.scrollWidth + 2 * margin) / widthPx));
+    /*
+     * Round, do not ceil.
+     *
+     * With column-fill:auto and a fixed height the layout always produces a
+     * WHOLE number of columns, so this division is an integer in exact
+     * arithmetic. But scrollWidth comes back as a whole number of pixels, and
+     * that rounding pushes the result a hair either side of the integer -
+     * measured at 3.0000992 for three columns and 7.000347 for seven. Ceiling
+     * turned each of those into one page too many, and the extra page had
+     * nothing on it: "Converted page 3 is blank".
+     *
+     * Rounding to nearest recovers the integer the layout actually produced,
+     * from either side.
+     */
+    pages = Math.max(1, Math.round((doc.scrollWidth + 2 * margin) / widthPx));
     window.gazboardConvertPage = (index) => {
       doc.style.transform = `translateX(${-index * widthPx}px)`;
       window.scrollTo(0, 0);
