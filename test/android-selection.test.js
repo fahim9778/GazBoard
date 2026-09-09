@@ -161,12 +161,12 @@ test('A handle survives committing an active text edit and owns the resize', asy
   assert.equal(store.get('selected').h, 140);
 });
 
-for (const [type, fingerInks] of [['touch', true], ['touch', false]]) {
+for (const type of ['touch', 'pen']) for (const fingerInks of [true, false]) {
   test(`Holding ${type}, finger ink ${fingerInks}, opens object actions while keeping the pen`, async (t) => {
     const { app, interaction, pointer, store, surface } = await setup({ fingerInks });
     surface.selection.clear();
     t.mock.timers.enable({ apis: ['setTimeout'] });
-    const before = store.count;
+    const before = store.count, undo = store.undoStack.length;
     interaction.onDown(pointer(type, 150, 150));
     t.mock.timers.tick(451);
     assert.equal(app.menuShown, true);
@@ -174,26 +174,27 @@ for (const [type, fingerInks] of [['touch', true], ['touch', false]]) {
     assert.equal(interaction.action.type, 'move');
     interaction.onUp(pointer(type, 150, 150, 0));
     assert.equal(store.count, before);
+    assert.equal(store.undoStack.length, undo);
     assert.deepEqual([...surface.selection], ['selected']);
     assert.equal(surface.wet, null);
   });
 }
 
 for (const tool of ['pen', 'highlighter']) for (const fingerInks of [true, false]) {
-  test(`A paused stylus resumes ${tool} ink without selecting the note (finger ink ${fingerInks})`, async (t) => {
+  test(`Moving the stylus cancels hold selection during ${tool} ink (finger ink ${fingerInks})`, async (t) => {
     const { app, interaction, pointer, store, surface } = await setup({ tool, fingerInks });
     surface.selection.clear();
     const before = store.count, undo = store.undoStack.length;
     const note = structuredClone(store.get('selected'));
     t.mock.timers.enable({ apis: ['setTimeout'] });
     interaction.onDown(pointer('pen', 150, 150));
-    t.mock.timers.tick(1000);           // well beyond the finger's hold threshold
+    interaction.onMove(pointer('pen', 170, 165));
+    t.mock.timers.tick(1000);           // pausing mid-stroke must not select
     assert.notEqual(app.menuShown, true);
     assert.equal(app.tool, tool);
     assert.equal(interaction.action.type, 'draw');
     assert.ok(surface.wet);
     assert.equal(surface.selection.size, 0);
-    interaction.applyMotion({ x: 170, y: 165 });
     interaction.onUp(pointer('pen', 170, 165, 0));
     assert.equal(store.count, before + 1);
     assert.equal(store.undoStack.length, undo + 1);
@@ -206,3 +207,19 @@ for (const tool of ['pen', 'highlighter']) for (const fingerInks of [true, false
     assert.equal(surface.wet, null);
   });
 }
+
+test('A palm lifting does not cancel the stylus hold selection', async (t) => {
+  const { app, interaction, pointer, store, surface } = await setup();
+  surface.selection.clear();
+  const before = store.count;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  interaction.onDown(pointer('pen', 150, 150));
+  interaction.onDown({ ...pointer('touch', 500, 300), pointerId: 2 });
+  interaction.onUp({ ...pointer('touch', 500, 300, 0), pointerId: 2 });
+  t.mock.timers.tick(451);
+  assert.equal(app.menuShown, true);
+  assert.deepEqual([...surface.selection], ['selected']);
+  interaction.onUp(pointer('pen', 150, 150, 0));
+  assert.equal(store.count, before);
+  assert.equal(surface.wet, null);
+});

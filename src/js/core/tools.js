@@ -621,7 +621,7 @@ export class Interaction {
         return;
       }
     }
-    this.cancelHold();
+    if (e.pointerId === this._holdId) this.cancelHold();
     this.pointers.delete(e.pointerId);
     if (this.secondaryPan && e.pointerId === this.secondaryPan.id) { this.secondaryPan = null; return; }
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; return; }
@@ -727,21 +727,13 @@ export class Interaction {
   /**
    * Start the clock on a press-and-hold, if this could be one.
    *
-   * A finger can select an object without leaving the ink tool.
+   * A finger or stylus can select an object without leaving the ink tool.
    * This also covers a finger set to pan, where touching an object begins
    * a transient move. A quick tap or a stroke keeps its usual meaning.
    */
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
-    /*
-     * Fingers only. A stylus held still over an object is somebody lining up
-     * the first mark of a letter, not asking to pick the object up - and
-     * stealing that pause turns their handwriting into a drag. A pen has the
-     * Select tool a tap away and does not lose its place reaching for it,
-     * which is the whole reason this gesture exists for a finger and not for
-     * a pen. Arming it for both put the two cases back in competition.
-     */
-    if (e.pointerType !== 'touch') return;
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
       || (this.action.type === 'move' && this.action.transient));
     // A drawing finger, or a panning one. Once the finger stopped drawing and

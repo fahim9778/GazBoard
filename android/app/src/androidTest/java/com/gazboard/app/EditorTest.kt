@@ -198,7 +198,7 @@ class EditorTest {
       } finally { copy.delete() }
     }
   }
-  @Test fun fingerHoldShowsActionsAndEitherPointerResizesWithThePenChosen() {
+  @Test fun fingerAndStylusHoldShowActionsAndResizeWithThePenChosen() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")
       js(scenario, """
@@ -212,19 +212,20 @@ class EditorTest {
                 isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
                 clientX: r.left + x, clientY: r.top + y }));
             };
-            for (const finger of ['yes', 'no']) for (const device of ['touch', 'pen']) {
+            for (const finger of ['yes', 'no']) for (const device of ['touch', 'pen']) for (const resizeWith of ['touch', 'pen']) {
               app.hideMenus(); app.setTool('pen'); app.settings.inkWithFinger = finger;
               app.store.add({ id: 'hold-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
                 rotation: 0, text: 'Resize me', color: '#ffd94a', font: 'ui', align: 'center' });
-              const before = app.store.count;
-              pointer('pointerdown', 'touch', 130, 140);
+              const before = app.store.count, undo = app.store.undoStack.length;
+              pointer('pointerdown', device, 130, 140);
               await new Promise(resolve => setTimeout(resolve, 520));
               if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('Hold menu missing: ' + device + finger);
-              pointer('pointerup', 'touch', 130, 140);
+              pointer('pointerup', device, 130, 140);
+              if (app.store.undoStack.length !== undo) throw Error('Holding left an undo entry');
               const box = app.surface.selectionScreenBox();
-              pointer('pointerdown', device, box.x + box.w, box.y + box.h);
-              pointer('pointermove', device, box.x + box.w + 35, box.y + box.h + 35);
-              pointer('pointerup', device, box.x + box.w + 35, box.y + box.h + 35);
+              pointer('pointerdown', resizeWith, box.x + box.w, box.y + box.h);
+              pointer('pointermove', resizeWith, box.x + box.w + 35, box.y + box.h + 35);
+              pointer('pointerup', resizeWith, box.x + box.w + 35, box.y + box.h + 35);
               if (app.store.get('hold-note').w <= 150 || app.tool !== 'pen') throw Error('Resize did not work with the pen chosen');
               if (app.store.count !== before) throw Error('Resizing left ink');
               app.store.remove(['hold-note']); app.setSelection([]);
@@ -237,7 +238,7 @@ class EditorTest {
       assertEquals("null", js(scenario, "window.holdTestError || null"))
     }
   }
-  @Test fun pausedStylusKeepsWritingWithoutSelectingTheNote() {
+  @Test fun movingStylusCancelsHoldSelectionAndKeepsWriting() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")
       js(scenario, """
@@ -258,10 +259,10 @@ class EditorTest {
               app.hideMenus(); app.setSelection([]); app.setTool(tool); app.settings.inkWithFinger = finger;
               const before = app.store.count;
               pointer('pointerdown', 130, 140);
+              pointer('pointermove', 150, 160);
               await new Promise(resolve => setTimeout(resolve, 700));
               if (document.querySelector('.pop .menu') || app.selection.size) throw Error('Stylus pause selected an object');
               if (app.interaction.action?.type !== 'draw' || !app.surface.wet) throw Error('Stylus pause lost the stroke');
-              pointer('pointermove', 150, 160);
               pointer('pointerup', 150, 160);
               const stroke = app.store.objects.at(-1);
               if (app.store.count !== before + 1 || stroke.type !== 'stroke' || stroke.tool !== tool || stroke.bbox.w <= 4) throw Error('Writing did not resume: ' + tool + finger);
