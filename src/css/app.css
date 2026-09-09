@@ -557,22 +557,13 @@ kbd {
 }
 
 /*
- * ...unless the keyboard has taken the bottom.
- *
- * The rule above pins the readouts above the pen tray, which is right until
- * there is no bottom left to sit above: with the on-screen keyboard open the
- * viewport is half as tall and 98px from the bottom is underneath it. The
- * short-screen rule that moves them to the top used to cover this and was
- * narrowed to `pointer: fine`, which excludes every phone - the one kind of
- * screen that HAS an on-screen keyboard.
- *
- * This has to come after the block above, and it has to set `bottom: auto`.
- * A box given both a top and a bottom does not move, it stretches, and that is
- * how the zoom readout once became a 276-pixel white column down the side.
+ * A short screen can be landscape or a keyboard-reduced viewport. Only move
+ * the readouts up while editing text; landscape alone keeps them by the pens.
+ * Clear the opposite edge so the controls cannot stretch into a tall column.
  */
 @media (pointer: coarse) and (max-height: 460px) {
-  #zoombar { top: 8px; bottom: auto; }
-  #pagebar { top: 52px; bottom: auto; }
+  body.typing #zoombar, body:has(#boardTitle:focus) #zoombar { top: 8px; bottom: auto; }
+  body.typing #pagebar, body:has(#boardTitle:focus) #pagebar { top: 52px; bottom: auto; }
 }
 
 /* Smartphone portrait viewports (under 480px width) */

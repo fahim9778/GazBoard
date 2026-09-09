@@ -124,6 +124,14 @@ class InsetsTest {
       until("Editor did not resize above the keyboard") {
         layout(scenario).getValue("height").jsonPrimitive.double < before.getValue("height").jsonPrimitive.double - 80
       }
+      until("Zoom must stay compact and visible above the keyboard") { js(scenario, """
+        (() => {
+          const zoom = document.getElementById('zoombar');
+          const box = zoom.getBoundingClientRect();
+          return box.height > 0 && box.height < 70 && box.top >= 0 && box.bottom <= innerHeight
+            && (!matchMedia('(max-height: 460px)').matches || getComputedStyle(zoom).bottom === 'auto');
+        })()
+      """.trimIndent()) == "true" }
       js(scenario, "document.getElementById('boardTitle').blur();")
       scenario.onActivity { WindowCompat.getInsetsController(it.window, it.web).hide(WindowInsetsCompat.Type.ime()) }
       until("Keyboard did not close") { !keyboardVisible(scenario) }
