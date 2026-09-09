@@ -177,7 +177,7 @@ class EditorTest {
               }), setLast: false });
               board.saveDialog = async () => ${JsonPrimitive(handle)};
               try {
-                const { exportBoards } = await import('./js/board-export.js');
+                const { exportBoards } = await import(new URL('./js/board-export.js', location.href).href);
                 await exportBoards(app, ['zip-other', activeId]);
                 const zip = await window.JSZip.loadAsync(await board.readFile(${JsonPrimitive(handle)}));
                 if (Object.keys(zip.files).length !== 2) throw Error('ZIP lost a selected board');
