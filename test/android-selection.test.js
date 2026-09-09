@@ -161,7 +161,7 @@ test('A handle survives committing an active text edit and owns the resize', asy
   assert.equal(store.get('selected').h, 140);
 });
 
-for (const [type, fingerInks] of [['touch', true], ['touch', false], ['pen', true]]) {
+for (const [type, fingerInks] of [['touch', true], ['touch', false]]) {
   test(`Holding ${type}, finger ink ${fingerInks}, opens object actions while keeping the pen`, async (t) => {
     const { app, interaction, pointer, store, surface } = await setup({ fingerInks });
     surface.selection.clear();
@@ -175,6 +175,34 @@ for (const [type, fingerInks] of [['touch', true], ['touch', false], ['pen', tru
     interaction.onUp(pointer(type, 150, 150, 0));
     assert.equal(store.count, before);
     assert.deepEqual([...surface.selection], ['selected']);
+    assert.equal(surface.wet, null);
+  });
+}
+
+for (const tool of ['pen', 'highlighter']) for (const fingerInks of [true, false]) {
+  test(`A paused stylus resumes ${tool} ink without selecting the note (finger ink ${fingerInks})`, async (t) => {
+    const { app, interaction, pointer, store, surface } = await setup({ tool, fingerInks });
+    surface.selection.clear();
+    const before = store.count, undo = store.undoStack.length;
+    const note = structuredClone(store.get('selected'));
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    interaction.onDown(pointer('pen', 150, 150));
+    t.mock.timers.tick(1000);           // well beyond the finger's hold threshold
+    assert.notEqual(app.menuShown, true);
+    assert.equal(app.tool, tool);
+    assert.equal(interaction.action.type, 'draw');
+    assert.ok(surface.wet);
+    assert.equal(surface.selection.size, 0);
+    interaction.applyMotion({ x: 170, y: 165 });
+    interaction.onUp(pointer('pen', 170, 165, 0));
+    assert.equal(store.count, before + 1);
+    assert.equal(store.undoStack.length, undo + 1);
+    const stroke = store.objects.at(-1);
+    assert.equal(stroke.type, 'stroke');
+    assert.equal(stroke.tool, tool);
+    assert.ok(stroke.points.length > 1 && stroke.bbox.w > 4);
+    assert.deepEqual(store.get('selected'), note);
+    assert.equal(surface.selection.size, 0);
     assert.equal(surface.wet, null);
   });
 }

@@ -727,7 +727,7 @@ export class Interaction {
   /**
    * Start the clock on a press-and-hold, if this could be one.
    *
-   * A finger or stylus can select an object without leaving the ink tool.
+   * A finger can select an object without leaving the ink tool.
    * This also covers a finger set to pan, where touching an object begins
    * a transient move. A quick tap or a stroke keeps its usual meaning.
    */
