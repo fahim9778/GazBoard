@@ -152,7 +152,7 @@ class EditorTest {
                 await new Promise(resolve => setTimeout(resolve, 100));
               const host = document.getElementById('boardList');
               if (host.textContent.includes('browser persistence') || !host.textContent.includes('private storage')) throw Error('Wrong Android storage description');
-              const save = [...host.querySelectorAll('button')].find(b => b.textContent === 'Save a copy…');
+              const save = [...host.querySelectorAll('button')].find(b => b.textContent === 'Save current board…');
               if (!save) throw Error('Save a copy is missing');
               const originalDialog = board.saveDialog, originalWrite = board.writeFile;
               let finish, reject;
@@ -171,6 +171,19 @@ class EditorTest {
               if (exported.objects.find(o => o.id === 'copy-image').src !== image) throw Error('Export lost its image');
               await app.loadBoard(exported);
               if (app.store.get('copy-image').src !== image) throw Error('Copy did not reopen');
+              const activeId = app.store.doc.id;
+              await board.boards.save({ id: 'zip-other', json: JSON.stringify({
+                id: 'zip-other', name: 'Second board', objects: [{ id: 'zip-text', type: 'text', text: 'Other board' }]
+              }), setLast: false });
+              board.saveDialog = async () => ${JsonPrimitive(handle)};
+              try {
+                const { exportBoards } = await import('./js/board-export.js');
+                await exportBoards(app, ['zip-other', activeId]);
+                const zip = await window.JSZip.loadAsync(await board.readFile(${JsonPrimitive(handle)}));
+                if (Object.keys(zip.files).length !== 2) throw Error('ZIP lost a selected board');
+                const other = JSON.parse(await zip.file('Second board.gazboard').async('string'));
+                if (other.id !== 'zip-other' || app.store.doc.id !== activeId) throw Error('ZIP exported the wrong board');
+              } finally { board.saveDialog = originalDialog; await board.boards.remove('zip-other'); }
               await app.showAbout();
               const about = document.getElementById('overlayCard').textContent;
               if (!about.includes('Runtime: Android') || about.includes('IndexedDB')) throw Error('About mislabels Android storage');
@@ -183,6 +196,45 @@ class EditorTest {
         assertEquals("null", js(scenario, "window.storageTestError || null"))
         assertTrue("Export must reach its chosen document provider", copy.length() > 0)
       } finally { copy.delete() }
+    }
+  }
+  @Test fun longPressShowsActionsAndHandlesResizeWithThePenChosen() {
+    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+      until(scenario, "!!window.app && !!window.app.store")
+      js(scenario, """
+        (async () => {
+          try {
+            await app.loadBoard({ id: 'hold-resize-test', name: 'Hold and resize', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } });
+            const canvas = document.getElementById('c');
+            const pointer = (type, device, x, y) => {
+              const r = canvas.getBoundingClientRect();
+              canvas.dispatchEvent(new PointerEvent(type, { pointerId: 71, pointerType: device, bubbles: true,
+                isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
+                clientX: r.left + x, clientY: r.top + y }));
+            };
+            for (const [device, finger] of [['touch', 'yes'], ['touch', 'no'], ['pen', 'yes']]) {
+              app.hideMenus(); app.setTool('pen'); app.settings.inkWithFinger = finger;
+              app.store.add({ id: 'hold-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
+                rotation: 0, text: 'Resize me', color: '#ffd94a', font: 'ui', align: 'center' });
+              const before = app.store.count;
+              pointer('pointerdown', device, 130, 140);
+              await new Promise(resolve => setTimeout(resolve, 520));
+              if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('Hold menu missing: ' + device + finger);
+              pointer('pointerup', device, 130, 140);
+              const box = app.surface.selectionScreenBox();
+              pointer('pointerdown', device, box.x + box.w, box.y + box.h);
+              pointer('pointermove', device, box.x + box.w + 35, box.y + box.h + 35);
+              pointer('pointerup', device, box.x + box.w + 35, box.y + box.h + 35);
+              if (app.store.get('hold-note').w <= 150 || app.tool !== 'pen') throw Error('Resize did not work with the pen chosen');
+              if (app.store.count !== before) throw Error('Resizing left ink');
+              app.store.remove(['hold-note']); app.setSelection([]);
+            }
+            window.holdTestDone = true;
+          } catch (e) { window.holdTestError = e.stack; }
+        })();
+      """.trimIndent())
+      until(scenario, "window.holdTestDone === true || !!window.holdTestError")
+      assertEquals("null", js(scenario, "window.holdTestError || null"))
     }
   }
   @Test fun boardStoragePreservesBackgroundImportsAndImages() {

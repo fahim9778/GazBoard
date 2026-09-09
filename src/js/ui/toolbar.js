@@ -32,7 +32,8 @@ const CMD_ICON = { undo: 'undo', redo: 'redo', insert: 'insert', ruler: 'ruler',
  */
 export function isPhoneLayout() {
   if (typeof matchMedia !== 'function') return false;
-  return matchMedia('(pointer: coarse)').matches && matchMedia('(max-width: 760px)').matches;
+  return matchMedia('(pointer: coarse)').matches
+    && (matchMedia('(max-width: 760px)').matches || matchMedia('(max-height: 460px)').matches);
 }
 
 export function initToolbar(app) {

@@ -39,8 +39,7 @@ Boards and their images save automatically in GazBoard's private internal storag
 Open **My boards** to reopen them. They survive closing the app, restarting the
 device, and a normal app update. Android's Files app cannot browse this folder.
 
-To keep a copy outside the app, open the board, then choose **My boards → Save a
-copy…** (also available in Settings and About). Android's file picker lets you
+To keep a copy outside the app, open the board, then choose **My boards → Save current board…** (called **Save a copy…** in Settings and About). Android's file picker lets you
 choose Downloads, Documents, or another document provider. The `.gazboard` file
 includes the board's images and can be opened on Android or desktop using
 **Open a board file…**. Exports are snapshots: later edits continue to autosave
@@ -56,6 +55,12 @@ Implementation: `BoardStorage` uses `filesDir/boards`, `filesDir/assets`, and an
 atomic last-board pointer. File import/export uses Android's Storage Access
 Framework with access granted by the file picker; no broad storage permission is
 needed.
+
+To export several boards, tick their checkboxes in **My boards** or use **Select
+all**, then **Export selected**. One board becomes a `.gazboard` file; multiple
+boards become one ZIP containing separate portable board files, including images.
+Extract the ZIP before using **Open a board file…**. Exporting does not switch
+the active board.
 
 ## Sharing with the desktop
 

@@ -34,7 +34,8 @@ async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true }
     ruler: { visible: false }, textEditor: { active: editing },
     settings: { pressure: true, penColor: '#111111', penWidth: 3, penEffect: 'none',
       highlighterColor: '#ffff00', highlighterWidth: 20, inkToShape: false },
-    hideMenus() {}, notePenSeen() {}, syncUI() {}, onGestureEnd() {}, showHint() {}, hintLocked() {},
+    hideMenus() {}, notePenSeen() {}, syncUI() {}, onGestureEnd() {}, showHint() {}, hintLocked() {}, toast() {},
+    showContextMenu() { app.menuShown = true; },
     setSelection(ids) { surface.selection.clear(); for (const id of ids) surface.selection.add(id); },
     setTool(value) { app.tool = value; },
     armToolRestore() {},
@@ -147,3 +148,33 @@ test('Visible selection handles keep their resize gesture with the pen chosen', 
   interaction.onUp(pointer('pen', 200, 200, 0));
   assert.equal(store.count, before);
 });
+
+test('A handle survives committing an active text edit and owns the resize', async () => {
+  const { app, interaction, pointer, store } = await setup({ editing: true });
+  interaction.onDown(pointer('touch', 200, 200));
+  assert.equal(app.textEditor.active, false);
+  assert.equal(interaction.action.type, 'resize');
+  assert.equal(interaction.actionId, 1);
+  interaction.applyMotion({ x: 240, y: 240 });
+  interaction.onUp(pointer('touch', 240, 240, 0));
+  assert.equal(store.get('selected').w, 140);
+  assert.equal(store.get('selected').h, 140);
+});
+
+for (const [type, fingerInks] of [['touch', true], ['touch', false], ['pen', true]]) {
+  test(`Holding ${type}, finger ink ${fingerInks}, opens object actions while keeping the pen`, async (t) => {
+    const { app, interaction, pointer, store, surface } = await setup({ fingerInks });
+    surface.selection.clear();
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const before = store.count;
+    interaction.onDown(pointer(type, 150, 150));
+    t.mock.timers.tick(451);
+    assert.equal(app.menuShown, true);
+    assert.equal(app.tool, 'pen');
+    assert.equal(interaction.action.type, 'move');
+    interaction.onUp(pointer(type, 150, 150, 0));
+    assert.equal(store.count, before);
+    assert.deepEqual([...surface.selection], ['selected']);
+    assert.equal(surface.wet, null);
+  });
+}

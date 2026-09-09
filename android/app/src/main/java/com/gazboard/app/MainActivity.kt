@@ -15,6 +15,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -62,9 +63,14 @@ class MainActivity : ComponentActivity() {
     frame = FrameLayout(this)
     setContentView(frame)
     ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
-      val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
+      val handled = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime()
+      val safe = insets.getInsets(handled)
       view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
-      insets
+      // The WebView already fits inside this padding. Passing the same insets
+      // on makes CSS reserve them again and lifts the toolbar off the bottom.
+      // Send zeroes instead of CONSUMED so keyboard changes still reach it;
+      // otherwise an old keyboard inset can linger after the keyboard closes.
+      WindowInsetsCompat.Builder(insets).setInsets(handled, Insets.NONE).build()
     }
     pendingIntent = intent
     startupFilePending = intent.action in listOf(Intent.ACTION_VIEW, Intent.ACTION_SEND)
