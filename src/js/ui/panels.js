@@ -1120,7 +1120,7 @@ export function createPanels(app) {
         ),
         h('div', { class: 'section' }, h('h5', {}, 'About'), info,
           h('p', { style: 'font-size:12px;color:var(--text-2);margin-top:10px;line-height:1.6' },
-            'Boards save automatically on this device. Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose. There is no sign-in or account. Local network sharing sends a board directly to another GazBoard when you choose to share it, never through anybody\'s server.'))
+            'Boards save automatically on this device. Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose. There is no sign-in, no account and no cloud. The one thing that ever leaves this device is a board you hand to another GazBoard yourself, over your own network, and even then it goes straight from here to there, never through anybody\'s server.'))
       );
     });
   }

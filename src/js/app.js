@@ -1992,7 +1992,7 @@ class App {
      */
     card.appendChild(h('p', { html:
       'A free-form digital whiteboard for pen, sticky notes, shapes, text, images and documents.'
-      + '<br><br>Runs on this device — no account or sign-in. Boards save automatically on this device. '
+      + '<br><br>Runs on this device — no account, no sign-in, no cloud. Boards save automatically here. '
       + 'Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose.'
       + '<br><br>The one exception is <b>sharing on your own network</b>, which is off until you switch '
       + 'it on in Settings. With it on, you can hand a board straight to another GazBoard on the same '

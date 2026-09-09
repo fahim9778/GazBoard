@@ -733,7 +733,15 @@ export class Interaction {
    */
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
-    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    /*
+     * Fingers only. A stylus held still over an object is somebody lining up
+     * the first mark of a letter, not asking to pick the object up - and
+     * stealing that pause turns their handwriting into a drag. A pen has the
+     * Select tool a tap away and does not lose its place reaching for it,
+     * which is the whole reason this gesture exists for a finger and not for
+     * a pen. Arming it for both put the two cases back in competition.
+     */
+    if (e.pointerType !== 'touch') return;
     const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
       || (this.action.type === 'move' && this.action.transient));
     // A drawing finger, or a panning one. Once the finger stopped drawing and
