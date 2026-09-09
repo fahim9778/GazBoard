@@ -141,6 +141,18 @@ export class Interaction {
     // picture, not the whole board.
     if (e.pointerType === 'mouse' && !this.app.mouseInks && (this.tool === 'pen' || this.tool === 'highlighter'))
       return 'mousePointer';
+    /*
+     * And the same rule for a finger, which is how one-finger panning works.
+     *
+     * It routes to the SAME pointer behaviour as the mouse: on an object the
+     * finger drags that object, on bare board it moves the board. Not a plain
+     * pan tool - dragging a picture has to move the picture. The eraser is
+     * deliberately not in this list: a finger reaching for the eraser means to
+     * erase, and there is no ambiguity to resolve.
+     */
+    if (e.pointerType === 'touch' && !this.app.fingerInks
+        && (this.tool === 'pen' || this.tool === 'highlighter'))
+      return 'mousePointer';
     return this.tool;
   }
 
@@ -251,9 +263,19 @@ export class Interaction {
         // Say so, once. Someone with no stylus who picks the pen and drags the
         // mouse gets a moving canvas and no ink, and there is nothing on screen
         // to explain why. A silent no-op is the whole bug this rule replaced.
-        this.app.showHint('mouse-pans',
-          'The <b>pen</b> draws and the <b>mouse</b> moves the canvas — both at once. '
-          + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
+        // The same behaviour reaches here from a mouse and from a finger, and
+        // they need different words: telling a phone user about their mouse
+        // explains nothing.
+        if (e.pointerType === 'touch') {
+          this.app.showHint('finger-pans',
+            'The <b>pen</b> draws and your <b>finger</b> moves the board — both at once. '
+            + 'Want to draw with a finger? Tap the hand on the toolbar, '
+            + 'or Settings › <b>Draw with a finger</b>.');
+        } else {
+          this.app.showHint('mouse-pans',
+            'The <b>pen</b> draws and the <b>mouse</b> moves the canvas — both at once. '
+            + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
+        }
         const hit = pick(this.store, wp, 8 / this.surface.cam.z);
         if (hit && !hit.locked) {
           const objs = withAttached(this.store, [hit.id])
@@ -697,16 +719,23 @@ export class Interaction {
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
     if (e.pointerType !== 'touch') return;
-    if (!this.action || this.action.type !== 'draw') return;
+    // A drawing finger, or a panning one. Once the finger stopped drawing and
+    // started moving the board, "hold it to pick it up" was the only way left
+    // to get hold of an object without going to the toolbar - so it has to
+    // work from a pan too, not just from a stroke.
+    if (!this.action || (this.action.type !== 'draw' && this.action.type !== 'pan')) return;
     const hit = pick(this.store, wp, 8 / this.surface.cam.z);
     if (!hit || hit.locked) return;
     this._holdFrom = sp;
     this._holdId = e.pointerId;
     this._hold = setTimeout(() => {
       this._hold = null;
-      // The finger may have lifted or begun a real stroke in the meantime.
-      if (!this.action || this.action.type !== 'draw') return;
-      // The mark never becomes an object, so there is nothing to undo.
+      // The finger may have lifted, begun a real stroke, or dragged the board
+      // away in the meantime.
+      if (!this.action || (this.action.type !== 'draw' && this.action.type !== 'pan')) return;
+      // The mark never becomes an object, so there is nothing to undo. A pan
+      // has moved nothing either - the slop check above cancels the hold long
+      // before the board travels far enough to notice.
       this.surface.wet = null;
       this.action = null;
       this.app.setSelection([hit.id]);

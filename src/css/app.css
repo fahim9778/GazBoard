@@ -626,11 +626,55 @@ kbd {
 
 #rxBadge .rx-label { overflow: hidden; text-overflow: ellipsis; }
 
-/* On a phone the top bar has no room for a name; the ring alone still says
-   something is coming, and the panel has the detail. */
+/*
+ * On a phone it leaves the bar and becomes a strip of its own.
+ *
+ * It used to shrink to a 34px stub with the name hidden, on the grounds that
+ * the top bar had no room. What that produced was a half-filled circle sitting
+ * in a row of buttons, saying nothing: you could see something was happening
+ * and not what, or who from, or whether it concerned you. A progress ring with
+ * no subject is just movement in the corner of your eye while you are writing.
+ *
+ * So on a phone it lifts out of the bar and floats under the top edge, wide
+ * enough to carry the sender's name, and it is calm: no pulse, no solid
+ * orange, muted against the board. Loud enough to read at a glance, quiet
+ * enough to write underneath.
+ */
 @media (max-width: 760px) {
-  #rxBadge { max-width: 34px; padding: 3px 5px; }
-  #rxBadge .rx-label { display: none; }
+  #rxBadge {
+    position: fixed;
+    left: 50%;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    transform: translateX(-50%);
+    z-index: 40;
+    max-width: min(86vw, 340px);
+    margin: 0;
+    padding: 6px 14px 6px 8px;
+    background: var(--panel, #fff);
+    border-color: rgba(217, 119, 6, .55);
+    box-shadow: 0 3px 14px rgba(0, 0, 0, .16);
+    font-size: 13px;
+  }
+  #rxBadge .rx-label { display: block; }
+  /* It announces itself by arriving, not by flashing. */
+  #rxBadge.alert {
+    background: var(--panel, #fff);
+    border-color: var(--rx-amber);
+    color: var(--rx-amber);
+    animation: rx-slide .28s ease-out 1;
+  }
+  #rxBadge.alert .rx-ring {
+    background: conic-gradient(var(--rx-amber) 0deg, rgba(217, 119, 6, .22) 0deg);
+  }
+  #rxBadge.done {
+    background: var(--panel, #fff);
+    border-color: var(--rx-green);
+  }
+}
+
+@keyframes rx-slide {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
 }
 
 /*

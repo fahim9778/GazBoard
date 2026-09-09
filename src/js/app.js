@@ -52,6 +52,8 @@ export const DEFAULT_SETTINGS = {
   // thing it prevents is being halfway through a sentence when an "accept
   // this board?" dialog appears out of nowhere. See showReceiving().
   arrivalSound: true,
+  // 'auto' | 'yes' | 'no' - see fingerInks(). Auto lets the hardware answer.
+  inkWithFinger: 'auto',
   // Holding a stylus's side button while writing rubs out, the way it does in
   // Samsung's own apps. A pen's flip-over tail always erases and is not
   // affected by this. See effectiveTool() in tools.js.
@@ -740,6 +742,49 @@ class App {
     if (m === 'yes') return true;
     if (m === 'no') return false;
     return !this.penSeenThisSession;         // 'auto' - the default
+  }
+
+  /**
+   * Does a FINGER draw, or move the board?
+   *
+   * The same question as mouseInks, asked of the other hand, and it has to be
+   * asked because one finger cannot do both. Panning with two fingers is what
+   * GazBoard did, and on a phone it is friction on the commonest movement
+   * there is: you reposition the board far more often than you write on it.
+   *
+   * 'auto' answers it from the hardware, the way OneNote and Samsung Notes do.
+   * No stylus has touched this screen, so there is nothing else to draw with -
+   * the finger draws, and a phone with no pen works with nothing to find. An
+   * S Pen has touched it, so the pen draws and the finger is free to move the
+   * board underneath.
+   *
+   * Whatever the answer, a tap still selects and a press-and-hold still picks
+   * things up: those are how a finger reaches an object, and losing them would
+   * trade one kind of friction for a worse one.
+   */
+  get fingerInks() {
+    const f = this.settings.inkWithFinger;
+    if (f === 'yes') return true;
+    if (f === 'no') return false;
+    // 'auto'. Only a touch-first device answers this from the hardware: a
+    // phone or a tablet, where the finger and the pen are the only two things
+    // there are and one of them has to move the board. A laptop with a
+    // touchscreen has a mouse for that already, and quietly changing what its
+    // screen does the first time somebody picks up a stylus would break a
+    // machine that was working.
+    const touchFirst = typeof matchMedia === 'function'
+      && matchMedia('(pointer: coarse)').matches;
+    return !(touchFirst && this.penSeenThisSession);
+  }
+
+  /** The toolbar button: flip it, and the guess stops second-guessing you. */
+  toggleFingerInk() {
+    this.settings.inkWithFinger = this.fingerInks ? 'no' : 'yes';
+    this.saveSettings();
+    this.toast(this.fingerInks
+      ? 'Your finger draws — two fingers move the board'
+      : 'Your finger moves the board — draw with the pen', 'pen', 2600);
+    this.syncUI?.();
   }
 
   /**

@@ -17,7 +17,7 @@ class SharingService : Service() {
     val stop = PendingIntent.getService(this, 2, Intent(this, SharingService::class.java).setAction("stop"),
       PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     val notification = NotificationCompat.Builder(this, CHANNEL)
-      .setSmallIcon(R.drawable.ic_gazboard).setContentTitle("GazBoard sharing is on")
+      .setSmallIcon(R.drawable.ic_notification).setContentTitle("GazBoard sharing is on")
       .setContentText("Ready to exchange boards on this network")
       .setContentIntent(open(this)).setOngoing(true).setSilent(true)
       .addAction(0, "Stop sharing", stop).build()
@@ -55,7 +55,7 @@ class SharingService : Service() {
       channel(context)
       try {
         context.getSystemService(NotificationManager::class.java).notify(8, NotificationCompat.Builder(context, CHANNEL)
-          .setSmallIcon(R.drawable.ic_gazboard).setContentTitle("$name sent a board")
+          .setSmallIcon(R.drawable.ic_notification).setContentTitle("$name sent a board")
           .setContentText("Open GazBoard to accept or decline it").setContentIntent(open(context)).setAutoCancel(true).build())
       } catch (_: SecurityException) { /* Notifications may be declined; the in-app question still works. */ }
     }

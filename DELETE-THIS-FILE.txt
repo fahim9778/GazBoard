@@ -1,0 +1,8 @@
+One file has to be DELETED, which a zip cannot do for you:
+
+    android\app\src\main\res\drawable\ic_gazboard.xml
+
+It was the hand-drawn icon. Nothing refers to it any more.
+PowerShell:
+
+    Remove-Item android\app\src\main\res\drawable\ic_gazboard.xml

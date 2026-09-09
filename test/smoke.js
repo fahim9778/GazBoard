@@ -3179,6 +3179,106 @@ async function run(win, app) {
   check('a stylus tapping the same note still marks it - this is a rule about fingers',
     tapped.penStillMarks);
   check('and a finger tap on bare board is still a dot', tapped.bareBoardStillDots);
+
+  /* ---- one finger moves the board, without losing the finger ---- *
+   * Two fingers to pan is friction on the movement you make most, so a finger
+   * can be told to move the board instead of drawing. The whole risk of that
+   * change is what it takes away: it must not cost you inking, pinch zoom, or
+   * the ability to get hold of an object without visiting the toolbar.
+   */
+  const fingerPan = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.settings.autosave = false;
+    // Later checks lean on the board this suite has been building up, and this
+    // one needs bare space to drag across - so it puts that board aside and
+    // hands it straight back.
+    const backup = JSON.parse(JSON.stringify(a.store.toJSON()));
+    a.newBoard(true);
+    const r = {};
+    const rect = sf.canvas.getBoundingClientRect();
+    const T = (x, y, buttons, id = 71) => ({ pointerId: id, pointerType: 'touch', button: 0,
+      buttons, pressure: 0.5, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false });
+    const P = (x, y, buttons) => ({ pointerId: 72, pointerType: 'pen', button: 0,
+      buttons, pressure: 0.6, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false });
+    const reset = () => { it.action = null; it.actionId = null; it.pointers.clear(); it.cancelHold(); };
+    a.setTool('pen');
+
+    // --- finger set to move the board ---
+    a.settings.inkWithFinger = 'no';
+    r.saysItMoves = a.fingerInks === false;
+    reset();
+    const cam0 = { x: sf.cam.x, y: sf.cam.y };
+    it.onDown(T(300, 300, 1));
+    for (let i = 1; i <= 6; i++) it.onMove(T(300 + i * 14, 300 + i * 6, 1));
+    r.boardMoved = Math.abs(sf.cam.x - cam0.x) > 40;
+    r.noInkFromFinger = a.store.doc.order.length === 0;
+    it.onUp(T(384, 336, 0));
+    reset();
+    sf.cam.x = cam0.x; sf.cam.y = cam0.y;
+
+    // --- the pen still draws while the finger is moving things ---
+    it.onDown(P(200, 200, 1));
+    for (let i = 1; i <= 6; i++) it.onMove(P(200 + i * 9, 200 + i * 4, 1));
+    it.onUp(P(254, 224, 0));
+    r.penStillInks = a.store.doc.order.length === 1;   // the board is empty here
+
+    // --- two fingers still pinch, they do not fight the one-finger pan ---
+    reset();
+    const z0 = sf.cam.z;
+    it.onDown(T(300, 400, 1, 81));
+    it.onDown(T(400, 400, 1, 82));
+    r.pinching = !!it.pinch;
+    it.onMove(T(260, 400, 1, 81));
+    it.onMove(T(440, 400, 1, 82));
+    r.pinchZoomed = Math.abs(sf.cam.z - z0) > 0.001;
+    it.onUp(T(260, 400, 0, 81)); it.onUp(T(440, 400, 0, 82));
+    reset();
+    sf.cam.z = z0;
+
+    // --- a finger can still get hold of an object ---
+    const box = { id: 'fpbox', type: 'shape', kind: 'rect', rotation: 0,
+      x: 0, y: 0, w: 240, h: 160, stroke: '#000', fill: '#eee', lineWidth: 2 };
+    const c = sf.cam.toScreen(120, 80);
+    a.store.add(box, 'x');
+    reset();
+    a.setSelection([]);
+    it.onDown(T(c.x, c.y, 1));
+    r.grabbedIt = !!it.action && (it.action.type === 'move' || it.action.type === 'draw');
+    it.onUp(T(c.x, c.y, 0));
+
+    // --- and turning it back on gives the finger its ink back ---
+    reset();
+    a.settings.inkWithFinger = 'yes';
+    r.saysItDraws = a.fingerInks === true;
+    const before = a.store.doc.order.length;
+    it.onDown(T(500, 500, 1));
+    for (let i = 1; i <= 6; i++) it.onMove(T(500 + i * 11, 500 + i * 5, 1));
+    it.onUp(T(566, 530, 0));
+    r.fingerInkedAgain = a.store.doc.order.length === before + 1;
+
+    // --- the toolbar button flips it, and the guess stops guessing ---
+    a.settings.inkWithFinger = 'auto';
+    a.toggleFingerInk();
+    r.toggleIsExplicit = a.settings.inkWithFinger !== 'auto';
+
+    delete a.settings.inkWithFinger;
+    reset();
+    a.setSelection([]);
+    a.store.load(backup);
+    a.setTool('select'); a.settings.autosave = true;
+    return r;
+  `);
+  check('a finger set to move the board moves it, and leaves no ink',
+    fingerPan.saysItMoves && fingerPan.boardMoved && fingerPan.noInkFromFinger,
+    JSON.stringify(fingerPan));
+  check('the pen still draws while the finger is moving the board', fingerPan.penStillInks);
+  check('two fingers still pinch to zoom', fingerPan.pinching && fingerPan.pinchZoomed);
+  check('and a finger can still get hold of an object without the toolbar', fingerPan.grabbedIt);
+  check('turning it back on gives the finger its ink back',
+    fingerPan.saysItDraws && fingerPan.fingerInkedAgain);
+  check('flipping it by hand stops the automatic guess', fingerPan.toggleIsExplicit);
   check('the floating bar is showing while something is selected', tapped.barWasShowing);
   check('a tap on empty space puts that bar away instead of leaving a dot',
     tapped.dismissNoInk && tapped.dismissCleared && tapped.barPutAway);

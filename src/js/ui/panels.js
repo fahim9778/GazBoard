@@ -985,6 +985,17 @@ export function createPanels(app) {
             : s.inkWithMouse === 'yes'
               ? 'The mouse always inks, like a stylus. Pan with space and drag, the middle button, right-drag, or the pan tool. Choose this if you draw with a mouse and have no pen.'
               : 'Never (default): the pen inks and the mouse moves the canvas and drags objects — both at the same time, whichever tool is chosen.'),
+          row('Draw with a finger', mkChoice(
+            [['auto', 'Auto'], ['yes', 'Always'], ['no', 'Never']],
+            () => s.inkWithFinger || 'auto',
+            (v) => { s.inkWithFinger = v; app.saveSettings(); rerender(); }
+          ), (s.inkWithFinger || 'auto') === 'auto'
+            ? (app.penSeenThisSession
+              ? 'A pen has been used since the app started, so one finger moves the board and the pen draws. Your finger draws again next time you open GazBoard without a pen.'
+              : 'No pen has touched the screen, so your finger draws and two fingers move the board. The moment a pen is used they swap over \u2014 only for this session.')
+            : (s.inkWithFinger === 'yes'
+              ? 'Your finger always draws. Move the board with two fingers, or with the hand tool.'
+              : 'One finger always moves the board and never draws \u2014 tap to select, hold to pick something up. Choose this if you always write with a pen and keep resting a hand on the screen.')),
           row('Pointer while inking', mkChoice(
             [['nib', 'Pen nib'], ['arrow', 'Arrow'], ['crosshair', 'Crosshair']],
             () => s.inkPointer || 'nib',
