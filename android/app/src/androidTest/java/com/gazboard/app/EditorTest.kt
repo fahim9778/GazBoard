@@ -198,7 +198,7 @@ class EditorTest {
       } finally { copy.delete() }
     }
   }
-  @Test fun fingerAndStylusHoldShowActionsAndResizeWithThePenChosen() {
+  @Test fun holdingShowsOnlyQuickActionsUntilMoreIsTapped() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")
       js(scenario, """
@@ -219,9 +219,18 @@ class EditorTest {
               const before = app.store.count, undo = app.store.undoStack.length;
               pointer('pointerdown', device, 130, 140);
               await new Promise(resolve => setTimeout(resolve, 520));
-              if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('Hold menu missing: ' + device + finger);
-              pointer('pointerup', device, 130, 140);
-              if (app.store.undoStack.length !== undo) throw Error('Holding left an undo entry');
+              if (document.querySelector('.pop .menu') || !app.selection.has('hold-note') || !document.querySelector('#ctxbar.show')) throw Error('Hold must show only quick actions: ' + device + finger);
+              pointer('pointermove', device, 150, 160);
+              pointer('pointerup', device, 150, 160);
+              if (app.store.get('hold-note').x <= 60) throw Error('Holding did not allow dragging');
+              canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+              if (document.querySelector('.pop .menu')) throw Error('Release or native contextmenu opened expanded actions');
+              const more = document.querySelector('#ctxbar [title="More actions"]');
+              if (!more) throw Error('Quick actions must offer More');
+              more.click();
+              if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('More did not expand actions for the selection');
+              app.hideMenus();
+              if (app.store.undoStack.length !== undo + 1) throw Error('Hold and drag should record only the move');
               const box = app.surface.selectionScreenBox();
               pointer('pointerdown', resizeWith, box.x + box.w, box.y + box.h);
               pointer('pointermove', resizeWith, box.x + box.w + 35, box.y + box.h + 35);
@@ -230,6 +239,14 @@ class EditorTest {
               if (app.store.count !== before) throw Error('Resizing left ink');
               app.store.remove(['hold-note']); app.setSelection([]);
             }
+            app.store.add({ id: 'locked-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
+              rotation: 0, locked: true, text: 'Locked', color: '#ffd94a', font: 'ui', align: 'center' });
+            pointer('pointerdown', 'pen', 130, 140);
+            await new Promise(resolve => setTimeout(resolve, 520));
+            pointer('pointerup', 'pen', 130, 140);
+            if (document.querySelector('.pop .menu')) throw Error('Locked hold opened expanded actions');
+            document.querySelector('#ctxbar [title="More actions"]').click();
+            if (!document.querySelector('.pop .menu')?.textContent.includes('Unlock')) throw Error('Locked actions must remain available through More');
             window.holdTestDone = true;
           } catch (e) { window.holdTestError = e.stack; }
         })();

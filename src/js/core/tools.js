@@ -81,6 +81,9 @@ export class Interaction {
     c.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      // Android opens expanded actions from the selection bar's More button.
+      // Its native long-press event can arrive even after the pointer lifts.
+      if (document.documentElement?.dataset.platform === 'android') return;
       /*
        * A right-click idea, on a device with no right button.
        *
@@ -760,7 +763,7 @@ export class Interaction {
       else if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
       this.actionId = this._holdId;
       this.action.holdMenu = true;
-      this.app.showContextMenu(e);
+      if (document.documentElement?.dataset.platform !== 'android') this.app.showContextMenu(e);
       // A hidden gesture nobody is told about is a gesture nobody uses.
       this.app.toast(hit.locked ? 'Locked — choose Unlock to resize or move' : 'Selected — drag a handle to resize', 'check', 1400);
       this.surface.invalidate();

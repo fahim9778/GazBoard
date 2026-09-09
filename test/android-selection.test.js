@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 // These fixtures use notes and strokes, whose hit tests use geometry only.
 global.document = { createElement: () => ({ getContext: () => ({}) }) };
 
-async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true } = {}) {
+async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true, android = false } = {}) {
+  document.documentElement = { dataset: { platform: android ? 'android' : 'electron' } };
   const [{ Interaction }, { Store, boundsOf }, { Camera }, { unionBox }] = await Promise.all([
     import('../src/js/core/tools.js'), import('../src/js/core/store.js'),
     import('../src/js/core/camera.js'), import('../src/js/core/util.js')
@@ -18,7 +19,7 @@ async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true }
   const cam = new Camera();
   cam.z = z;
   const surface = {
-    canvas: { addEventListener() {}, setPointerCapture() {} },
+    canvas: { listeners: {}, addEventListener(name, handler) { this.listeners[name] = handler; }, setPointerCapture() {} },
     cam, w: 2000, h: 2000, overlays: [], selection: new Set(['selected']), wet: null,
     screenPoint: (e) => ({ x: e.clientX, y: e.clientY }),
     selectionBounds: () => [...surface.selection].reduce((b, id) => unionBox(b, boundsOf(store.get(id))), null),
@@ -161,15 +162,15 @@ test('A handle survives committing an active text edit and owns the resize', asy
   assert.equal(store.get('selected').h, 140);
 });
 
-for (const type of ['touch', 'pen']) for (const fingerInks of [true, false]) {
-  test(`Holding ${type}, finger ink ${fingerInks}, opens object actions while keeping the pen`, async (t) => {
-    const { app, interaction, pointer, store, surface } = await setup({ fingerInks });
+for (const android of [false, true]) for (const type of ['touch', 'pen']) for (const fingerInks of [true, false]) {
+  test(`Holding ${type}, finger ink ${fingerInks}, selects with Android ${android} menu behavior`, async (t) => {
+    const { app, interaction, pointer, store, surface } = await setup({ fingerInks, android });
     surface.selection.clear();
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const before = store.count, undo = store.undoStack.length;
     interaction.onDown(pointer(type, 150, 150));
     t.mock.timers.tick(451);
-    assert.equal(app.menuShown, true);
+    assert.equal(!!app.menuShown, !android);
     assert.equal(app.tool, 'pen');
     assert.equal(interaction.action.type, 'move');
     interaction.onUp(pointer(type, 150, 150, 0));
@@ -223,3 +224,15 @@ test('A palm lifting does not cancel the stylus hold selection', async (t) => {
   assert.equal(store.count, before);
   assert.equal(surface.wet, null);
 });
+
+for (const type of ['touch', 'pen', 'mouse']) {
+  test(`Android suppresses the delayed ${type} context menu after release`, async () => {
+    const { app, interaction, surface } = await setup({ android: true });
+    interaction._lastDownType = type;
+    interaction.action = null;
+    let prevented = false;
+    surface.canvas.listeners.contextmenu({ preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.notEqual(app.menuShown, true);
+  });
+}

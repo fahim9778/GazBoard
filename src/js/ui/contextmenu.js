@@ -14,12 +14,12 @@ function item(label, iconName, onClick, opts = {}) {
   return b;
 }
 
-export function showContextMenu(app, e) {
+export function showContextMenu(app, e, fromSelectionBar = false) {
   const sel = app.surface.selection;
   const wp = app.surface.toWorld(e);
 
   // right-clicking an unselected object selects it first
-  const hit = app.pickAt(wp);
+  const hit = fromSelectionBar ? null : app.pickAt(wp);
   if (hit && !sel.has(hit.id)) app.setSelection([hit.id]);
 
   const has = app.surface.selection.size > 0;
@@ -95,6 +95,7 @@ export function updateSelectionBar(app) {
     unlock.style.display = 'flex';
     unlock.style.alignItems = 'center';
     bar.appendChild(unlock);
+    appendMoreActions(app, bar);
     placeBar(bar, box);
     return;
   }
@@ -141,19 +142,22 @@ export function updateSelectionBar(app) {
   bar.appendChild(mk(sel.every((o) => o.locked) ? 'Unlock' : 'Lock', sel.every((o) => o.locked) ? 'unlock' : 'lock', () => app.command('edit.lock')));
   bar.appendChild(mk('Delete (Del)', 'trash', () => app.command('edit.delete')));
 
-  /*
-   * On a touch device the long press means "pick this up", so the menu it used
-   * to open has to arrive some other way. A visible button beats a hidden
-   * gesture anyway - nobody has ever discovered a long press by looking.
-   */
-  if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
-    bar.appendChild(mk('More actions', 'more', () => {
-      const r = bar.getBoundingClientRect();
-      showContextMenu(app, { clientX: r.left + r.width - 12, clientY: r.bottom + 4 });
-    }));
-  }
+  appendMoreActions(app, bar);
 
   placeBar(bar, box);
+}
+
+function appendMoreActions(app, bar) {
+  // Android still needs this route when a mouse changes the primary pointer.
+  if (document.documentElement?.dataset.platform !== 'android'
+      && !(typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches)) return;
+  const button = h('button', { title: 'More actions', html: icon('more', 17) });
+  button.addEventListener('click', () => {
+    const r = bar.getBoundingClientRect();
+    // This button acts on the selection, not an object behind the toolbar.
+    showContextMenu(app, { clientX: r.left + r.width - 12, clientY: r.bottom + 4 }, true);
+  });
+  bar.appendChild(button);
 }
 
 function placeBar(bar, box) {
