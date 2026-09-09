@@ -44,7 +44,9 @@ class DocumentConverter(private val activity: MainActivity, val fileHandle: Stri
       val pixelWidth = (width / 25.4 * 96 * density).roundToInt()
       val pixelHeight = (height / 25.4 * 96 * density).roundToInt()
       activity.onMain { web!!.layoutParams = FrameLayout.LayoutParams(pixelWidth, pixelHeight) }
-      PdfDocument().use { pdf ->
+      val pdf = PdfDocument()
+      var closed = false
+      try {
         for (index in 0 until pages) {
           val painted = CompletableFuture<Boolean>()
           activity.onMain {
@@ -52,15 +54,17 @@ class DocumentConverter(private val activity: MainActivity, val fileHandle: Stri
             view.evaluateJavascript("window.gazboardConvertPage($index)") {
               view.postVisualStateCallback(index.toLong(), object : WebView.VisualStateCallback() {
                 override fun onComplete(requestId: Long) {
+                  if (closed) return
                   try {
                     val page = pdf.startPage(PdfDocument.PageInfo.Builder((width / 25.4 * 72).roundToInt(),
                       (height / 25.4 * 72).roundToInt(), index + 1).create())
-                    page.canvas.drawColor(Color.WHITE)
-                    page.canvas.save()
-                    page.canvas.scale(page.info.pageWidth.toFloat() / view.width, page.info.pageHeight.toFloat() / view.height)
-                    view.draw(page.canvas)
-                    page.canvas.restore()
-                    pdf.finishPage(page)
+                    try {
+                      page.canvas.drawColor(Color.WHITE)
+                      page.canvas.save()
+                      page.canvas.scale(page.info.pageWidth.toFloat() / view.width, page.info.pageHeight.toFloat() / view.height)
+                      view.draw(page.canvas)
+                      page.canvas.restore()
+                    } finally { pdf.finishPage(page) }
                     painted.complete(true)
                   } catch (e: Exception) { painted.completeExceptionally(e) }
                 }
@@ -70,7 +74,7 @@ class DocumentConverter(private val activity: MainActivity, val fileHandle: Stri
           painted.get(15, TimeUnit.SECONDS)
         }
         output.outputStream().use { pdf.writeTo(it) }
-      }
+      } finally { activity.onMain { closed = true; pdf.close() } }
       require(output.length() > 0) { "Android produced an empty PDF" }
       return json("ok" to true, "engine" to "builtin", "name" to name, "token" to app.files.copy(output.inputStream()))
     } finally {

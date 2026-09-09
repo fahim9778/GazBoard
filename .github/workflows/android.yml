@@ -31,6 +31,7 @@ jobs:
           cache-read-only: false
       - name: Shared editor checks
         run: |
+          npm ci --ignore-scripts
           node test/tablet-layout.test.js
           node test/sync.test.js
           node --test test/android-adapter.test.js
