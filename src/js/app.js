@@ -1829,11 +1829,15 @@ class App {
   /** Consent first if it has never been given, otherwise a quiet daily look. */
   async startUpdateFlow() {
     try {
-      if ((await this.appInfo())?.smoke) return;
-      this.showHint('panning',
-        'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
-        + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
-        + 'and the scroll wheel works as usual.');
+      const info = await this.appInfo();
+      if (info?.smoke) return;
+      // Android has its own finger gestures; desktop shortcuts do not help on first launch.
+      if (!info?.isAndroid) {
+        this.showHint('panning',
+          'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
+          + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
+          + 'and the scroll wheel works as usual.');
+      }
       if (this.settings.updateCheck === null || this.settings.updateCheck === undefined) {
         // Dismissing the question means "not now", and not now should last
         // longer than one launch. It used to come back every single time the app
