@@ -26,6 +26,14 @@
         <data android:mimeType="application/json" />
         <data android:mimeType="application/pdf" />
       </intent-filter>
+      <!-- File managers commonly label custom extensions as binary data.
+           Content URIs may contain only an ID, so a filename path filter
+           would miss boards even when DISPLAY_NAME ends in .gazboard. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:scheme="content" android:mimeType="application/octet-stream" />
+      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
         <category android:name="android.intent.category.DEFAULT" />

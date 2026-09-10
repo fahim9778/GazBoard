@@ -176,7 +176,8 @@ class MainActivity : ComponentActivity() {
       saving = save
       val extensions = (options["filters"] as? JsonArray)?.firstOrNull()?.obj()?.get("extensions") as? JsonArray
       val types = extensions?.mapNotNull { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it.jsonPrimitive.content) }?.distinct() ?: emptyList()
-      val mime = if (types.size == 1) types[0] else "*/*"
+      val boardExport = save && options.str("defaultPath").substringAfterLast('.').lowercase() in listOf("gazboard", "openboard")
+      val mime = if (boardExport) "application/x-gazboard" else if (types.size == 1) types[0] else "*/*"
       val intent = Intent(if (save) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE)
         type = mime

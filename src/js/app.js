@@ -1831,8 +1831,15 @@ class App {
     try {
       const info = await this.appInfo();
       if (info?.smoke) return;
-      // Android has its own finger gestures; desktop shortcuts do not help on first launch.
-      if (!info?.isAndroid) {
+      if (info?.isAndroid) {
+        const finger = this.fingerInks ? 'Your <b>finger</b> draws too. ' : 'One <b>finger</b> moves the board. ';
+        const mouse = typeof matchMedia === 'function' && matchMedia('(any-pointer: fine)').matches
+          ? (this.mouseInks ? 'A connected <b>mouse</b> draws too. ' : 'A connected <b>mouse</b> moves the board. ') : '';
+        this.showHint('android-navigation',
+          'Move with <b>two fingers</b>; <b>pinch</b> to zoom. With <b>Pen</b> selected, draw with a <b>stylus</b>. '
+          + finger + mouse + 'Hold an object to select it; tap <b>…</b> for more actions. '
+          + 'Change drawing controls in <b>Settings</b>.');
+      } else {
         this.showHint('panning',
           'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
           + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
@@ -2111,6 +2118,9 @@ class App {
           this.boardOpenedExplicitly = true;
           const data = JSON.parse(new TextDecoder().decode(await window.board.readFile(path)));
           data.origin = window.board.fileOrigin(path);
+          // Opening another file must not discard edits in the current board.
+          this.commitTextEdit();
+          await this.persist();
           await this.loadBoard(data, { asCopy: false });
         } else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
         else if (isDocPath(path)) await insertDocument(this, path);
