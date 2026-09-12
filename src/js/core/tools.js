@@ -808,6 +808,7 @@ export class Interaction {
     // A finger or a stylus. A mouse has a right button and does not need this.
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
+      || this.action.type === 'shapeDraw'
       || (this.action.type === 'move' && this.action.transient));
     // A drawing finger, or a panning one. Once the finger stopped drawing and
     // started moving the board, "hold it to pick it up" was the only way left
