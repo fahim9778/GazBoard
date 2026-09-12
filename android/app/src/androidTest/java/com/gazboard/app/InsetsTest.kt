@@ -1,6 +1,8 @@
 package com.gazboard.app
 
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.content.pm.ActivityInfo
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -115,14 +117,54 @@ class InsetsTest {
       checkGap(before)
       assertEquals("Native padding already protects the page", 0.0, before.getValue("padding").jsonPrimitive.double, 1.0)
       screenshot("android-toolbar.png")
-      js(scenario, "document.getElementById('boardTitle').focus();")
+      until("Editor window did not gain focus") {
+        var focused = false
+        scenario.onActivity { focused = it.web.hasWindowFocus() }
+        focused
+      }
+      val target = Json.parseToJsonElement(js(scenario, """
+        (() => { const r = document.getElementById('boardTitle').getBoundingClientRect();
+          return { x: r.left + r.width / 2, y: r.top + r.height / 2, width: innerWidth }; })()
+      """.trimIndent())).jsonObject
+      var x = 0f
+      var y = 0f
       scenario.onActivity { activity ->
-        activity.web.requestFocus()
+        val origin = IntArray(2)
+        activity.web.getLocationOnScreen(origin)
+        val scale = activity.web.width / target.getValue("width").jsonPrimitive.float
+        x = origin[0] + target.getValue("x").jsonPrimitive.float * scale
+        y = origin[1] + target.getValue("y").jsonPrimitive.float * scale
+      }
+      // A real tap establishes the WebView input connection. JS focus alone
+      // can race IME startup, especially just after an orientation change.
+      val down = SystemClock.uptimeMillis()
+      for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+        InstrumentationRegistry.getInstrumentation().sendPointerSync(event)
+        event.recycle()
+      }
+      until("Board title did not receive the tap") { js(scenario, "document.activeElement.id === 'boardTitle'") == "true" }
+      scenario.onActivity { activity ->
         WindowCompat.getInsetsController(activity.window, activity.web).show(WindowInsetsCompat.Type.ime())
       }
       until("Keyboard did not open") { keyboardVisible(scenario) }
       until("Editor did not resize above the keyboard") {
         layout(scenario).getValue("height").jsonPrimitive.double < before.getValue("height").jsonPrimitive.double - 80
+      }
+      try {
+        until("Zoom must stay compact and visible above the keyboard") { js(scenario, """
+          (() => {
+            const zoom = document.getElementById('zoombar');
+            const box = zoom.getBoundingClientRect();
+            return box.height > 0 && box.height < 70 && box.top >= 0 && box.bottom <= innerHeight;
+          })()
+        """.trimIndent()) == "true" }
+      } catch (error: AssertionError) {
+        throw AssertionError(error.message + "; " + js(scenario, """
+          JSON.stringify({ viewport: [innerWidth, innerHeight], focus: document.activeElement.id,
+            coarse: matchMedia('(pointer: coarse)').matches,
+            zoom: document.getElementById('zoombar').getBoundingClientRect().toJSON() })
+        """.trimIndent()))
       }
       js(scenario, "document.getElementById('boardTitle').blur();")
       scenario.onActivity { WindowCompat.getInsetsController(it.window, it.web).hide(WindowInsetsCompat.Type.ime()) }

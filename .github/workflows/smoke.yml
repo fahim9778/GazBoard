@@ -1,7 +1,7 @@
 name: Editor smoke
 on:
   push:
-    branches: ['fix/render-cost-check']
+    branches: ['main']
   pull_request:
     paths: ['src/**', 'test/**', 'scripts/**', 'main.js', 'preload.js', 'package*.json', '.github/workflows/smoke.yml']
   workflow_dispatch:

@@ -198,7 +198,7 @@ class EditorTest {
       } finally { copy.delete() }
     }
   }
-  @Test fun longPressShowsActionsAndHandlesResizeWithThePenChosen() {
+  @Test fun holdingShowsOnlyQuickActionsUntilMoreIsTapped() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && !!window.app.store")
       js(scenario, """
@@ -212,29 +212,86 @@ class EditorTest {
                 isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
                 clientX: r.left + x, clientY: r.top + y }));
             };
-            for (const [device, finger] of [['touch', 'yes'], ['touch', 'no'], ['pen', 'yes']]) {
+            for (const finger of ['yes', 'no']) for (const device of ['touch', 'pen']) for (const resizeWith of ['touch', 'pen']) {
               app.hideMenus(); app.setTool('pen'); app.settings.inkWithFinger = finger;
               app.store.add({ id: 'hold-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
                 rotation: 0, text: 'Resize me', color: '#ffd94a', font: 'ui', align: 'center' });
-              const before = app.store.count;
+              const before = app.store.count, undo = app.store.undoStack.length;
               pointer('pointerdown', device, 130, 140);
               await new Promise(resolve => setTimeout(resolve, 520));
-              if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('Hold menu missing: ' + device + finger);
-              pointer('pointerup', device, 130, 140);
+              if (document.querySelector('.pop .menu') || !app.selection.has('hold-note') || !document.querySelector('#ctxbar.show')) throw Error('Hold must show only quick actions: ' + device + finger);
+              pointer('pointermove', device, 150, 160);
+              pointer('pointerup', device, 150, 160);
+              if (app.store.get('hold-note').x <= 60) throw Error('Holding did not allow dragging');
+              canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+              if (document.querySelector('.pop .menu')) throw Error('Release or native contextmenu opened expanded actions');
+              const more = document.querySelector('#ctxbar [title="More actions"]');
+              if (!more) throw Error('Quick actions must offer More');
+              more.click();
+              if (!document.querySelector('.pop .menu') || !app.selection.has('hold-note')) throw Error('More did not expand actions for the selection');
+              app.hideMenus();
+              if (app.store.undoStack.length !== undo + 1) throw Error('Hold and drag should record only the move');
               const box = app.surface.selectionScreenBox();
-              pointer('pointerdown', device, box.x + box.w, box.y + box.h);
-              pointer('pointermove', device, box.x + box.w + 35, box.y + box.h + 35);
-              pointer('pointerup', device, box.x + box.w + 35, box.y + box.h + 35);
+              pointer('pointerdown', resizeWith, box.x + box.w, box.y + box.h);
+              pointer('pointermove', resizeWith, box.x + box.w + 35, box.y + box.h + 35);
+              pointer('pointerup', resizeWith, box.x + box.w + 35, box.y + box.h + 35);
               if (app.store.get('hold-note').w <= 150 || app.tool !== 'pen') throw Error('Resize did not work with the pen chosen');
               if (app.store.count !== before) throw Error('Resizing left ink');
               app.store.remove(['hold-note']); app.setSelection([]);
             }
+            app.store.add({ id: 'locked-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
+              rotation: 0, locked: true, text: 'Locked', color: '#ffd94a', font: 'ui', align: 'center' });
+            pointer('pointerdown', 'pen', 130, 140);
+            await new Promise(resolve => setTimeout(resolve, 520));
+            pointer('pointerup', 'pen', 130, 140);
+            if (document.querySelector('.pop .menu')) throw Error('Locked hold opened expanded actions');
+            document.querySelector('#ctxbar [title="More actions"]').click();
+            if (!document.querySelector('.pop .menu')?.textContent.includes('Unlock')) throw Error('Locked actions must remain available through More');
             window.holdTestDone = true;
           } catch (e) { window.holdTestError = e.stack; }
         })();
       """.trimIndent())
       until(scenario, "window.holdTestDone === true || !!window.holdTestError")
       assertEquals("null", js(scenario, "window.holdTestError || null"))
+    }
+  }
+  @Test fun movingStylusCancelsHoldSelectionAndKeepsWriting() {
+    ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+      until(scenario, "!!window.app && !!window.app.store")
+      js(scenario, """
+        (async () => {
+          try {
+            await app.loadBoard({ id: 'stylus-pause-test', name: 'Pause and write', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } });
+            const canvas = document.getElementById('c');
+            const pointer = (type, x, y) => {
+              const r = canvas.getBoundingClientRect();
+              canvas.dispatchEvent(new PointerEvent(type, { pointerId: 72, pointerType: 'pen', bubbles: true,
+                isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
+                clientX: r.left + x, clientY: r.top + y }));
+            };
+            app.store.add({ id: 'pause-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
+              rotation: 0, text: 'Write over me', color: '#ffd94a', font: 'ui', align: 'center' });
+            const note = JSON.stringify(app.store.get('pause-note'));
+            for (const tool of ['pen', 'highlighter']) for (const finger of ['yes', 'no']) {
+              app.hideMenus(); app.setSelection([]); app.setTool(tool); app.settings.inkWithFinger = finger;
+              const before = app.store.count;
+              pointer('pointerdown', 130, 140);
+              pointer('pointermove', 150, 160);
+              await new Promise(resolve => setTimeout(resolve, 700));
+              if (document.querySelector('.pop .menu') || app.selection.size) throw Error('Stylus pause selected an object');
+              if (app.interaction.action?.type !== 'draw' || !app.surface.wet) throw Error('Stylus pause lost the stroke');
+              pointer('pointerup', 150, 160);
+              const stroke = app.store.objects.at(-1);
+              if (app.store.count !== before + 1 || stroke.type !== 'stroke' || stroke.tool !== tool || stroke.bbox.w <= 4) throw Error('Writing did not resume: ' + tool + finger);
+              if (app.tool !== tool || app.selection.size || app.surface.wet) throw Error('Writing changed the active tool or selection');
+              if (JSON.stringify(app.store.get('pause-note')) !== note) throw Error('Stylus moved or changed the note');
+            }
+            window.stylusPauseDone = true;
+          } catch (e) { window.stylusPauseError = e.stack; }
+        })();
+      """.trimIndent())
+      until(scenario, "window.stylusPauseDone === true || !!window.stylusPauseError")
+      assertEquals("null", js(scenario, "window.stylusPauseError || null"))
     }
   }
   @Test fun boardStoragePreservesBackgroundImportsAndImages() {

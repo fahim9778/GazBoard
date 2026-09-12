@@ -32,6 +32,17 @@ const GHOST_SLOP = 4;
  * than a pen tip does, and punishing that would make the gesture feel broken.
  */
 const HOLD_MS = 450;
+/*
+ * A stylus waits longer than a finger.
+ *
+ * Holding an object to pick it up is the gesture everybody already knows, and
+ * a pen should get it too. But a pen is also the thing you write with, and a
+ * nib resting on the board for a moment while you think about the next letter
+ * is not a request to move anything. A finger has no such second job, so it
+ * keeps the short press; the pen gets one long enough that a thinking pause
+ * passes underneath it and a deliberate press still feels immediate.
+ */
+const PEN_HOLD_MS = 700;
 const HOLD_SLOP = 11;
 const HANDLE_GRAB = 12;   // forgiving grab radius around a handle's 9px dot
 
@@ -81,6 +92,9 @@ export class Interaction {
     c.addEventListener('dblclick', (e) => this.onDoubleClick(e));
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
+      // Android opens expanded actions from the selection bar's More button.
+      // Its native long-press event can arrive even after the pointer lifts.
+      if (document.documentElement?.dataset.platform === 'android') return;
       /*
        * A right-click idea, on a device with no right button.
        *
@@ -197,6 +211,19 @@ export class Interaction {
     // With no gesture in flight nothing can be relying on these entries, so
     // they are stale by definition and safe to forget.
     if (this.pointers.size && !this.action && !this.pinch && !this.secondaryPan) this.pointers.clear();
+    /*
+     * The same rule for the gesture itself. If the finger that owns whatever is
+     * in flight is no longer on the glass, that gesture ended - whether or not
+     * its pointerup ever reached us. Leaving it set used to jam every later
+     * press, and the only way back was to draw something. Nothing can depend on
+     * it once its owner is gone, so it is safe to let go of here.
+     */
+    if (this.action && this.actionId != null && !this.pointers.has(this.actionId)) {
+      this.surface.wet = null;
+      this.surface.wetPieces = null;
+      this.action = null;
+      this.actionId = null;
+    }
     const sp = this.surface.screenPoint(e);
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (e.pointerType === 'pen') this.app.notePenSeen();
@@ -236,13 +263,25 @@ export class Interaction {
     // ruler interaction takes priority when it is showing
     if (this.ruler.visible) {
       const zone = this.rulerZone(sp);
-      if (zone === 'rotate') { this.action = { type: 'rulerRotate', start: wp, a0: this.ruler.angle }; return; }
+      // Whichever pointer grabbed the ruler owns it until it lifts, exactly as
+      // for every other gesture. Without that, a palm settling on the glass
+      // dragged the ruler, and a palm lifting ended the drag.
+      if (zone === 'rotate') {
+        const d = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x) - this.ruler.angle;
+        const flip = Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > Math.PI / 2;
+        this.action = { type: 'rulerRotate', start: wp, a0: this.ruler.angle, flip };
+        this.actionId = e.pointerId;
+        this.surface.invalidate();
+        return;
+      }
       // The grip moves it whatever is in your hand. A finger does too, because
       // that is the hand a real ruler is held with and it can never be meant
       // as ink. The whole body still drags under Select or Pan, as it did.
       if (zone === 'move' || (zone === 'body'
           && (e.pointerType === 'touch' || tool === 'select' || tool === 'pan'))) {
         this.action = { type: 'rulerMove', start: wp, x0: this.ruler.x, y0: this.ruler.y };
+        this.actionId = e.pointerId;
+        this.surface.invalidate();
         return;
       }
     }
@@ -473,7 +512,6 @@ export class Interaction {
         // land off the sheet are simply not picked up, and drawing resumes if
         // it comes back on, exactly as ink behaves at the edge of a page.
         const keep = (q) => !a.sheet || inRect(a.sheet, q.x, q.y);
-        const pt = this.snapToRuler({ ...wp, p: pressure }, a);
         let added = false;
 
         /*
@@ -489,10 +527,30 @@ export class Interaction {
          * events, and it was discarded with them: the peak of the letter
          * simply never arrived.
          */
-        const offer = (cand) => {
+        const offer = (raw) => {
+          /*
+           * The plastic is in the way.
+           *
+           * A stroke that runs ACROSS the ruler is not held to an edge - it is
+           * let go on the far side, which is right. But it was joining up
+           * through the middle, so a line dragged over the ruler came out
+           * drawn straight through the body of it. No ruler has ever let that
+           * happen. Points under the plastic are not taken at all, and when
+           * the pen comes out the other side the stroke starts again there
+           * rather than reaching back across the gap.
+           *
+           * Judged on where the pen actually IS, before the edge deflection
+           * below moves it - after that every point under the body has already
+           * been pushed onto one edge or the other and none of them looks like
+           * it was ever underneath. A ruled stroke is exempt: it lives on an
+           * edge by definition.
+           */
+          if (!a.ruled && this.underThePlastic(raw)) { a.blocked = true; return; }
+          const cand = this.snapToRuler(raw, a);
           const prev = a.obj.points[a.obj.points.length - 1];
           if (prev && dist(prev, cand) * this.surface.cam.z <= 1.2) return;
           if (!keep(cand)) return;
+          if (a.blocked) { this.breakStroke(a); a.blocked = false; }
           a.obj.points.push(cand);
           added = true;
         };
@@ -503,9 +561,9 @@ export class Interaction {
           for (const ce of evs) {
             const csp = this.surface.screenPoint(ce);
             const cwp = this.surface.cam.toWorld(csp.x, csp.y);
-            offer(this.snapToRuler({ ...cwp, p: this.pressure(ce) }, a));
+            offer({ ...cwp, p: this.pressure(ce) });
           }
-        } else offer(pt);
+        } else offer({ ...wp, p: pressure });
 
         if (added) a.obj.bbox = bboxOfPoints(a.obj.points);
         break;
@@ -599,7 +657,8 @@ export class Interaction {
         break;
       }
       case 'rulerRotate': {
-        const ang = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x);
+        // Grabbing the far end turns it the same way round, not upside down.
+        const ang = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x) + (a.flip ? Math.PI : 0);
         this.ruler.angle = mods.shift ? Math.round(ang / (Math.PI / 36)) * (Math.PI / 36) : ang;
         break;
       }
@@ -621,7 +680,7 @@ export class Interaction {
         return;
       }
     }
-    this.cancelHold();
+    if (e.pointerId === this._holdId) this.cancelHold();
     this.pointers.delete(e.pointerId);
     if (this.secondaryPan && e.pointerId === this.secondaryPan.id) { this.secondaryPan = null; return; }
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; return; }
@@ -733,15 +792,8 @@ export class Interaction {
    */
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
-    /*
-     * Fingers only. A stylus held still over an object is somebody lining up
-     * the first mark of a letter, not asking to pick the object up - and
-     * stealing that pause turns their handwriting into a drag. A pen has the
-     * Select tool a tap away and does not lose its place reaching for it,
-     * which is the whole reason this gesture exists for a finger and not for
-     * a pen. Arming it for both put the two cases back in competition.
-     */
-    if (e.pointerType !== 'touch') return;
+    // A finger or a stylus. A mouse has a right button and does not need this.
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
       || (this.action.type === 'move' && this.action.transient));
     // A drawing finger, or a panning one. Once the finger stopped drawing and
@@ -762,17 +814,18 @@ export class Interaction {
       // has moved nothing either - the slop check above cancels the hold long
       // before the board travels far enough to notice.
       this.surface.wet = null;
+      this.surface.wetPieces = null;
       this.action = null;
       this.app.setSelection([hit.id]);
       if (hit.locked) this.action = { type: 'holdSelect' };
       else if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
       this.actionId = this._holdId;
       this.action.holdMenu = true;
-      this.app.showContextMenu(e);
+      if (document.documentElement?.dataset.platform !== 'android') this.app.showContextMenu(e);
       // A hidden gesture nobody is told about is a gesture nobody uses.
       this.app.toast(hit.locked ? 'Locked — choose Unlock to resize or move' : 'Selected — drag a handle to resize', 'check', 1400);
       this.surface.invalidate();
-    }, HOLD_MS);
+    }, e.pointerType === 'pen' ? PEN_HOLD_MS : HOLD_MS);
   }
 
   /** Whatever this was, it is not a press-and-hold. */
@@ -985,13 +1038,55 @@ export class Interaction {
    */
   discardTapMark() {
     this.surface.wet = null;
+    this.surface.wetPieces = null;
     this.action = null;
     this.actionId = null;
+  }
+
+  /**
+   * The pen came out the other side of the ruler: bank what was drawn before
+   * the plastic and carry on with a fresh mark.
+   *
+   * Kept as separate objects rather than one stroke with a hole in it, because
+   * that is what it is - two marks on the paper with a gap between them - and
+   * because every part of the app that reads a stroke (hit testing, erasing,
+   * straightening, the renderer) would otherwise need to learn about holes.
+   * They are committed together, so one undo still takes the whole line back.
+   */
+  breakStroke(a) {
+    if (a.obj.points.length >= 2) {
+      const piece = { ...a.obj, id: uid('s'), points: a.obj.points,
+        bbox: bboxOfPoints(a.obj.points) };
+      (a.pieces || (a.pieces = [])).push(piece);
+      this.surface.wetPieces = a.pieces;
+    }
+    a.obj.points = [];
   }
 
   finishStroke(a) {
     const obj = a.obj;
     this.surface.wet = null;
+    this.surface.wetPieces = null;
+    /*
+     * A line the ruler cut in two (or three). Each piece is real ink and they
+     * go in together, as one entry in the history - and none of them is offered
+     * to the shape recogniser, because half a circle is not a circle.
+     */
+    if (a.pieces && a.pieces.length) {
+      const tidy = (o) => {
+        o.points = o.points.map((q) => ({
+          x: +q.x.toFixed(2), y: +q.y.toFixed(2), p: +(q.p ?? 0.5).toFixed(2)
+        }));
+        o.bbox = bboxOfPoints(o.points);
+        o.attachedTo = this.lockedHostFor(o) || undefined;
+        return o;
+      };
+      const all = a.pieces.map(tidy);
+      if (obj.points.length >= 2) all.push(tidy(obj));
+      this.store.addMany(all, 'draw');
+      for (const o of all) this.surface.extendFreeze?.(o);
+      return;
+    }
     if (obj.points.length < 2) {
       const p = obj.points[0];
       obj.points = [p, { x: p.x + 0.6, y: p.y + 0.6, p: p.p }];
@@ -1727,8 +1822,21 @@ export class Interaction {
     this.cancelHold();
     if (this.action && this.action.type === 'draw') {
       this.surface.wet = null;
+      this.surface.wetPieces = null;
       this.action = null;
     } else if (this.action) this.action = null;
+    /*
+     * And forget which pointer owned it.
+     *
+     * The gesture is gone; the name of the finger that started it is not, and
+     * a leftover owner poisons everything that comes after. Both of the lifts
+     * that end a pinch leave through the early return below, so nothing else
+     * clears it: the board is then left answering only to a finger that is no
+     * longer on the glass. Pressing the ruler after that did nothing at all -
+     * it took the press, moved nothing, and stayed stuck that way until you
+     * drew something, because drawing is the one path that names a new owner.
+     */
+    this.actionId = null;
     const [a, b] = [...this.pointers.values()];
     this.pinch = {
       d0: Math.hypot(a.sp.x - b.sp.x, a.sp.y - b.sp.y) || 1,
@@ -1783,12 +1891,39 @@ export class Interaction {
   /** Where the grip that always moves the ruler sits, in ruler coordinates. */
   static MOVE_GRIP = { halfLen: 34, pad: 11 };
 
+  /*
+   * The turning knob: how far in from each end it sits, and how big it is.
+   *
+   * There is one at BOTH ends. A ruler on a phone is usually longer than the
+   * screen, so whichever end happens to be in view has to be the one you can
+   * turn it by; having the only knob off the edge of the screen is the same as
+   * having no knob at all.
+   */
+  static ROTATE_KNOB = { inset: 14, r: 9 };
+
+  /** Finger-sized targets on a touchscreen, mouse-sized under a mouse. */
+  get coarsePointer() {
+    return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  }
+
   rulerZone(sp) {
     const { c, len, thick, angle } = this.rulerRect();
     const dx = sp.x - c.x, dy = sp.y - c.y;
     const along = dx * Math.cos(angle) + dy * Math.sin(angle);
     const perp = -dx * Math.sin(angle) + dy * Math.cos(angle);
-    if (Math.abs(along - len / 2) < 16 && Math.abs(perp) < thick) return 'rotate';
+    /*
+     * The knob is DRAWN 14px in from the end, and the old target sat 14px
+     * further out than that, centred on the end of the ruler itself. So half
+     * of the blue dot you were aiming at did nothing, and the part that
+     * worked was invisible. Aim at what is painted, and give a fingertip
+     * room to miss by a few pixels.
+     */
+    const kb = Interaction.ROTATE_KNOB;
+    const reach = this.coarsePointer ? 24 : 15;
+    for (const end of [1, -1]) {
+      const kx = end * (len / 2 - kb.inset);
+      if (Math.hypot(along - kx, perp - thick / 2) < reach) return 'rotate';
+    }
     /*
      * A grip in the middle that moves the ruler whatever is being held.
      *
@@ -1847,6 +1982,22 @@ export class Interaction {
     if (Math.abs(along) > r.length / 2 + 40 / z) return null;   // past the ends
     if (perp < -band || perp > r.thickness + band) return null; // clear of it
     return perp < r.thickness / 2 ? 0 : r.thickness;
+  }
+
+  /**
+   * Is this point underneath the plastic itself?
+   *
+   * Not the grace band around the edges - the body, where a real nib simply
+   * cannot reach the paper. A line you drag across a ruler stops at the near
+   * edge and starts again at the far one; it does not reappear inside the
+   * plastic, however see-through the plastic is. This is the body exactly,
+   * because the edges themselves are where ruled lines are supposed to land.
+   */
+  underThePlastic(pt) {
+    const r = this.ruler;
+    if (!r.visible) return false;
+    const { along, perp } = this.rulerOffsets(pt);
+    return Math.abs(along) <= r.length / 2 && perp > 0 && perp < r.thickness;
   }
 
   /** The point, moved sideways onto one of the ruler's edges. */
@@ -2004,6 +2155,9 @@ export class Interaction {
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(angle);
+    // Slightly see-through, the way a plastic ruler is. Nothing can be drawn
+    // underneath it any more (see underThePlastic), so there is nothing hiding
+    // down there that needs covering up.
     const g = ctx.createLinearGradient(0, 0, 0, thick);
     g.addColorStop(0, 'rgba(255,255,255,0.92)');
     g.addColorStop(1, 'rgba(233,231,229,0.92)');
@@ -2041,10 +2195,18 @@ export class Interaction {
     ctx.fillStyle = 'rgba(0,0,0,0.75)';
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillText(degv.toFixed(0) + '°', len / 2 - 52, thick / 2 + 4);
-    ctx.beginPath();
-    ctx.arc(len / 2 - 14, thick / 2, 8, 0, Math.PI * 2);
-    ctx.fillStyle = '#0078d4';
-    ctx.fill();
+    const kb = Interaction.ROTATE_KNOB;
+    const kr = this.coarsePointer ? kb.r + 3 : kb.r;
+    for (const end of [1, -1]) {
+      ctx.beginPath();
+      ctx.arc(end * (len / 2 - kb.inset), thick / 2, kr, 0, Math.PI * 2);
+      ctx.fillStyle = '#0078d4';
+      ctx.fill();
+      // A white ring so the knob reads as a knob and not as a stray dot.
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = 1.6;
+      ctx.stroke();
+    }
 
     // The move grip. Three lines, the way every drag handle has looked for
     // thirty years, so nobody has to be told what it is.

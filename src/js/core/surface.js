@@ -346,13 +346,24 @@ export class Surface {
     const cam = this.cam, pages = this.store.doc.pages;
     ctx.setTransform(this.dpr * cam.z, 0, 0, this.dpr * cam.z, this.dpr * cam.x, this.dpr * cam.y);
     const onload = () => this.invalidate();
-    const wi = pages.length ? pageIndexForBox(pages, boundsOf(this.wet)) : -1;
-    if (wi >= 0) {
-      const r = pageRects(pages)[wi];
-      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
-      drawObject(ctx, this.wet, onload);
-      ctx.restore();
-    } else drawObject(ctx, this.wet, onload);
+    const one = (obj) => {
+      if (!obj || !obj.points || obj.points.length < 2) return;
+      const wi = pages.length ? pageIndexForBox(pages, boundsOf(obj)) : -1;
+      if (wi >= 0) {
+        const r = pageRects(pages)[wi];
+        ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+        drawObject(ctx, obj, onload);
+        ctx.restore();
+      } else drawObject(ctx, obj, onload);
+    };
+    /*
+     * A stroke the ruler cut in two is still one gesture in flight. The pieces
+     * already drawn are not on the board yet - they are committed together on
+     * lift - so they are painted here alongside the live one, or the first half
+     * of the line would vanish the moment the pen came out the other side.
+     */
+    if (this.wetPieces) for (const piece of this.wetPieces) one(piece);
+    one(this.wet);
   }
 
   /**
