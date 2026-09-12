@@ -175,18 +175,24 @@ class MainActivity : ComponentActivity() {
       picker = result
       saving = save
       val extensions = (options["filters"] as? JsonArray)?.firstOrNull()?.obj()?.get("extensions") as? JsonArray
-      val types = extensions?.mapNotNull { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it.jsonPrimitive.content) }?.distinct() ?: emptyList()
+      val extensionNames = extensions?.map { it.jsonPrimitive.content.lowercase() } ?: emptyList()
+      val mappedTypes = extensionNames.map { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }
+      val types = mappedTypes.filterNotNull().distinct()
+      val allExtensionsHaveMime = extensionNames.isNotEmpty() && mappedTypes.all { it != null }
       val boardExport = save && options.str("defaultPath").substringAfterLast('.').lowercase() in listOf("gazboard", "openboard")
-      val mime = if (boardExport) "application/x-gazboard" else if (types.size == 1) types[0] else "*/*"
+      // Android has no registered MIME for .gazboard/.openboard. If even one
+      // requested extension is unknown, use */* so the document provider does
+      // not hide boards that it labels as generic binary data. The importer
+      // still validates the selected file after the picker returns it.
+      val mime = if (boardExport) "application/x-gazboard"
+        else if (allExtensionsHaveMime && types.size == 1) types[0] else "*/*"
       val intent = Intent(if (save) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE)
         type = mime
         if (save) putExtra(Intent.EXTRA_TITLE, options.str("defaultPath", "Board.gazboard").substringAfterLast('/').substringAfterLast('\\'))
         else {
           putExtra(Intent.EXTRA_ALLOW_MULTIPLE, (options["properties"] as? JsonArray)?.any { it.jsonPrimitive.content == "multiSelections" } == true)
-          // Unknown board extensions use */*, so Android's provider doesn't
-          // hide .gazboard files that it labels application/octet-stream.
-          if (types.isNotEmpty() && types.size == (extensions?.size ?: 0)) putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
+          if (allExtensionsHaveMime && types.isNotEmpty()) putExtra(Intent.EXTRA_MIME_TYPES, types.toTypedArray())
         }
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         if (save) addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
