@@ -34,8 +34,8 @@
            extensions. Some query candidates with a generic MIME type and later
            deliver an untyped content:// intent; others do the reverse. Keep both
            local-content fallbacks so GazBoard can be discovered in either case.
-           MainActivity validates DISPLAY_NAME/MIME after launch and rejects files
-           that are not GazBoard/OpenBoard/JSON boards. -->
+           Once launched, the shared importer reads the provider's DISPLAY_NAME,
+           routes supported boards/images/documents, and rejects unsupported files. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
