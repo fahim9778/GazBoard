@@ -12,7 +12,7 @@
     android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/AppTheme"
     android:allowBackup="false" android:usesCleartextTraffic="false"
     android:supportsRtl="true" android:hardwareAccelerated="true">
-    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
       android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|keyboard|uiMode"
       android:windowSoftInputMode="adjustResize">
       <intent-filter>
