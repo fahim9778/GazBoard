@@ -45,17 +45,18 @@
       </intent-filter>
     </activity>
 
-    <!-- Android's legacy pathPattern is a simple glob and cannot reliably
-         match a filename suffix when the name contains earlier dots. API 31
-         added pathSuffix, which is exactly what board extensions need. Keep
-         this alias disabled below API 31 via version-qualified resources. -->
+    <!-- Android file providers disagree on the MIME type of custom extensions,
+         and many expose only an opaque content URI. On API 31+ this alias is
+         the Open-with compatibility layer: GazBoard is offered for local
+         content regardless of the provider's MIME guess. The editor still
+         validates the selected/imported data; http/https links never match. -->
     <activity-alias android:name=".BoardFileAlias"
       android:targetActivity=".MainActivity"
       android:enabled="@bool/gazboard_suffix_alias_enabled"
       android:exported="true"
       android:label="GazBoard"
       android:icon="@mipmap/ic_launcher">
-      <!-- Providers that expose the filename in the URI but report an odd MIME type. -->
+      <!-- Exact suffixes remain useful when providers expose the filename. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -65,7 +66,6 @@
         <data android:pathSuffix=".gazboard" />
         <data android:pathSuffix=".openboard" />
       </intent-filter>
-      <!-- Providers that expose the filename in the URI but send no MIME type. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -75,12 +75,16 @@
         <data android:pathSuffix=".gazboard" />
         <data android:pathSuffix=".openboard" />
       </intent-filter>
-      <!-- Samsung My Files can hide the filename behind an opaque content URI
-           and provide no useful MIME type for custom extensions. In that case
-           Android has no extension to match at resolver time, so accept only
-           untyped content VIEW intents here. Normal typed PDFs/images/etc. do
-           not match this filter. GazBoard still validates/parses the file after
-           it receives the URI and DISPLAY_NAME. -->
+      <!-- Generic Open-with fallback for providers that hide the filename in
+           DISPLAY_NAME and report arbitrary vendor/generic MIME types. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="*/*" />
+      </intent-filter>
+      <!-- Same fallback when the provider supplies no MIME type at all. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
