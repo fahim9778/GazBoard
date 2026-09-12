@@ -1,0 +1,212 @@
+# Builds and publishes GazBoard for Android.
+#
+# To cut a release:
+#     git tag android-2.6.5-v1
+#     git push origin android-2.6.5-v1
+#
+# The tag is <board version>-v<android build>. 2.6.5-v1 is the first Android
+# build of the 2.6.5 board code; a second one off the same code is 2.6.5-v2.
+# Tags here never start with "v", so this can never trip the desktop release
+# workflow, and the desktop version in package.json is never touched by an
+# Android-only release.
+#
+# Run it by hand from the Actions tab first (Run workflow) whenever you change
+# something: that builds, signs and verifies without publishing anything, so a
+# broken build can never become a public download.
+#
+# Needs three repository secrets, under Settings -> Secrets and variables ->
+# Actions. The keystore is a private key and is never committed:
+#   ANDROID_KEYSTORE_BASE64    - the .jks file, base64 encoded
+#   ANDROID_KEYSTORE_PASSWORD  - its password
+#   ANDROID_KEY_ALIAS          - the key alias inside it
+name: Android release
+
+on:
+  push:
+    tags: ['android-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # Work out the version before anything else, so a malformed tag stops the
+      # run in two seconds rather than after a twenty-minute build.
+      - name: Work out the version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            case "$TAG" in
+              android-*-v*) ;;
+              *) echo "::error::Tag '$TAG' is not android-<version>-v<build>, e.g. android-2.6.5-v1"; exit 1 ;;
+            esac
+            REST="${TAG#android-}"
+            VERSION="${REST%-v*}"
+            BUILD="${REST##*-v}"
+          else
+            # A manual run builds the current board version as build 0, which is
+            # never published. It exists to prove the build works.
+            VERSION="$(node -p "require('./package.json').version")"
+            BUILD="0"
+          fi
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::'$VERSION' is not a three-part version"; exit 1 ;;
+          esac
+          case "$BUILD" in
+            ''|*[!0-9]*) echo "::error::Build '$BUILD' is not a number"; exit 1 ;;
+          esac
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PKG" ] && [ "$BUILD" != "0" ]; then
+            echo "::error::Tag says $VERSION but package.json says $PKG. Tag the version this code actually is."
+            exit 1
+          fi
+          # 2.6.5 build 1 -> 2 06 05 01, so the code only ever increases.
+          MAJOR="${VERSION%%.*}"; R="${VERSION#*.}"; MINOR="${R%%.*}"; PATCH="${R#*.}"
+          CODE=$(( ((10#$MAJOR * 100 + 10#$MINOR) * 100 + 10#$PATCH) * 100 + 10#$BUILD ))
+          {
+            echo "version=$VERSION"
+            echo "build=$BUILD"
+            echo "code=$CODE"
+            echo "name=$VERSION-android.$BUILD"
+            echo "apk=GazBoard-$VERSION-android-v$BUILD.apk"
+            echo "aab=GazBoard-$VERSION-android-v$BUILD.aab"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building GazBoard $VERSION-android.$BUILD (versionCode $CODE)"
+
+      # Fail before building rather than after, if the secrets are not set up.
+      - name: Check the signing secrets exist
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE" ] || missing="$missing ANDROID_KEYSTORE_BASE64"
+          [ -n "$PASSWORD" ] || missing="$missing ANDROID_KEYSTORE_PASSWORD"
+          [ -n "$ALIAS" ] || missing="$missing ANDROID_KEY_ALIAS"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - run: npm ci
+
+      # The board code is what the app actually runs. If it is broken, nothing
+      # below this line is worth building.
+      - name: Test the board code
+        run: npm run test:all
+
+      - name: Unpack the keystore
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          # A truncated or mis-pasted secret is easier to diagnose here than as
+          # a confusing Gradle error four minutes later.
+          test -s "$RUNNER_TEMP/release.jks"
+
+      - name: Build the signed APK and AAB
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_VERSION_NAME: ${{ steps.version.outputs.name }}
+          ANDROID_VERSION_CODE: ${{ steps.version.outputs.code }}
+          ANDROID_BUILD_NUMBER: ${{ steps.version.outputs.build }}
+        run: ./android/gradlew -p android :app:assembleRelease :app:bundleRelease --stacktrace
+
+      - name: Collect and verify
+        id: collect
+        env:
+          APK_NAME: ${{ steps.version.outputs.apk }}
+          AAB_NAME: ${{ steps.version.outputs.aab }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)"
+          AAB="$(find android/app/build/outputs/bundle/release -name '*.aab' | head -1)"
+          test -n "$APK" || { echo "::error::No APK was produced"; exit 1; }
+          test -n "$AAB" || { echo "::error::No AAB was produced"; exit 1; }
+
+          # The one that has bitten us: an unsigned APK installs nowhere and
+          # says only "there was a problem parsing the package". Gradle names it
+          # -unsigned when no signing config applied, so refuse it by name AND
+          # by asking apksigner, which is the thing that actually knows.
+          case "$APK" in
+            *unsigned*) echo "::error::The APK is unsigned - check the signing secrets"; exit 1 ;;
+          esac
+
+          cp "$APK" "dist/$APK_NAME"
+          cp "$AAB" "dist/$AAB_NAME"
+
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)"
+          "$APKSIGNER" verify --print-certs --verbose "dist/$APK_NAME"
+
+          ( cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt )
+          ls -lh dist
+
+      # Always, so a failed verification still leaves you something to look at.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GazBoard-Android-${{ steps.version.outputs.version }}-v${{ steps.version.outputs.build }}
+          path: dist/
+          retention-days: 14
+
+      # Only a tag publishes. A manual run has done its job by getting here.
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD: ${{ steps.version.outputs.build }}
+        run: |
+          set -euo pipefail
+          NOTES="$(mktemp)"
+          {
+            echo "GazBoard for Android, built from the $VERSION board code."
+            echo
+            echo "**Install:** download the .apk and open it on your phone. Android will"
+            echo "ask you to allow installing from this source - that is normal for an app"
+            echo "that does not come from the Play Store."
+            echo
+            echo "If you already have a test build installed, uninstall it first. It was"
+            echo "signed with a different key and Android will refuse to replace it."
+            echo
+            echo "The .aab is for Google Play and is not installable directly."
+            echo
+            echo "Runs on this device. No account, no sign-in, no cloud."
+          } > "$NOTES"
+          gh release create "$TAG" dist/* \
+            --title "GazBoard for Android $VERSION (build $BUILD)" \
+            --notes-file "$NOTES"

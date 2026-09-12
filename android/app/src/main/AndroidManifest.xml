@@ -12,34 +12,80 @@
     android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/AppTheme"
     android:allowBackup="false" android:usesCleartextTraffic="false"
     android:supportsRtl="true" android:hardwareAccelerated="true">
-    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop"
+    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
       android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|keyboard|uiMode"
       android:windowSoftInputMode="adjustResize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
+
+      <!-- Precise MIME associations when a provider supplies a useful type. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
         <data android:mimeType="application/x-gazboard" />
         <data android:mimeType="application/json" />
-        <data android:mimeType="application/pdf" />
       </intent-filter>
-      <!-- File managers commonly label custom extensions as binary data.
-           Content URIs may contain only an ID, so a filename path filter
-           would miss boards even when DISPLAY_NAME ends in .gazboard. -->
+
+      <!-- File managers disagree on how to discover handlers for unknown custom
+           extensions. Some query candidates with a generic MIME type and later
+           deliver an untyped content:// intent; others do the reverse. Keep both
+           local-content fallbacks so GazBoard can be discovered in either case.
+           Once launched, the shared importer reads the provider's DISPLAY_NAME,
+           routes supported boards/images/documents, and rejects unsupported files. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
-        <data android:scheme="content" android:mimeType="application/octet-stream" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="*/*" />
       </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" />
+      </intent-filter>
+
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
         <category android:name="android.intent.category.DEFAULT" />
         <data android:mimeType="*/*" />
       </intent-filter>
     </activity>
+
+    <!-- API 31 added pathSuffix. Use it for exact board-extension matching when
+         a provider exposes the filename in its content URI. -->
+    <activity-alias android:name=".BoardFileAlias"
+      android:targetActivity=".MainActivity"
+      android:enabled="@bool/gazboard_suffix_alias_enabled"
+      android:exported="true"
+      android:label="GazBoard"
+      android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" />
+        <data android:pathSuffix=".gazboard" />
+        <data android:pathSuffix=".openboard" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="*" />
+        <data android:pathSuffix=".gazboard" />
+        <data android:pathSuffix=".openboard" />
+      </intent-filter>
+    </activity-alias>
+
     <service android:name=".SharingService" android:exported="false"
       android:foregroundServiceType="connectedDevice" android:stopWithTask="true" />
     <provider android:name="androidx.core.content.FileProvider"

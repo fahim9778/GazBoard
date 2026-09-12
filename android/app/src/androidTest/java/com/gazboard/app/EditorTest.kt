@@ -330,20 +330,25 @@ class EditorTest {
   }
   @Test fun boardStoragePreservesBackgroundImportsAndImages() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
-    val storage = BoardStorage(context)
+    val root = File(context.cacheDir, "board-storage-test-${System.nanoTime()}").apply { mkdirs() }
+    val isolated = object : android.content.ContextWrapper(context) {
+      override fun getFilesDir(): File = root
+    }
+    val storage = BoardStorage(isolated)
     val first = "test-" + Protocol.deviceId()
     val second = "test-" + Protocol.deviceId()
     try {
       storage.save(json("id" to first, "name" to "Main lesson", "objects" to emptyList<Any>()))
       storage.save(json("id" to second, "json" to json("id" to second, "name" to "Incoming", "objects" to emptyList<Any>()).toString(), "setLast" to false))
-      assertEquals(first, BoardStorage(context).resume()["board"]!!.obj().str("id"))
+      assertEquals(first, storage.last())
+      assertEquals(first, BoardStorage(isolated).resume()["board"]!!.obj().str("id"))
       val image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1kAAAAASUVORK5CYII="
       val asset = storage.putAsset(image)!!
-      assertEquals(image, BoardStorage(context).getAsset(asset.str("id")))
+      assertEquals(image, BoardStorage(isolated).getAsset(asset.str("id")))
       assertEquals(asset, storage.putAsset(image))
       assertNull(storage.load("../paired"))
       assertNull(storage.getAsset("../paired.enc"))
-    } finally { storage.remove(first); storage.remove(second) }
+    } finally { root.deleteRecursively() }
   }
   @Test fun convertsWordAndTextToReadableMultipagePdf() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- pathSuffix was added in API 31. Keep the suffix alias disabled on older Android. -->
+  <bool name="gazboard_suffix_alias_enabled">false</bool>
+</resources>
