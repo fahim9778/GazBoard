@@ -34,16 +34,24 @@
         <category android:name="android.intent.category.DEFAULT" />
         <data android:scheme="content" android:mimeType="application/octet-stream" />
       </intent-filter>
-      <!-- Other providers put the real filename in the URI but use an unknown
-           or vendor-specific MIME type. Match only GazBoard's own extensions
-           so the app does not become a candidate for every arbitrary file. -->
+      <!-- Other providers put the real filename in the content URI but use an
+           unknown/vendor MIME type. Android matches pathPattern against the
+           URI path, including its leading slash. Keep this extension-specific
+           so GazBoard does not become a candidate for arbitrary files. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
-        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.gazboard" />
-        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.openboard" />
-        <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.gazboard" />
-        <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.openboard" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern="/.*\\.gazboard" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern="/.*\\.openboard" />
+      </intent-filter>
+      <!-- A few file managers supply a content URI with the extension but no
+           MIME type. MIME-bearing and MIME-less intents require separate data
+           matches, so cover that case without using a global */* fallback. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:scheme="content" android:host="*" android:pathPattern="/.*\\.gazboard" />
+        <data android:scheme="content" android:host="*" android:pathPattern="/.*\\.openboard" />
       </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
