@@ -22,6 +22,8 @@
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
         <data android:mimeType="application/x-gazboard" />
         <data android:mimeType="application/json" />
         <data android:mimeType="application/pdf" />
@@ -32,6 +34,8 @@
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
         <data android:scheme="content" android:mimeType="application/octet-stream" />
       </intent-filter>
       <intent-filter>
@@ -70,6 +74,19 @@
         <data android:scheme="content" android:host="*" />
         <data android:pathSuffix=".gazboard" />
         <data android:pathSuffix=".openboard" />
+      </intent-filter>
+      <!-- Samsung My Files can hide the filename behind an opaque content URI
+           and provide no useful MIME type for custom extensions. In that case
+           Android has no extension to match at resolver time, so accept only
+           untyped content VIEW intents here. Normal typed PDFs/images/etc. do
+           not match this filter. GazBoard still validates/parses the file after
+           it receives the URI and DISPLAY_NAME. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" />
       </intent-filter>
     </activity-alias>
 
