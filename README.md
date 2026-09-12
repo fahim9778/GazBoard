@@ -6,7 +6,7 @@
 
 </div>
 
-A free-form digital whiteboard for Windows, Linux, and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **no Microsoft sign-in and no cloud. **** 
+A free-form digital whiteboard for Windows, Linux, Android and macOS — an offline rebuild of the classic **Microsoft Whiteboard 21.x** experience, with one deliberate difference: **no Microsoft sign-in and no cloud. **** 
 
 Everything runs locally. On top of the original feature set, it can **import Word, PowerPoint and PDF files** onto the canvas as pages you draw over.
 
@@ -34,6 +34,7 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 |---|---|---|
 | **Windows 10 / 11** | `GazBoard-Setup-*.exe` | Run it. No admin rights needed. |
 | **Windows — portable** | `GazBoard-*-portable.exe` | Just run it. Nothing is installed. |
+| **Android** | `GazBoard-*-android-v*.apk` | Just download the APK and install; Allow to install if prompted by Play Protect |
 | **macOS — Apple Silicon** | `GazBoard-*-arm64.dmg` | Open it, drag to Applications. See the note below. |
 | **macOS — Intel** | `GazBoard-*.dmg` | Open it, drag to Applications. See the note below. |
 | **Ubuntu / Debian** | `gazboard_*_amd64.deb` | `sudo apt install ./gazboard_*.deb` |
@@ -467,4 +468,4 @@ export and settings are all here.
 
 MIT licensed. Not affiliated with or endorsed by Microsoft.
 
-*by theBoringCodes (of [@fahim9778](https://github.com/fahim9778))  — Co-created with ♥ with Claude Cowork*
+*by theBoringCodes (of [@fahim9778](https://github.com/fahim9778))  — Co-created with ♥ by Claude Cowork & GPT Sol, Astra*
