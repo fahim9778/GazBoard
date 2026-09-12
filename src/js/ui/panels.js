@@ -956,7 +956,7 @@ export function createPanels(app) {
 
         info.innerHTML = `<b style="color:var(--text)">GazBoard ${i.version}</b> · by <b style="color:var(--accent)">theBoringCodes</b><br>` +
           `MD. Fakhruddin Gazzali · <a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
-          `Co-created with <span style="color:#e81123">&hearts;</span> by Claude Cowork &amp; GPT Astra<br>` +
+          `Co-created with <span style="color:#e81123">&hearts;</span> by Claude Cowork &amp; GPT Sol, Astra<br>` +
           platformLines;
       });
 

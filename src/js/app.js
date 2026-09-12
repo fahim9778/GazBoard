@@ -2025,7 +2025,7 @@ class App {
       html:
         `Developer &nbsp;<b style="color:var(--text)">MD. Fakhruddin Gazzali</b><br>` +
         `Contact &nbsp;<a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
-        `Co-created with <span style="color:#e81123">&hearts;</span> by Claude Cowork &amp; GPT Astra` }));
+        `Co-created with <span style="color:#e81123">&hearts;</span> by Claude Cowork &amp; GPT Sol, Astra` }));
     const platformDetails = i.electron
       ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>Electron ${i.electron} · Chromium ${i.chrome}`
       : i.isAndroid
