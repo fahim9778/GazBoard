@@ -1090,7 +1090,10 @@ class App {
       r.y = v.y + v.h / 2;
       r.length = Math.min(1200, v.w * 0.7);
       r.thickness = 78 / this.surface.cam.z;
-      this.toast('Ruler on — drag the grip in the middle to move it, scroll over it to turn it');
+      const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+      this.toast(coarse
+        ? 'Ruler on — drag the middle to move it, drag a blue knob at either end to turn it'
+        : 'Ruler on — drag the grip in the middle to move it, scroll over it or drag a blue knob to turn it');
     }
     this.surface.invalidate();
   }
@@ -1829,11 +1832,22 @@ class App {
   /** Consent first if it has never been given, otherwise a quiet daily look. */
   async startUpdateFlow() {
     try {
-      if ((await this.appInfo())?.smoke) return;
-      this.showHint('panning',
-        'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
-        + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
-        + 'and the scroll wheel works as usual.');
+      const info = await this.appInfo();
+      if (info?.smoke) return;
+      if (info?.isAndroid) {
+        const finger = this.fingerInks ? 'Your <b>finger</b> draws too. ' : 'One <b>finger</b> moves the board. ';
+        const mouse = typeof matchMedia === 'function' && matchMedia('(any-pointer: fine)').matches
+          ? (this.mouseInks ? 'A connected <b>mouse</b> draws too. ' : 'A connected <b>mouse</b> moves the board. ') : '';
+        this.showHint('android-navigation',
+          'Move with <b>two fingers</b>; <b>pinch</b> to zoom. With <b>Pen</b> selected, draw with a <b>stylus</b>. '
+          + finger + mouse + 'Hold an object to select it; tap <b>…</b> for more actions. '
+          + 'Change drawing controls in <b>Settings</b>.');
+      } else {
+        this.showHint('panning',
+          'Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, '
+          + 'or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, '
+          + 'and the scroll wheel works as usual.');
+      }
       if (this.settings.updateCheck === null || this.settings.updateCheck === undefined) {
         // Dismissing the question means "not now", and not now should last
         // longer than one launch. It used to come back every single time the app
@@ -2107,6 +2121,9 @@ class App {
           this.boardOpenedExplicitly = true;
           const data = JSON.parse(new TextDecoder().decode(await window.board.readFile(path)));
           data.origin = window.board.fileOrigin(path);
+          // Opening another file must not discard edits in the current board.
+          this.commitTextEdit();
+          await this.persist();
           await this.loadBoard(data, { asCopy: false });
         } else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
         else if (isDocPath(path)) await insertDocument(this, path);

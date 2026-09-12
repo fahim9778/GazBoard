@@ -3376,13 +3376,18 @@ async function run(win, app) {
     r.dragStillDraws = strokes() === inkBefore + 1;
     r.dragDidNotMoveIt = moved.x === wasAt.x && moved.y === wasAt.y;
 
-    // a stylus holding still is not a move - it is someone about to write
+    // A stylus holds too, but it waits longer than a finger. Half a second of
+    // stillness is somebody about to write; a deliberate press is longer.
+    const penNote = a.store.doc.objects['hold-note'];
     a.setTool('pen'); a.setSelection([]); it.action = null; it.pointers.clear();
     a.notePenSeen();
-    it.onDown(mk(8320, 8170, 1, 'pen'));
-    await wait(650);
-    r.penNeverPicksUp = !!it.action && it.action.type === 'draw';
-    it.onUp(mk(8320, 8170, 0, 'pen'));
+    it.onDown(mk(penNote.x + 60, penNote.y + 60, 1, 'pen'));
+    await wait(560);
+    r.penStillWritingAt560 = !!it.action && it.action.type === 'draw';
+    await wait(320);
+    r.penPicksUpEventually = !!it.action && it.action.type === 'move'
+      && a.selected.length === 1 && a.selected[0].id === 'hold-note';
+    it.onUp(mk(penNote.x + 60, penNote.y + 60, 0, 'pen'));
 
     a.store.doc.pages = pagesWere;
     a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
@@ -3396,8 +3401,10 @@ async function run(win, app) {
   check('and dragging then actually moves it', held.actuallyMoved);
   check('while a finger that sets off straight away still draws',
     held.dragStillDraws && held.dragDidNotMoveIt);
-  check('and a stylus held still is someone about to write, not to move',
-    held.penNeverPicksUp);
+  check('a stylus pausing mid-word is still writing, not picking things up',
+    held.penStillWritingAt560);
+  check('but a stylus held on purpose picks the object up like a finger does',
+    held.penPicksUpEventually);
 
   /*
    * Android raises a contextmenu event after about half a second of holding -
@@ -3654,6 +3661,137 @@ async function run(win, app) {
     grip.touchMoved === 90, `y is ${grip.touchMoved}`);
   check('none of which leaves anything on the board',
     grip.leftBehind === 0, `${grip.leftBehind} stray object(s)`);
+
+  /*
+   * Turning it.
+   *
+   * The blue knob was painted 14px in from the end and the thing that listened
+   * for a press sat 14px further out, centred on the end of the ruler itself.
+   * Half the dot you were aiming at did nothing and the half that worked was
+   * invisible - survivable with a mouse, hopeless with a fingertip, and on a
+   * phone the only other way to turn it was a scroll wheel that isn't there.
+   * There is a knob at each end now, because a ruler is usually longer than a
+   * phone screen and the end in view has to be the one you can turn it by.
+   */
+  const knob = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    const TH = a.ruler.thickness, INSET = 14;
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons, type) => ({ pointerId: 1, pointerType: type || 'pen', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const zoneAt = (x, y) => it.rulerZone(sf.cam.toScreen(x, y));
+
+    // the knob you can actually see, at both ends
+    const rightKnob = zoneAt(600 - INSET, TH / 2);
+    const leftKnob = zoneAt(-600 + INSET, TH / 2);
+    // and the middle is still the move grip, not a turn
+    const middle = zoneAt(0, TH / 2);
+
+    // dragging the RIGHT knob down turns it clockwise
+    it.onDown(mk(at(600 - INSET, TH / 2), 1));
+    it.onMove(mk(at(600, 600), 1));
+    it.onUp(mk(at(600, 600), 0));
+    const rightDeg = Math.round((a.ruler.angle * 180) / Math.PI);
+
+    // grabbing the LEFT knob and pulling it down must not spin it half a turn
+    a.ruler.angle = 0; it.action = null; it.pointers.clear();
+    it.onDown(mk(at(-600 + INSET, TH / 2), 1));
+    it.onMove(mk(at(-600, 600), 1));
+    it.onUp(mk(at(-600, 600), 0));
+    const leftDeg = Math.round((a.ruler.angle * 180) / Math.PI);
+
+    a.ruler.visible = false; a.ruler.angle = 0;
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return { rightKnob, leftKnob, middle, rightDeg, leftDeg };
+  `);
+  check('the turning knob answers where it is drawn, at both ends',
+    knob.rightKnob === 'rotate' && knob.leftKnob === 'rotate',
+    `right ${knob.rightKnob}, left ${knob.leftKnob}`);
+  check('and the middle of the ruler still means move, not turn',
+    knob.middle === 'move', `middle is ${knob.middle}`);
+  check('pulling the near knob down turns the ruler clockwise',
+    knob.rightDeg === 45, `${knob.rightDeg}°`);
+  // The far end goes down, so the ruler tilts the other way: -45, not 135.
+  // Without the flip it would swing round and put the end you are holding on
+  // the opposite side of the board from your finger.
+  check('and the far knob follows the finger instead of jumping across the board',
+    knob.leftDeg === 315, `${knob.leftDeg}°`);
+
+  /*
+   * Nothing is drawn UNDER the plastic.
+   *
+   * A stroke that crosses the ruler is deliberately not held to an edge - you
+   * are crossing it, not tracing it - but it was joining up through the middle,
+   * so a line dragged over the ruler came out drawn straight through the body
+   * of it. The ruler stays see-through, as a plastic one is; what changes is
+   * that the nib cannot reach the paper underneath. The line stops at the near
+   * edge and starts again at the far one, and the two halves go in together so
+   * one undo still takes the whole thing back.
+   */
+  const through = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true; a.ruler.snap = true;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    const TH = a.ruler.thickness;
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+
+    const undoWas = a.store.undoStack.length;
+    // a wandering line that starts well above the ruler and ends well below it
+    it.onDown(mk(at(-260, -320), 1));
+    for (let i = 1; i <= 60; i++) {
+      const t = i / 60;
+      it.onMove(mk(at(-260 + t * 520, -320 + t * 700 + Math.sin(t * 9) * 18), 1));
+    }
+    it.onUp(mk(at(260, 380), 0));
+
+    const made = a.store.objects.filter((o) => !had.has(o.id));
+    const pts = made.flatMap((o) => o.points);
+    const inside = pts.filter((q) => {
+      const { along, perp } = it.rulerOffsets(q);
+      return Math.abs(along) <= 600 && perp > 0.5 && perp < TH - 0.5;
+    }).length;
+    const above = pts.filter((q) => it.rulerOffsets(q).perp < 0).length;
+    const below = pts.filter((q) => it.rulerOffsets(q).perp > TH).length;
+
+    // one undo must take the whole line back, both halves at once
+    const undoneBy = a.store.undoStack.length - undoWas;
+    a.store.undo();
+    const leftAfterUndo = a.store.objects.filter((o) => !had.has(o.id)).length;
+
+    a.ruler.visible = false;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear(); sf.wetPieces = null;
+    return { pieces: made.length, inside, above, below, undoneBy, leftAfterUndo };
+  `);
+  check('a line dragged across the ruler leaves no ink under the plastic',
+    through.inside === 0, `${through.inside} point(s) under the body`);
+  check('and comes out as two marks, one each side, not one drawn through it',
+    through.pieces === 2 && through.above > 3 && through.below > 3,
+    `${through.pieces} stroke(s), ${through.above} above and ${through.below} below`);
+  check('both halves go in together, so one undo takes the whole line back',
+    through.undoneBy === 1 && through.leftAfterUndo === 0,
+    `${through.undoneBy} history entr(ies), ${through.leftAfterUndo} left after undo`);
+
 
   check('and the test board is handed back exactly as it was found',
     ruled.leftBehind === 0, `${ruled.leftBehind} stray object(s)`);

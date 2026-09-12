@@ -238,7 +238,10 @@ function initPhoneToolbar(app, bar) {
     openPopover(add, h('div', { class: 'menu' },
       menuItem('Sticky note', 'note', pickTool('note')),
       menuItem('Text', 'text', pickTool('text')),
-      menuItem('Shape', 'shapes', pickTool('shape')),
+      // Shapes are a family, not one square. The chooser lives in the tool
+      // popover, and on a phone there is no shape button to open it from - so
+      // picking Shape here opens it, anchored where the finger already is.
+      menuItem('Shape', 'shapes', () => { app.setTool('shape'); app.syncUI(); openToolPopover(app, add, 'shape'); }),
       menuItem(app.ruler.visible ? 'Hide ruler' : 'Ruler', 'ruler', () => app.command('ruler')),
       h('div', { class: 'menu-sep' }),
       menuItem('Picture…', 'image', () => app.command('insert.image')),
