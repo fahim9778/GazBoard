@@ -34,6 +34,17 @@
         <category android:name="android.intent.category.DEFAULT" />
         <data android:scheme="content" android:mimeType="application/octet-stream" />
       </intent-filter>
+      <!-- Other providers put the real filename in the URI but use an unknown
+           or vendor-specific MIME type. Match only GazBoard's own extensions
+           so the app does not become a candidate for every arbitrary file. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.gazboard" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.openboard" />
+        <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.gazboard" />
+        <data android:scheme="file" android:host="*" android:mimeType="*/*" android:pathPattern=".*\.openboard" />
+      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
         <category android:name="android.intent.category.DEFAULT" />
