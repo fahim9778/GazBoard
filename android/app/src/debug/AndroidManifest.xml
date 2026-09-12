@@ -5,7 +5,9 @@
       android:name=".IntentProbeActivity"
       android:exported="true"
       android:label="GazBoard MIME Probe"
-      android:theme="@style/AppTheme">
+      android:theme="@style/AppTheme"
+      android:noHistory="true"
+      android:excludeFromRecents="true">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
