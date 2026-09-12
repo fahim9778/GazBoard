@@ -34,31 +34,45 @@
         <category android:name="android.intent.category.DEFAULT" />
         <data android:scheme="content" android:mimeType="application/octet-stream" />
       </intent-filter>
-      <!-- Other providers put the real filename in the content URI but use an
-           unknown/vendor MIME type. Android matches pathPattern against the
-           URI path, including its leading slash. Keep this extension-specific
-           so GazBoard does not become a candidate for arbitrary files. -->
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern="/.*\\.gazboard" />
-        <data android:scheme="content" android:host="*" android:mimeType="*/*" android:pathPattern="/.*\\.openboard" />
-      </intent-filter>
-      <!-- A few file managers supply a content URI with the extension but no
-           MIME type. MIME-bearing and MIME-less intents require separate data
-           matches, so cover that case without using a global */* fallback. -->
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <data android:scheme="content" android:host="*" android:pathPattern="/.*\\.gazboard" />
-        <data android:scheme="content" android:host="*" android:pathPattern="/.*\\.openboard" />
-      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
         <category android:name="android.intent.category.DEFAULT" />
         <data android:mimeType="*/*" />
       </intent-filter>
     </activity>
+
+    <!-- Android's legacy pathPattern is a simple glob and cannot reliably
+         match a filename suffix when the name contains earlier dots. API 31
+         added pathSuffix, which is exactly what board extensions need. Keep
+         this alias disabled below API 31 via version-qualified resources. -->
+    <activity-alias android:name=".BoardFileAlias"
+      android:targetActivity=".MainActivity"
+      android:enabled="@bool/gazboard_suffix_alias_enabled"
+      android:exported="true"
+      android:label="GazBoard"
+      android:icon="@mipmap/ic_launcher">
+      <!-- Providers that expose the filename in the URI but report an odd MIME type. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="*" android:mimeType="*/*" />
+        <data android:pathSuffix=".gazboard" />
+        <data android:pathSuffix=".openboard" />
+      </intent-filter>
+      <!-- Providers that expose the filename in the URI but send no MIME type. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="*" />
+        <data android:pathSuffix=".gazboard" />
+        <data android:pathSuffix=".openboard" />
+      </intent-filter>
+    </activity-alias>
+
     <service android:name=".SharingService" android:exported="false"
       android:foregroundServiceType="connectedDevice" android:stopWithTask="true" />
     <provider android:name="androidx.core.content.FileProvider"
