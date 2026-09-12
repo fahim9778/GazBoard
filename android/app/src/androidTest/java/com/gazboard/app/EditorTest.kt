@@ -65,7 +65,21 @@ class EditorTest {
             app.command('redo');
             if (app.store.objects.length !== before + 1) throw Error('Redo failed');
             await app.persist();
-            const saved = await board.boards.load(app.store.doc.id);
+            /*
+             * Watch for the save to land rather than assuming it already has.
+             *
+             * persist() resolves when the write has been handed to the native
+             * side; on a two-core emulator with a software rasteriser the file
+             * itself can be a moment behind. One read straight afterwards makes
+             * this test a race that the slower device loses - which is exactly
+             * how it failed on the tablet while passing on the phone.
+             */
+            let saved = null;
+            for (let waited = 0; waited < 5000 && saved?.name !== 'Android test বাংলা'; waited += 100) {
+              saved = await board.boards.load(app.store.doc.id);
+              if (saved?.name === 'Android test বাংলা') break;
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
             if (!saved || saved.name !== 'Android test বাংলা') throw Error('Native save failed');
             const resumed = await board.boards.resume();
             if (resumed.board.id !== saved.id) throw Error('Resume pointer lost');
