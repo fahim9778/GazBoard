@@ -62,10 +62,19 @@ class IntentProbeActivity : Activity() {
 
     if (uri != null) {
       dialog.setPositiveButton("Open in GazBoard") { _, _ ->
+        // Preserve only URI permission flags from the file manager. Task-routing
+        // flags such as FORWARD_RESULT/PREVIOUS_IS_TOP belong to the explorer
+        // and can otherwise leave GazBoard embedded in the explorer's task.
+        val grantFlags = incoming.flags and (
+          Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+          )
         val forward = Intent(this, MainActivity::class.java).apply {
           action = Intent.ACTION_VIEW
           if (incoming.type != null) setDataAndType(uri, incoming.type) else data = uri
-          flags = incoming.flags
+          addFlags(grantFlags or Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
           clipData = incoming.clipData
         }
         startActivity(forward)
