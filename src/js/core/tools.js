@@ -203,7 +203,20 @@ export class Interaction {
     // A button went down under a mouse, so the mouse is unambiguously in
     // somebody's hand. Stop watching for a ghost that cannot now arrive.
     else if (e.pointerType === 'mouse') { this._penSp = null; this._mouseSp = null; }
-    this.app.hideMenus();
+    /*
+     * The press that shuts a menu only shuts the menu.
+     *
+     * Choosing a shape, a colour and a fill leaves the menu open, and the tap
+     * that puts it away used to land on the board as well: a stray default-
+     * sized square, dropped where you were only trying to dismiss something.
+     * Ink has had this guard for a long time - a tap that clears a selection is
+     * swallowed rather than left as a dot - and the tools that make an object
+     * out of a single tap need it just as much.
+     *
+     * Only a TAP is swallowed. Press and drag and you get your shape on the
+     * first go, because a drag was never ambiguous.
+     */
+    const dismissedMenu = this.app.hideMenus();
     // A pointerup that never arrives - a pen lifted as the window loses focus,
     // a cancel routed elsewhere - used to leave its id in the map for good.
     // The next pen down then looked like a second finger and was treated as a
@@ -353,7 +366,7 @@ export class Interaction {
         if (this.startMoveOnSelection(wp)) break;
         this.action = { type: 'lasso', pts: [wp] };
         break;
-      case 'shape': this.action = { type: 'shapeDraw', start: wp, cur: wp, shift: e.shiftKey }; break;
+      case 'shape': this.action = { type: 'shapeDraw', start: wp, cur: wp, shift: e.shiftKey, dismissedMenu }; break;
       case 'text': case 'note': {
         // clicking something that is already there should get hold of it,
         // not drop a new note or text box on top of it
@@ -371,8 +384,8 @@ export class Interaction {
           }
           break;
         }
-        if (tool === 'note') this.dropNote(wp);
-        else this.action = { type: 'textDraw', start: wp, cur: wp };
+        if (tool === 'note') { if (!dismissedMenu) this.dropNote(wp); }
+        else this.action = { type: 'textDraw', start: wp, cur: wp, dismissedMenu };
         break;
       }
       case 'select': default: this.startSelect(e, sp, wp); break;
@@ -1323,14 +1336,28 @@ export class Interaction {
       if (Math.hypot(geo.w, geo.h) < 6) return;
     } else {
       geo = normalizeRect(a.start, a.cur, a.shift);
-      if (geo.w < 6 || geo.h < 6) { geo = { x: a.start.x - 60, y: a.start.y - 45, w: 120, h: 90 }; }
+      // A tap makes a default-sized shape, which is a convenience - unless the
+      // tap was only there to put a menu away, in which case it is litter.
+      if (geo.w < 6 || geo.h < 6) {
+        if (a.dismissedMenu) return;
+        geo = { x: a.start.x - 60, y: a.start.y - 45, w: 120, h: 90 };
+      }
     }
     const obj = {
       id: uid('sh'), type: 'shape', kind, ...geo, rotation: 0,
       stroke: s.shapeStroke, fill: s.shapeFill, lineWidth: s.shapeLineWidth, dash: s.shapeDash, text: ''
     };
     this.store.add(this.placeOnPaper(obj), 'shape');
-    if (this.app.settings.returnToSelect) this.app.setTool('select');
+    /*
+     * Stay on the shape tool.
+     *
+     * A note or a text box is one-and-done: you drop it, you type in it, and
+     * what you want next is to move or resize the thing you just made - so
+     * those still follow the "return to select" setting. Shapes arrive in
+     * batches. Three boxes and two arrows is one diagram, and going back to
+     * the menu between each of them is four trips nobody asked for. The new
+     * shape is selected either way, so its handles are right there.
+     */
     this.app.setSelection([obj.id]);
   }
 
@@ -1354,6 +1381,7 @@ export class Interaction {
 
   finishTextBox(a) {
     const w = Math.abs(a.cur.x - a.start.x), h = Math.abs(a.cur.y - a.start.y);
+    if (a.dismissedMenu && w < 6 && h < 6) return;   // that tap only shut a menu
     const s = this.app.settings;
     const fontSize = this.app.worldSize(s.textSize);
     const box = w > 20 && h > 12

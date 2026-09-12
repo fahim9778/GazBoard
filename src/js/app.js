@@ -1206,7 +1206,15 @@ class App {
   }
 
   showContextMenu(e) { showContextMenu(this, e); }
-  hideMenus() { closePopover(); }
+  /*
+   * Close whatever is open, and say whether there was anything to close.
+   *
+   * The press that shuts a menu should only shut the menu. Handing that answer
+   * back lets the gesture that follows know it was a dismissal rather than a
+   * fresh instruction - see the shape and note tools, which otherwise drop an
+   * object on the very tap that put the menu away.
+   */
+  hideMenus() { const was = popoverOpen(); closePopover(); return was; }
 
   /*
    * Getting rid of whatever is on top.

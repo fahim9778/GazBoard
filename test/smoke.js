@@ -4288,6 +4288,88 @@ async function run(win, app) {
   `);
   check('all tools selectable', tools.join(',') === 'select,lasso,pen,highlighter,eraser,note,text,shape', tools.join(','));
 
+  /*
+   * Drawing shapes, one after another, without going back to the menu.
+   *
+   * Two things used to get in the way. The tool jumped back to Select after
+   * every shape, so the next drag drew a selection marquee instead of a box and
+   * you had to reopen the menu to get the tool back. And the tap that put that
+   * menu away landed on the board as well, leaving a stray default-sized square
+   * where you were only trying to dismiss something.
+   */
+  const shapes = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const returnWas = a.settings.returnToSelect;
+    a.settings.returnToSelect = true;          // the setting shapes must ignore
+    a.hideMenus(); a.setSelection([]);
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons) => ({ pointerId: 91, pointerType: 'touch', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const shapesNow = () => a.store.objects.filter((o) => o.type === 'shape').length;
+    const drag = (x0, y0, x1, y1) => {
+      it.action = null; it.pointers.clear();
+      it.onDown(mk(at(x0, y0), 1));
+      it.onMove(mk(at(x1, y1), 1));
+      it.onUp(mk(at(x1, y1), 0));
+    };
+    const tap = (x, y) => {
+      it.action = null; it.pointers.clear();
+      it.onDown(mk(at(x, y), 1));
+      it.onUp(mk(at(x, y), 0));
+    };
+
+    a.setTool('shape');
+    const before = shapesNow();
+
+    // 1. the menu is open; the tap that shuts it must not leave a shape behind
+    a.openToolPopover?.(a, null, 'shape');
+    const { openPopover } = await import('./js/ui/popover.js');
+    openPopover(document.getElementById('toolbar'), document.createElement('div'), { key: 'tool:shape' });
+    tap(9000, 9000);
+    const afterDismiss = shapesNow();
+    const toolAfterDismiss = a.tool;
+
+    // 2. now actually draw one, with no menu open
+    drag(9000, 9000, 9160, 9120);
+    const afterFirst = shapesNow();
+    const toolAfterFirst = a.tool;
+    const selectedFirst = a.selected.length === 1 && a.selected[0].type === 'shape';
+
+    // 3. and another straight away, without touching the menu
+    drag(9300, 9000, 9460, 9120);
+    const afterSecond = shapesNow();
+
+    // 4. a tap with no menu open is still the shortcut for a default-sized one
+    tap(9700, 9000);
+    const afterTap = shapesNow();
+
+    a.settings.returnToSelect = returnWas;
+    a.setTool('select'); a.setSelection([]); a.hideMenus();
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return { before, afterDismiss, toolAfterDismiss, afterFirst, toolAfterFirst,
+             selectedFirst, afterSecond, afterTap };
+  `);
+  check('the tap that shuts the shape menu leaves no shape behind',
+    shapes.afterDismiss === shapes.before && shapes.toolAfterDismiss === 'shape',
+    `${shapes.afterDismiss - shapes.before} shape(s), tool ${shapes.toolAfterDismiss}`);
+  check('dragging then draws one, selected and ready to resize',
+    shapes.afterFirst === shapes.before + 1 && shapes.selectedFirst);
+  check('and the shape tool stays put, whatever Return to select says',
+    shapes.toolAfterFirst === 'shape', `tool is ${shapes.toolAfterFirst}`);
+  check('so the next shape needs no trip back to the menu',
+    shapes.afterSecond === shapes.before + 2, `${shapes.afterSecond - shapes.before} shape(s)`);
+  check('and a plain tap still drops a default-sized one',
+    shapes.afterTap === shapes.before + 3, `${shapes.afterTap - shapes.before} shape(s)`);
+
   await js(`window.app.setSelection([window.app.store.doc.order[0]]);`);
   await sleep(250);
   check('selection bar shows', await js(`return document.getElementById('ctxbar').classList.contains('show');`));
