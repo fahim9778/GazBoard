@@ -212,13 +212,30 @@ class EditorTest {
                 isPrimary: true, button: 0, buttons: type === 'pointerup' ? 0 : 1, pressure: .5,
                 clientX: r.left + x, clientY: r.top + y }));
             };
+            /*
+             * Wait for the hold to happen, do not guess how long it takes.
+             *
+             * A finger's hold is 450ms and a stylus waits 700ms, because a nib
+             * resting on the board mid-word is somebody thinking rather than
+             * somebody asking to pick an object up. A fixed sleep has to know
+             * both numbers and breaks the day either one moves - which is
+             * exactly how this test broke. Watch for the outcome instead, and
+             * give up after long enough that a real failure still fails.
+             */
+            const holdWait = async () => {
+              const deadline = Date.now() + 3000;
+              while (Date.now() < deadline) {
+                if (app.selection.has('hold-note') && document.querySelector('#ctxbar.show')) return;
+                await new Promise(resolve => setTimeout(resolve, 40));
+              }
+            };
             for (const finger of ['yes', 'no']) for (const device of ['touch', 'pen']) for (const resizeWith of ['touch', 'pen']) {
               app.hideMenus(); app.setTool('pen'); app.settings.inkWithFinger = finger;
               app.store.add({ id: 'hold-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
                 rotation: 0, text: 'Resize me', color: '#ffd94a', font: 'ui', align: 'center' });
               const before = app.store.count, undo = app.store.undoStack.length;
               pointer('pointerdown', device, 130, 140);
-              await new Promise(resolve => setTimeout(resolve, 520));
+              await holdWait();
               if (document.querySelector('.pop .menu') || !app.selection.has('hold-note') || !document.querySelector('#ctxbar.show')) throw Error('Hold must show only quick actions: ' + device + finger);
               pointer('pointermove', device, 150, 160);
               pointer('pointerup', device, 150, 160);
@@ -242,7 +259,10 @@ class EditorTest {
             app.store.add({ id: 'locked-note', type: 'note', x: 60, y: 70, w: 150, h: 150,
               rotation: 0, locked: true, text: 'Locked', color: '#ffd94a', font: 'ui', align: 'center' });
             pointer('pointerdown', 'pen', 130, 140);
-            await new Promise(resolve => setTimeout(resolve, 520));
+            // The locked note cannot be picked up, so watch for its own bar.
+            for (let waited = 0; waited < 3000 && !document.querySelector('#ctxbar.show'); waited += 40) {
+              await new Promise(resolve => setTimeout(resolve, 40));
+            }
             pointer('pointerup', 'pen', 130, 140);
             if (document.querySelector('.pop .menu')) throw Error('Locked hold opened expanded actions');
             document.querySelector('#ctxbar [title="More actions"]').click();

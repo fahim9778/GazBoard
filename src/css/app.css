@@ -569,8 +569,16 @@ kbd {
  * This has to come after the block above, and it has to set `bottom: auto`.
  * A box given both a top and a bottom does not move, it stretches, and that is
  * how the zoom readout once became a 276-pixel white column down the side.
+ *
+ * Portrait only. A short screen is EITHER a phone with the keyboard open or a
+ * phone turned on its side, and only the first one has lost its bottom - a
+ * landscape phone has a perfectly good pen tray down there with room above it,
+ * and moving the readouts to the top there just puts them somewhere nobody is
+ * looking. A keyboard-shrunk portrait viewport is still taller than it is wide
+ * (412x430 on the phone this was measured on), so the two cases separate
+ * cleanly on orientation.
  */
-@media (pointer: coarse) and (max-height: 460px) {
+@media (pointer: coarse) and (max-height: 460px) and (orientation: portrait) {
   #zoombar { top: 8px; bottom: auto; }
   #pagebar { top: 52px; bottom: auto; }
 }
