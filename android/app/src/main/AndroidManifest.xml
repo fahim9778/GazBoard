@@ -20,8 +20,7 @@
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
 
-      <!-- Precise MIME associations only. Do not claim generic binary or PDF
-           files globally; those should stay with their normal Android apps. -->
+      <!-- Precise MIME associations when a provider supplies a useful type. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -31,11 +30,19 @@
         <data android:mimeType="application/json" />
       </intent-filter>
 
-      <!-- Some providers (including MediaStore-backed file explorers) launch
-           custom extensions as ACTION_VIEW + opaque content:// URI with no MIME
-           at resolver time. Android cannot inspect DISPLAY_NAME until after the
-           app is chosen, so offer GazBoard only for this untyped local-content
-           case; GazBoard validates the selected file after receiving the URI. -->
+      <!-- File managers disagree on how to discover handlers for unknown custom
+           extensions. Some query candidates with a generic MIME type and later
+           deliver an untyped content:// intent; others do the reverse. Keep both
+           local-content fallbacks so GazBoard can be discovered in either case.
+           MainActivity validates DISPLAY_NAME/MIME after launch and rejects files
+           that are not GazBoard/OpenBoard/JSON boards. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="*/*" />
+      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -51,9 +58,8 @@
       </intent-filter>
     </activity>
 
-    <!-- API 31 added pathSuffix. Use it only for exact board-extension matching
-         when a provider exposes the filename in its content URI. Older Android
-         versions keep the MIME and no-MIME content fallbacks above. -->
+    <!-- API 31 added pathSuffix. Use it for exact board-extension matching when
+         a provider exposes the filename in its content URI. -->
     <activity-alias android:name=".BoardFileAlias"
       android:targetActivity=".MainActivity"
       android:enabled="@bool/gazboard_suffix_alias_enabled"
