@@ -31,9 +31,19 @@
       </intent-filter>
     </activity>
 
+    <!-- Each alias targets a different tiny activity. Samsung collapses aliases
+         from one package into a single app choice, so these target activities
+         display which manifest rule actually won before forwarding the file. -->
+    <activity android:name=".ProbeGazboardMimeActivity" android:exported="true" />
+    <activity android:name=".ProbeOctetStreamActivity" android:exported="true" />
+    <activity android:name=".ProbeMediaStoreActivity" android:exported="true" />
+    <activity android:name=".ProbeSuffixActivity" android:exported="true" />
+    <activity android:name=".ProbeAnyTypedContentActivity" android:exported="true" />
+    <activity android:name=".ProbeAnyUntypedContentActivity" android:exported="true" />
+
     <!-- 1: provider gives our preferred custom MIME. -->
     <activity-alias android:name=".ProbeGazboardMimeAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeGazboardMimeActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: MIME" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
@@ -46,7 +56,7 @@
 
     <!-- 2: provider labels an unknown custom file as generic binary data. -->
     <activity-alias android:name=".ProbeOctetStreamAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeOctetStreamActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: Binary" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
@@ -59,7 +69,7 @@
 
     <!-- 3: exact MediaStore URI shape observed on the Samsung device. -->
     <activity-alias android:name=".ProbeMediaStoreAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeMediaStoreActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: MediaStore" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
@@ -72,7 +82,7 @@
 
     <!-- 4: URI exposes the actual board suffix. API 31+ supports pathSuffix. -->
     <activity-alias android:name=".ProbeSuffixAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeSuffixActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: Suffix" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
@@ -97,7 +107,7 @@
     <!-- 5: broad typed content fallback. If this is the only working rule, it
          explains why the old manifest polluted Open-with for normal file types. -->
     <activity-alias android:name=".ProbeAnyTypedContentAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeAnyTypedContentActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: Any typed" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
@@ -111,7 +121,7 @@
     <!-- 6: broad untyped content fallback. This isolates file managers that hide
          both MIME and filename from Android while resolving the tap. -->
     <activity-alias android:name=".ProbeAnyUntypedContentAlias"
-      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:targetActivity=".ProbeAnyUntypedContentActivity" android:enabled="true" android:exported="true"
       android:label="GB Probe: Any untyped" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
