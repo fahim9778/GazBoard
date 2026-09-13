@@ -3,6 +3,7 @@ package com.gazboard.app
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import android.webkit.WebResourceResponse
@@ -14,7 +15,22 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Files are capabilities, never renderer-supplied filesystem paths. */
 class BridgeFiles(private val context: Context) {
-  companion object { const val MAX_BYTES = 128 * 1024 * 1024 }
+  companion object {
+    const val MAX_BYTES = 128 * 1024 * 1024
+
+    /**
+     * Some Android document providers de-duplicate a custom extension as
+     * "Board.gazboard (1)" instead of the conventional "Board (1).gazboard".
+     * The former no longer has a .gazboard extension, so Android and GazBoard
+     * both stop recognizing it as a board. Keep the provider's number, but move
+     * it back in front of the extension.
+     */
+    fun normalizeBoardDuplicateName(name: String): String {
+      val m = Regex("""^(.+)\.(gazboard|openboard)\s*\((\d+)\)$""", RegexOption.IGNORE_CASE)
+        .matchEntire(name) ?: return name
+      return "${m.groupValues[1].trimEnd()} (${m.groupValues[3]}).${m.groupValues[2]}"
+    }
+  }
   private val root = File(context.cacheDir, "bridge").apply { mkdirs() }
   private data class Blob(val file: File, val expected: Long, var complete: Boolean = false)
   data class Grant(val uri: Uri, val name: String, val writable: Boolean)
@@ -75,24 +91,59 @@ class BridgeFiles(private val context: Context) {
       mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"), file(token).inputStream())
   }.getOrNull()
 
+  private fun displayName(uri: Uri): String? {
+    var name: String? = null
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+      if (it.moveToFirst()) name = it.getString(0)
+    }
+    return name
+  }
+
+  private fun persistGrant(uri: Uri, flags: Int) {
+    if (flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION == 0) return
+    runCatching { context.contentResolver.takePersistableUriPermission(uri,
+      flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) }
+  }
+
   fun register(uri: Uri, flags: Int = 0, writable: Boolean = false): String {
     require(uri.scheme == "content") { "Choose a file using Android's file picker" }
-    if (flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0) {
-      runCatching { context.contentResolver.takePersistableUriPermission(uri,
-        flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) }
+    persistGrant(uri, flags)
+
+    var actualUri = uri
+    var providerName = displayName(actualUri) ?: "document"
+    val normalized = normalizeBoardDuplicateName(providerName)
+
+    /*
+     * ACTION_CREATE_DOCUMENT deliberately refuses to overwrite. Most Android
+     * providers turn a duplicate Board.gazboard into Board (1).gazboard, but
+     * some put the number after the extension: Board.gazboard (1). If this is
+     * a document we just created for writing, ask the provider to fix that real
+     * on-disk/display name immediately. Failure is harmless: the internal name
+     * below is still normalized so GazBoard can use the file this session.
+     */
+    if (writable && normalized != providerName && DocumentsContract.isDocumentUri(context, actualUri)) {
+      val renamed = runCatching {
+        DocumentsContract.renameDocument(context.contentResolver, actualUri, normalized)
+      }.getOrNull()
+      if (renamed != null) {
+        actualUri = renamed
+        persistGrant(actualUri, flags)
+        providerName = displayName(actualUri) ?: normalized
+      }
     }
-    var name = "document"
-    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-      if (it.moveToFirst()) name = it.getString(0) ?: name
-    }
-    name = name.replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(200)
+
+    // Also normalize when opening an older malformed copy. This is only the
+    // capability's display name; the provider file itself is untouched unless
+    // it was the writable save case above.
+    var name = normalizeBoardDuplicateName(providerName)
+      .replace(Regex("[\\\\/\\p{Cntrl}]"), "_").take(200)
     if (!name.contains('.')) {
-      val mime = context.contentResolver.getType(uri)
+      val mime = context.contentResolver.getType(actualUri)
       MimeTypeMap.getSingleton().getExtensionFromMimeType(mime)?.let { name += ".$it" }
     }
-    val id = Protocol.hex(MessageDigest.getInstance("SHA-256").digest(uri.toString().toByteArray()))
+    val id = Protocol.hex(MessageDigest.getInstance("SHA-256").digest(actualUri.toString().toByteArray()))
     val handle = "gazboard-file://$id/$name"
-    grants[handle] = Grant(uri, name, writable || grants[handle]?.writable == true)
+    grants[handle] = Grant(actualUri, name, writable || grants[handle]?.writable == true)
     return handle
   }
   fun grant(handle: String): Grant = grants[handle] ?: error("This file permission expired. Open the file again.")
