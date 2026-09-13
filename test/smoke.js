@@ -5269,6 +5269,24 @@ async function run(win, app) {
     res.setHeader('content-type', 'application/json');
     if (req.url.includes('broken')) { res.statusCode = 500; res.end('nope'); return; }
     if (req.url.includes('garbage')) { res.end('{"not_a_release":true}'); return; }
+    // A list in the order GitHub actually returns it: newest first, with the
+    // phone builds - which are not desktop releases at all - sitting on top.
+    if (req.url.includes('mixed')) {
+      res.end(JSON.stringify([
+        { tag_name: 'android-99.9.9-v2', name: 'Android build 2', prerelease: false, draft: false },
+        { tag_name: 'android-99.9.9-v1', name: 'Android build 1', prerelease: false, draft: false },
+        { tag_name: 'v99.9.9', name: 'GazBoard v99.9.9', prerelease: false, draft: false },
+        { tag_name: 'v99.10.0', name: 'A draft nobody published', prerelease: false, draft: true },
+        { tag_name: 'v99.8.0', name: 'GazBoard v99.8.0', prerelease: false, draft: false }
+      ]));
+      return;
+    }
+    if (req.url.includes('androidonly')) {
+      res.end(JSON.stringify([
+        { tag_name: 'android-99.9.9-v2', name: 'Android build 2', prerelease: false, draft: false }
+      ]));
+      return;
+    }
     res.end(JSON.stringify({ tag_name: 'v99.9.9', name: 'GazBoard v99.9.9', prerelease: false }));
   });
   await new Promise((r) => fakeHub.listen(0, '127.0.0.1', r));
@@ -5292,6 +5310,13 @@ async function run(win, app) {
   const broke = await js(`return await window.board.checkForUpdate();`);
   process.env.GAZBOARD_UPDATE_API = hubUrl('garbage');
   const junk = await js(`return await window.board.checkForUpdate();`);
+  process.env.GAZBOARD_UPDATE_API = hubUrl('mixed');
+  const mixed = await js(`
+    const x = await window.board.checkForUpdate();
+    return { ok: x.ok, version: x.version, url: x.url };
+  `);
+  process.env.GAZBOARD_UPDATE_API = hubUrl('androidonly');
+  const androidOnly = await js(`return await window.board.checkForUpdate();`);
   process.env.GAZBOARD_UPDATE_API = 'http://127.0.0.1:1/nothing-listening';
   const dead = await js(`return await window.board.checkForUpdate();`);
   delete process.env.GAZBOARD_UPDATE_API;
@@ -5305,6 +5330,12 @@ async function run(win, app) {
   check('a server error is reported, not thrown', broke.ok === false && !!broke.error, JSON.stringify(broke));
   check('a reply that is not a release is refused', junk.ok === false, JSON.stringify(junk));
   check('being offline is handled quietly', dead.ok === false && !!dead.error, JSON.stringify(dead));
+  check('an Android release at the top of the list does not hide the desktop one',
+    mixed.ok === true && mixed.version === '99.9.9'
+      && mixed.url === 'https://github.com/fahim9778/GazBoard/releases/tag/v99.9.9',
+    JSON.stringify(mixed));
+  check('a list with no desktop release at all is refused rather than guessed at',
+    androidOnly.ok === false, JSON.stringify(androidOnly));
 
   const updUi = await js(`
     const a = window.app;

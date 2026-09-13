@@ -37,7 +37,56 @@ const RELEASES_URL = 'https://github.com/fahim9778/GazBoard/releases';
 // whole chain - fetch, parse, compare, decide - without depending on the
 // network or on what happens to be released today.
 const UPDATE_API = process.env.GAZBOARD_UPDATE_API
-  || 'https://api.github.com/repos/fahim9778/GazBoard/releases/latest';
+  || 'https://api.github.com/repos/fahim9778/GazBoard/releases?per_page=30';
+
+/*
+ * Read a desktop version out of a release tag, or answer null.
+ *
+ * One repository publishes two kinds of release: v2.6.6 for the desktop and
+ * android-2.6.6-v1 for the phone. GitHub's "latest release" is simply whichever
+ * was published most recently, so an Android build put out after a desktop one
+ * wears the Latest badge - and an updater that trusted it was handed the tag
+ * "android-2.6.6-v1", failed to read a version out of it, and told everyone
+ * they were current on a version that was two releases old.
+ *
+ * So the tags this build cares about are named here, and everything else is
+ * ignored rather than guessed at.
+ */
+function desktopRelease(tag) {
+  if (typeof tag !== 'string') return null;
+  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(tag.trim());
+  if (!m) return null;
+  return { nums: [+m[1], +m[2], +m[3]], pre: m[4] || null };
+}
+
+/** Positive when a is the later version. Mirrors src/js/core/version.js. */
+function compareReleases(a, b) {
+  for (let i = 0; i < 3; i++) if (a.nums[i] !== b.nums[i]) return a.nums[i] - b.nums[i];
+  if (a.pre && !b.pre) return -1;          // a release beats its own prerelease
+  if (!a.pre && b.pre) return 1;
+  return 0;
+}
+
+/*
+ * Pick the newest desktop release out of whatever GitHub sent.
+ *
+ * A list is walked and the highest version wins - not the most recently
+ * published, which is the mistake that started all this. A single release
+ * object is still accepted, because that is what the older endpoint returns
+ * and what the test suite serves.
+ */
+function newestRelease(payload) {
+  const list = Array.isArray(payload) ? payload : [payload];
+  let best = null, bestV = null;
+  for (const r of list) {
+    if (!r || r.draft) continue;
+    const v = desktopRelease(r.tag_name);
+    if (!v) continue;
+    if (!bestV || compareReleases(v, bestV) > 0) { best = r; bestV = v; }
+  }
+  return best;
+}
+module.exports.newestRelease = newestRelease;
 
 // Smoke runs use a throwaway profile so tests never see (or clobber) real boards.
 // GAZBOARD_USER_DATA points the whole profile somewhere else and is kept between
@@ -704,7 +753,7 @@ function ipc() {
         headers: { 'User-Agent': `GazBoard/${app.getVersion()}`, Accept: 'application/vnd.github+json' }
       });
       if (!res.ok) return { ok: false, error: `GitHub replied ${res.status}` };
-      const j = await res.json();
+      const j = newestRelease(await res.json());
       if (!j || typeof j.tag_name !== 'string') return { ok: false, error: 'Unexpected reply from GitHub' };
       return {
         ok: true,
