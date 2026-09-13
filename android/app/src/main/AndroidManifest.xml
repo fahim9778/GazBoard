@@ -8,10 +8,15 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
-  <application android:name=".GazBoardApplication" android:label="GazBoard"
+
+  <application android:name=".GazBoardApplication" android:label="GazBoard Probe"
     android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/AppTheme"
     android:allowBackup="false" android:usesCleartextTraffic="false"
     android:supportsRtl="true" android:hardwareAccelerated="true">
+
+    <!-- This branch is diagnostic only. MainActivity intentionally has no VIEW
+         filters; every Open-with candidate below has a unique label so the real
+         phone tells us exactly which resolver rule it matched. -->
     <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
       android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|keyboard|uiMode"
       android:windowSoftInputMode="adjustResize">
@@ -19,30 +24,6 @@
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>
-
-      <!-- Precise MIME associations when a provider supplies a useful type. -->
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <category android:name="android.intent.category.OPENABLE" />
-        <data android:mimeType="application/x-gazboard" />
-        <data android:mimeType="application/json" />
-      </intent-filter>
-
-      <!-- Samsung My Files exposes .gazboard as application/octet-stream with
-           an opaque content://media/... URI, so Android cannot match the file
-           extension before launching an app. Claim only that generic binary MIME
-           instead of every content:// file. Providers that expose the actual
-           filename are handled more precisely by BoardFileAlias below. -->
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <category android:name="android.intent.category.OPENABLE" />
-        <data android:scheme="content" android:mimeType="application/octet-stream" />
-      </intent-filter>
-
       <intent-filter>
         <action android:name="android.intent.action.SEND" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -50,14 +31,49 @@
       </intent-filter>
     </activity>
 
-    <!-- API 31 added pathSuffix. Use it for exact board-extension matching when
-         a provider exposes the filename in its content URI. -->
-    <activity-alias android:name=".BoardFileAlias"
-      android:targetActivity=".MainActivity"
-      android:enabled="@bool/gazboard_suffix_alias_enabled"
-      android:exported="true"
-      android:label="GazBoard"
-      android:icon="@mipmap/ic_launcher">
+    <!-- 1: provider gives our preferred custom MIME. -->
+    <activity-alias android:name=".ProbeGazboardMimeAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: MIME" android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="application/x-gazboard" />
+      </intent-filter>
+    </activity-alias>
+
+    <!-- 2: provider labels an unknown custom file as generic binary data. -->
+    <activity-alias android:name=".ProbeOctetStreamAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: Binary" android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="application/octet-stream" />
+      </intent-filter>
+    </activity-alias>
+
+    <!-- 3: exact MediaStore URI shape observed on the Samsung device. -->
+    <activity-alias android:name=".ProbeMediaStoreAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: MediaStore" android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="media" android:pathPrefix="/external/file/" />
+      </intent-filter>
+    </activity-alias>
+
+    <!-- 4: URI exposes the actual board suffix. API 31+ supports pathSuffix. -->
+    <activity-alias android:name=".ProbeSuffixAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: Suffix" android:icon="@mipmap/ic_launcher">
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
@@ -75,6 +91,34 @@
         <data android:scheme="content" android:host="*" />
         <data android:pathSuffix=".gazboard" />
         <data android:pathSuffix=".openboard" />
+      </intent-filter>
+    </activity-alias>
+
+    <!-- 5: broad typed content fallback. If this is the only working rule, it
+         explains why the old manifest polluted Open-with for normal file types. -->
+    <activity-alias android:name=".ProbeAnyTypedContentAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: Any typed" android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:mimeType="*/*" />
+      </intent-filter>
+    </activity-alias>
+
+    <!-- 6: broad untyped content fallback. This isolates file managers that hide
+         both MIME and filename from Android while resolving the tap. -->
+    <activity-alias android:name=".ProbeAnyUntypedContentAlias"
+      android:targetActivity=".MainActivity" android:enabled="true" android:exported="true"
+      android:label="GB Probe: Any untyped" android:icon="@mipmap/ic_launcher">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" />
       </intent-filter>
     </activity-alias>
 
