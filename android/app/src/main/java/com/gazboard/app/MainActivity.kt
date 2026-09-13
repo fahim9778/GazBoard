@@ -27,6 +27,12 @@ import java.net.URL
 import java.util.concurrent.*
 import kotlinx.serialization.json.*
 
+internal fun preferredShareMime(name: String, providerMime: String?): String {
+  val extension = name.substringAfterLast('.', "").lowercase()
+  return if (extension in listOf("gazboard", "openboard")) "application/x-gazboard"
+    else providerMime?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+}
+
 class MainActivity : ComponentActivity() {
   companion object {
     const val ORIGIN = "https://appassets.androidplatform.net"
@@ -206,7 +212,7 @@ class MainActivity : ComponentActivity() {
     val grant = app.files.grant(handle)
     onMain {
       startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-        type = contentResolver.getType(grant.uri) ?: "application/octet-stream"
+        type = preferredShareMime(grant.name, contentResolver.getType(grant.uri))
         putExtra(Intent.EXTRA_STREAM, grant.uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         clipData = android.content.ClipData.newUri(contentResolver, grant.name, grant.uri)
