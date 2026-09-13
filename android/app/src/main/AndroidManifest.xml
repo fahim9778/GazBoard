@@ -30,17 +30,29 @@
         <data android:mimeType="application/json" />
       </intent-filter>
 
-      <!-- Samsung My Files exposes .gazboard as application/octet-stream with
-           an opaque content://media/... URI, so Android cannot match the file
-           extension before launching an app. Claim only that generic binary MIME
-           instead of every content:// file. Providers that expose the actual
-           filename are handled more precisely by BoardFileAlias below. -->
+      <!-- Samsung My Files can expose .gazboard as generic binary content on
+           an opaque content:// URI. Keep this compatibility fallback narrow to
+           local content rather than claiming every file type. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
         <category android:name="android.intent.category.OPENABLE" />
         <data android:scheme="content" android:mimeType="application/octet-stream" />
+      </intent-filter>
+
+      <!-- On some Samsung My Files paths the VIEW intent is genuinely untyped:
+           content://media/external/file/<id>. In that case MIME matching cannot
+           run at all, and the filename is only available after launch. Match
+           only that MediaStore generic-file URI shape. Because this filter has
+           no MIME type, Android uses it only for untyped intents; typed PDF,
+           Word, image, etc. intents do not match it. -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <category android:name="android.intent.category.OPENABLE" />
+        <data android:scheme="content" android:host="media" android:pathPrefix="/external/file/" />
       </intent-filter>
 
       <intent-filter>
