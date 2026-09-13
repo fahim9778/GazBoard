@@ -203,6 +203,12 @@ jobs:
             echo "If you already have a test build installed, uninstall it first. It was"
             echo "signed with a different key and Android will refuse to replace it."
             echo
+            echo "**Opening board files:** .gazboard and .openboard are GazBoard-specific"
+            echo "formats, not Android-wide registered document types. Open downloaded or"
+            echo "received board files from inside GazBoard using Open board. GazBoard does"
+            echo "not register as a general Android file viewer, so it will not appear in"
+            echo "Open with for PDFs, images, installers or other unrelated files."
+            echo
             echo "The .aab is for Google Play and is not installable directly."
             echo
             echo "Runs on this device. No account, no sign-in, no cloud."
