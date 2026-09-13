@@ -284,15 +284,7 @@ export function shapePath(ctx, kind, x, y, w, h) {
       ctx.closePath();
       break;
     }
-    case 'cloud': {
-      const bumps = [[0.18, 0.68, 0.20], [0.38, 0.42, 0.26], [0.62, 0.40, 0.24], [0.82, 0.66, 0.19], [0.5, 0.72, 0.28]];
-      for (const [fx, fy, fr] of bumps) {
-        const r = Math.min(Math.abs(w), Math.abs(h)) * fr;
-        ctx.moveTo(x + w * fx + r, y + h * fy);
-        ctx.arc(x + w * fx, y + h * fy, r, 0, Math.PI * 2);
-      }
-      break;
-    }
+    case 'cloud': cloud(ctx, x, y, w, h); break;
     case 'line': ctx.moveTo(x, y); ctx.lineTo(x + w, y + h); break;
     case 'arrow': case 'doubleArrow': {
       ctx.moveTo(x, y); ctx.lineTo(x + w, y + h);
@@ -300,6 +292,72 @@ export function shapePath(ctx, kind, x, y, w, h) {
     }
     default: ctx.rect(x, y, w, h);
   }
+}
+
+/*
+ * A cloud, drawn as one outline.
+ *
+ * It used to be five whole circles stroked on top of each other, which is why
+ * every overlap showed through and the result looked like a diagram of
+ * intersecting sets rather than weather. Here the bumps are still circles, but
+ * only the outside of each is drawn: where two neighbours cross, the crossing
+ * point on the far side from the middle becomes the seam, and each arc runs
+ * from the seam behind it to the seam ahead. The path closes on itself, so a
+ * fill has nothing to bleed through and a dashed stroke runs round the edge
+ * the way it does on every other shape.
+ *
+ * Bumps are sized from the gap to their neighbours rather than from the box.
+ * Sizing them from the box was the thing that fell apart on a wide flat cloud:
+ * the bumps stayed small while the gaps stretched, until the underside came
+ * apart into a row of loose circles.
+ */
+function cloud(ctx, x, y, w, h) {
+  const aw = Math.abs(w), ah = Math.abs(h);
+  if (aw < 1 || ah < 1) return;
+  const ox = w < 0 ? x + w : x, oy = h < 0 ? y + h : y;
+  const cx = ox + aw / 2, cy = oy + ah / 2;
+  // Position in the box, then relative size. Large and overlapping along the
+  // crown, smaller and lower underneath, so the base sits flatter than the top.
+  const SPEC = [
+    [0.20, 0.58, 1.15], [0.35, 0.36, 1.30], [0.58, 0.32, 1.35], [0.78, 0.50, 1.20],
+    [0.84, 0.70, 0.92], [0.62, 0.78, 1.00], [0.38, 0.80, 0.98], [0.16, 0.72, 0.90]
+  ];
+  const n = SPEC.length;
+  const c = SPEC.map(([fx, fy]) => ({ x: ox + aw * fx, y: oy + ah * fy, r: 0 }));
+  for (let i = 0; i < n; i++) {
+    const p = c[(i - 1 + n) % n], q = c[(i + 1) % n];
+    const gap = (Math.hypot(c[i].x - p.x, c[i].y - p.y) + Math.hypot(c[i].x - q.x, c[i].y - q.y)) / 2;
+    c[i].r = gap * 0.66 * SPEC[i][2];
+  }
+  // Where two neighbouring bumps cross, on the outside of the cloud.
+  const seam = (a, b) => {
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+    if (!d || d >= a.r + b.r || d <= Math.abs(a.r - b.r)) return null;
+    const t = (a.r * a.r - b.r * b.r + d * d) / (2 * d);
+    const k = Math.sqrt(Math.max(0, a.r * a.r - t * t));
+    const mx = a.x + (dx * t) / d, my = a.y + (dy * t) / d;
+    const p1 = { x: mx + (k * dy) / d, y: my - (k * dx) / d };
+    const p2 = { x: mx - (k * dy) / d, y: my + (k * dx) / d };
+    return Math.hypot(p1.x - cx, p1.y - cy) > Math.hypot(p2.x - cx, p2.y - cy) ? p1 : p2;
+  };
+  const seams = [];
+  for (let i = 0; i < n; i++) seams.push(seam(c[i], c[(i + 1) % n]));
+  let open = false;
+  for (let i = 0; i < n; i++) {
+    const back = seams[(i - 1 + n) % n], fwd = seams[i], b = c[i];
+    // Neighbours that somehow do not meet: draw the whole bump rather than
+    // leave a hole. Nothing in the shipped proportions reaches this, but a
+    // shape dragged to a freakish aspect should still look like something.
+    if (!back || !fwd) {
+      ctx.moveTo(b.x + b.r, b.y);
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      open = false;
+      continue;
+    }
+    if (!open) { ctx.moveTo(back.x, back.y); open = true; }
+    ctx.arc(b.x, b.y, b.r, Math.atan2(back.y - b.y, back.x - b.x), Math.atan2(fwd.y - b.y, fwd.x - b.x));
+  }
+  if (open) ctx.closePath();
 }
 
 function polygon(ctx, cx, cy, rx, ry, n, rot) {
