@@ -42,6 +42,7 @@ jobs:
       - name: Keep release channels independent
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           BRIDGE_LEGACY_ANDROID: ${{ inputs.bridge_legacy_android || 'false' }}
         run: |
           set -euo pipefail
