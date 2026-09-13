@@ -30,25 +30,17 @@
         <data android:mimeType="application/json" />
       </intent-filter>
 
-      <!-- File managers disagree on how to discover handlers for unknown custom
-           extensions. Some query candidates with a generic MIME type and later
-           deliver an untyped content:// intent; others do the reverse. Keep both
-           local-content fallbacks so GazBoard can be discovered in either case.
-           Once launched, the shared importer reads the provider's DISPLAY_NAME,
-           routes supported boards/images/documents, and rejects unsupported files. -->
+      <!-- Samsung My Files exposes .gazboard as application/octet-stream with
+           an opaque content://media/... URI, so Android cannot match the file
+           extension before launching an app. Claim only that generic binary MIME
+           instead of every content:// file. Providers that expose the actual
+           filename are handled more precisely by BoardFileAlias below. -->
       <intent-filter>
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
         <category android:name="android.intent.category.OPENABLE" />
-        <data android:scheme="content" android:mimeType="*/*" />
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <category android:name="android.intent.category.OPENABLE" />
-        <data android:scheme="content" />
+        <data android:scheme="content" android:mimeType="application/octet-stream" />
       </intent-filter>
 
       <intent-filter>
