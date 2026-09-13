@@ -1,0 +1,112 @@
+# Keeps GitHub's repository-wide "Latest" badge from coupling the desktop and
+# Android release streams.
+#
+# The apps themselves are channel-aware:
+#   - desktop reads only vX.Y.Z releases
+#   - Android reads only android-X.Y.Z-vN releases
+# This workflow is the repository-side guardrail. Android releases are never
+# allowed to remain the global Latest release, and the highest stable desktop
+# release is restored as Latest after an Android release finishes.
+#
+# The manual legacy bridge is only for clients that shipped before the
+# channel-aware updater. It copies the newest Android APK onto the matching
+# desktop release so those old clients, which still ask GitHub for one global
+# /releases/latest object, can escape onto the fixed updater once.
+name: Release channel guard
+
+on:
+  workflow_run:
+    workflows: ["Android release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      bridge_legacy_android:
+        description: "Also attach the newest Android APK to its matching desktop release for pre-channel-aware Android clients"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-channel-guard
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Keep release channels independent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_LEGACY_ANDROID: ${{ inputs.bridge_legacy_android || 'false' }}
+        run: |
+          set -euo pipefail
+          API="repos/$GITHUB_REPOSITORY/releases?per_page=100"
+
+          echo "Marking every published Android release as not-Latest..."
+          while read -r id; do
+            [ -n "$id" ] || continue
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+              -f make_latest=false >/dev/null
+          done < <(
+            gh api --paginate "$API" \
+              --jq '.[] | select(.draft == false and (.tag_name | startswith("android-"))) | .id'
+          )
+
+          # Pick by semantic version, not publication time. That makes this safe
+          # when desktop and Android are published concurrently or in either order.
+          DESKTOP_TAG="$(
+            gh api --paginate "$API" \
+              --jq '.[] | select(.draft == false and .prerelease == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | .tag_name' \
+              | sort -V | tail -1
+          )"
+
+          if [ -n "$DESKTOP_TAG" ]; then
+            echo "Restoring $DESKTOP_TAG as the repository Latest release."
+            gh release edit "$DESKTOP_TAG" --latest
+          else
+            echo "No stable desktop release exists yet; nothing to mark Latest."
+          fi
+
+          if [ "$BRIDGE_LEGACY_ANDROID" != "true" ]; then
+            exit 0
+          fi
+
+          # One-time escape hatch for Android builds that still called
+          # /releases/latest. Give that global release an APK they can recognise.
+          ANDROID_TAG="$(
+            gh api --paginate "$API" \
+              --jq '.[] | select(.draft == false and (.tag_name | test("^android-[0-9]+\\.[0-9]+\\.[0-9]+-v[0-9]+$"))) | .tag_name' \
+              | sort -V | tail -1
+          )"
+
+          if [ -z "$ANDROID_TAG" ]; then
+            echo "::error::No published Android release was found for the legacy bridge."
+            exit 1
+          fi
+
+          VERSION="${ANDROID_TAG#android-}"
+          VERSION="${VERSION%-v*}"
+          MATCHING_DESKTOP="v$VERSION"
+          if ! gh release view "$MATCHING_DESKTOP" >/dev/null 2>&1; then
+            echo "::error::No matching desktop release $MATCHING_DESKTOP exists for $ANDROID_TAG."
+            exit 1
+          fi
+
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          gh release download "$ANDROID_TAG" --pattern '*.apk' --dir "$TMP"
+          APK="$(find "$TMP" -maxdepth 1 -type f -name '*.apk' | head -1)"
+          if [ -z "$APK" ]; then
+            echo "::error::$ANDROID_TAG has no APK asset."
+            exit 1
+          fi
+
+          echo "Legacy bridge: attaching $(basename "$APK") to $MATCHING_DESKTOP."
+          gh release upload "$MATCHING_DESKTOP" "$APK" --clobber
+          gh release edit "$MATCHING_DESKTOP" --latest
+          echo "Legacy clients can now discover $MATCHING_DESKTOP through /releases/latest."
