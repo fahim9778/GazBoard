@@ -56,7 +56,8 @@ android {
   namespace = "com.gazboard.app"
   compileSdk = 36
   defaultConfig {
-    applicationId = "com.gazboard.app"
+    // Temporary resolver-probe package so it installs beside the real GazBoard app.
+    applicationId = "com.gazboard.app.resolverprobe"
     minSdk = 26
     targetSdk = 36
     versionCode = androidVersionCode
