@@ -547,6 +547,9 @@ async function runTests() {
     check('version comparator recognizes 3.0.0 newer than 2.4.0', isNewer('3.0.0', '2.4.0') === true);
     check('version comparator recognizes 2.4.0 not newer than 2.4.0', isNewer('2.4.0', '2.4.0') === false);
     check('version comparator recognizes 2.3.9 not newer than 2.4.0', isNewer('2.3.9', '2.4.0') === false);
+    check('version comparator recognizes android build 2 newer than build 1', isNewer('2.6.6-android.2', '2.6.6-android.1') === true);
+    check('version comparator recognizes android build 1 not newer than build 2', isNewer('2.6.6-android.1', '2.6.6-android.2') === false);
+    check('version comparator recognizes a finished release newer than its build', isNewer('2.6.6', '2.6.6-android.2') === true);
 
     const updateMgr = await import('../src/js/platform/update-manager.js');
     const originalFetch = global.fetch;

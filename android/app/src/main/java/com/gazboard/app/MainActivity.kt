@@ -222,8 +222,43 @@ class MainActivity : ComponentActivity() {
     onMain { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
     return true
   }
+  /**
+   * Read a phone build out of a release tag: android-2.6.6-v2 -> [2, 6, 6, 2].
+   *
+   * Anything else - a desktop tag, a hand-typed tag, a tag from some other
+   * project - answers null and is passed over rather than guessed at.
+   */
+  private fun androidBuild(tag: String): IntArray? {
+    val m = Regex("""^android-(\d+)\.(\d+)\.(\d+)-v(\d+)$""").find(tag) ?: return null
+    return intArrayOf(m.groupValues[1].toInt(), m.groupValues[2].toInt(),
+      m.groupValues[3].toInt(), m.groupValues[4].toInt())
+  }
+
+  private fun laterBuild(a: IntArray, b: IntArray): Boolean {
+    for (i in 0..3) if (a[i] != b[i]) return a[i] > b[i]
+    return false
+  }
+
+  /**
+   * Ask GitHub which phone build is newest.
+   *
+   * One repository publishes two kinds of release - v2.6.6 for the desktop,
+   * android-2.6.6-v2 for the phone - and GitHub's idea of the latest release
+   * is simply whichever went out most recently. Asking it that question gave
+   * an Android user a desktop tag half the time and an unreadable one the
+   * rest, and both answers came back as "you are up to date" on a build that
+   * was two releases old.
+   *
+   * So the list is fetched and walked here instead. A release counts only if
+   * it carries an APK - nothing must ever send a phone user to an installer
+   * it cannot run - and only if its tag names a phone build. The highest
+   * build wins, not the most recent, and the version handed back is written
+   * the way the app writes its own (2.6.6-android.2) so the two can be
+   * compared at all. With nothing eligible in the list, the app's own version
+   * is returned, which reads as "nothing to do" and is the safe answer.
+   */
   fun checkForUpdate(): JsonObject {
-    val connection = URL("https://api.github.com/repos/fahim9778/GazBoard/releases/latest").openConnection() as HttpURLConnection
+    val connection = URL("https://api.github.com/repos/fahim9778/GazBoard/releases?per_page=30").openConnection() as HttpURLConnection
     try {
       connection.connectTimeout = 8000; connection.readTimeout = 8000
       connection.setRequestProperty("Accept", "application/vnd.github+json")
@@ -231,11 +266,36 @@ class MainActivity : ComponentActivity() {
       require(connection.responseCode == 200) { "GitHub replied ${connection.responseCode}" }
       val text = connection.inputStream.bufferedReader().use { it.readText() }
       require(text.length < 1024 * 1024)
-      val release = parse(text).obj()
-      val apk = (release["assets"] as? JsonArray)?.any { it.obj().str("name").endsWith(".apk") } == true
-      // A desktop-only tag must never tell an Android user to install an EXE.
-      return json("ok" to true, "version" to if (apk) release.str("tag_name").removePrefix("v") else BuildConfig.VERSION_NAME,
-        "name" to release.str("name"), "url" to "https://github.com/fahim9778/GazBoard/releases", "prerelease" to release.bool("prerelease"))
+      val payload = parse(text)
+      val releases = payload as? JsonArray ?: JsonArray(listOf(payload))
+      var best: JsonObject? = null
+      var bestTag = ""
+      var bestBuild: IntArray? = null
+      for (element in releases) {
+        val release = element as? JsonObject ?: continue
+        if ((release["draft"] as? JsonPrimitive)?.booleanOrNull == true) continue
+        val tag = (release["tag_name"] as? JsonPrimitive)?.contentOrNull ?: continue
+        val build = androidBuild(tag) ?: continue
+        val hasApk = (release["assets"] as? JsonArray)?.any {
+          (it as? JsonObject)?.get("name")?.let { n -> (n as? JsonPrimitive)?.contentOrNull }
+            ?.endsWith(".apk") == true
+        } == true
+        if (!hasApk) continue
+        if (bestBuild == null || laterBuild(build, bestBuild!!)) { best = release; bestTag = tag; bestBuild = build }
+      }
+      val found = best
+      val build = bestBuild
+      if (found == null || build == null) {
+        return json("ok" to true, "version" to BuildConfig.VERSION_NAME,
+          "name" to BuildConfig.VERSION_NAME, "url" to "https://github.com/fahim9778/GazBoard/releases",
+          "prerelease" to false)
+      }
+      val version = "${build[0]}.${build[1]}.${build[2]}-android.${build[3]}"
+      val name = (found["name"] as? JsonPrimitive)?.contentOrNull ?: bestTag
+      // The tag page is where the APK actually is, so that is where to land.
+      return json("ok" to true, "version" to version, "name" to name,
+        "url" to "https://github.com/fahim9778/GazBoard/releases/tag/" + bestTag,
+        "prerelease" to false)
     } finally { connection.disconnect() }
   }
   fun startSharing(): JsonObject {

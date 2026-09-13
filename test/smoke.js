@@ -5232,6 +5232,15 @@ async function run(win, app) {
     r.releaseBeatsPre = t('2.1.0', '2.1.0-beta.1') && !t('2.1.0-beta.1', '2.1.0');
     r.junkIsNot  = !t('garbage', '2.1.0') && !t('2.1', '2.0.0') && !t('', '2.0.0') && !t(null, '2.1.0') && !t('2.1.0', null);
     r.buildMeta  = t('2.1.0+build9', '2.0.0');
+    // Every Android build of one version differs only by the trailing number,
+    // so two prereleases of the same version have to be told apart.
+    r.androidBuilds = t('2.6.6-android.2', '2.6.6-android.1')
+      && !t('2.6.6-android.1', '2.6.6-android.2')
+      && !t('2.6.6-android.1', '2.6.6-android.1');
+    r.androidCounts = t('2.6.6-android.10', '2.6.6-android.2');   // not text order
+    r.androidVersionFirst = t('2.6.7-android.1', '2.6.6-android.9');
+    r.desktopStillWins = t('2.6.6', '2.6.6-android.9') && !t('2.6.6-android.9', '2.6.6');
+    r.shorterPreIsOlder = t('2.1.0-beta.1', '2.1.0-beta');
     r.parsed     = parseVersion('v2.10.3-rc.1');
 
     // consent gates the call: with the question unanswered, nothing goes out
@@ -5330,6 +5339,11 @@ async function run(win, app) {
   check('a server error is reported, not thrown', broke.ok === false && !!broke.error, JSON.stringify(broke));
   check('a reply that is not a release is refused', junk.ok === false, JSON.stringify(junk));
   check('being offline is handled quietly', dead.ok === false && !!dead.error, JSON.stringify(dead));
+  check('one Android build is told apart from the next', upd.androidBuilds === true, JSON.stringify(upd.androidBuilds));
+  check('Android build 10 counts as later than build 2', upd.androidCounts === true);
+  check('a later version beats a higher build of an older one', upd.androidVersionFirst === true);
+  check('a finished release still beats any build of it', upd.desktopStillWins === true);
+  check('a longer prerelease suffix ranks later', upd.shorterPreIsOlder === true);
   check('an Android release at the top of the list does not hide the desktop one',
     mixed.ok === true && mixed.version === '99.9.9'
       && mixed.url === 'https://github.com/fahim9778/GazBoard/releases/tag/v99.9.9',
