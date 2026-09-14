@@ -5931,10 +5931,76 @@ async function run(win, app) {
     a.settings.updateCheck = false;
     r.refusedWhenOff = (await a.checkForUpdates({ silent: true })) === null;
 
-    // and the daily limit holds
+    // and the limit between checks holds
     a.settings.updateCheck = true;
     a.settings.lastUpdateCheck = Date.now();
     r.rateLimited = (await a.checkForUpdates({ silent: true })) === null;
+
+    /*
+     * Pin the gap itself, not just "a check just now is refused".
+     *
+     * The number lives in one place and the wording people read lives in two
+     * others, so it is the kind of thing that gets changed in one of the three.
+     * An hour either side of the boundary says which way it moved.
+     */
+    const HOUR = 60 * 60 * 1000;
+    const gap = a.constructor.UPDATE_INTERVAL;
+    r.interval = gap;
+
+    /*
+     * Answer for GitHub for the rest of this block.
+     *
+     * Consent, the gap between looks and what happens when the network is not
+     * there are all worth pinning down, and none of them should depend on what
+     * was released today or on there being a network at all. 0.0.1 is older
+     * than any build, so nothing here can pop a dialog into the suite.
+     */
+    let asked = 0;
+    let reply = { ok: true, version: '0.0.1', prerelease: false, url: '#' };
+    a.fetchUpdate = async () => { asked++; return reply; };
+    const triedAfter = async (since) => {
+      a.settings.lastUpdateCheck = since;
+      const was = asked;
+      await a.checkForUpdates({ silent: true });
+      return asked > was;
+    };
+    r.blockedJustInside = (await triedAfter(Date.now() - (gap - HOUR))) === false;
+    r.allowedJustOutside = (await triedAfter(Date.now() - (gap + HOUR))) === true;
+
+    // forcing ignores the gap entirely, however recently it last looked
+    a.settings.lastUpdateCheck = Date.now();
+    const beforeForce = asked;
+    await a.checkForUpdates({ silent: true, force: true });
+    r.forceIgnoresTheGap = asked > beforeForce;
+
+    // a real answer starts the clock
+    a.settings.lastUpdateCheck = 0;
+    reply = { ok: true, version: '0.0.1', prerelease: false, url: '#' };
+    await a.checkForUpdates({ silent: true });
+    r.successStartsTheClock = a.settings.lastUpdateCheck > 0;
+
+    /*
+     * A failed attempt must NOT start it. Off the network for the one minute
+     * the app happened to open, and the old code would sit out the whole gap
+     * believing it had already looked.
+     */
+    const stamp = Date.now() - (gap + HOUR);
+    a.settings.lastUpdateCheck = stamp;
+    reply = { ok: false, error: 'no network' };
+    const beforeFail = asked;
+    await a.checkForUpdates({ silent: true });
+    r.failureWasAttempted = asked > beforeFail;
+    r.failureKeepsTheClock = a.settings.lastUpdateCheck === stamp;
+    const beforeRetry = asked;
+    await a.checkForUpdates({ silent: true });
+    r.failureRetriesNextTime = asked > beforeRetry;
+    // and a reply that is not an object at all is treated the same way
+    reply = null;
+    a.settings.lastUpdateCheck = stamp;
+    await a.checkForUpdates({ silent: true });
+    r.junkReplyKeepsTheClock = a.settings.lastUpdateCheck === stamp;
+
+    delete a.fetchUpdate;
 
     // the suite must never be interrupted by the consent dialog
     const info = await a.appInfo();
@@ -6120,7 +6186,27 @@ async function run(win, app) {
   check('build metadata does not confuse the comparison', upd.buildMeta === true);
   check('the update check does nothing until it has been allowed',
     upd.refusedWhenOff === true, JSON.stringify(upd));
-  check('and not more than once a day', upd.rateLimited === true);
+  check('and not more than once every twelve hours', upd.rateLimited === true);
+  check('the gap between checks is twelve hours', upd.interval === 12 * 60 * 60 * 1000,
+    `the gap is ${Math.round((upd.interval || 0) / 3600000)}h (${upd.interval}ms), wanted 12h`);
+  check('an hour before the gap is up it still says nothing', upd.blockedJustInside === true,
+    `checked ${Math.round((upd.interval - 3600000) / 3600000)}h ago, refused: ${upd.blockedJustInside}`);
+  check('and an hour after the gap is up it looks again', upd.allowedJustOutside === true,
+    `checked ${Math.round((upd.interval + 3600000) / 3600000)}h ago, looked again: ${upd.allowedJustOutside}`);
+  check('asking by hand ignores the gap completely', upd.forceIgnoresTheGap === true,
+    `forced a check one moment after the last one, went through: ${upd.forceIgnoresTheGap}`);
+  check('a real answer starts the clock', upd.successStartsTheClock === true,
+    `lastUpdateCheck moved off zero after a good reply: ${upd.successStartsTheClock}`);
+  check('a check that could not reach GitHub does not start the clock',
+    upd.failureWasAttempted === true && upd.failureKeepsTheClock === true,
+    `attempted: ${upd.failureWasAttempted}, clock left alone: ${upd.failureKeepsTheClock} ` +
+    `— a failed attempt is not a look, so half a day must not be spent believing it was`);
+  check('and the next launch tries again instead of sitting out the gap',
+    upd.failureRetriesNextTime === true,
+    `second attempt went out: ${upd.failureRetriesNextTime}`);
+  check('a reply that is not an answer at all is treated as a failure',
+    upd.junkReplyKeepsTheClock === true,
+    `clock left alone after a null reply: ${upd.junkReplyKeepsTheClock}`);
   check('the suite is never interrupted by the consent question',
     upd.smokeFlag === true && upd.startFlowNoOp === true, JSON.stringify(upd));
 

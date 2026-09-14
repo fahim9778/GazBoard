@@ -1033,7 +1033,7 @@ export function createPanels(app) {
           row('Right-drag pans the canvas', mkToggle(() => s.rightDragPans !== false, (v) => (s.rightDragPans = v)),
             'Hold the right mouse button and drag to move around — useful on a laptop with no pen and no middle button. A right click that does not move still opens the usual menu.'),
           row('Check for updates', mkToggle(() => s.updateCheck === true, (v) => { s.updateCheck = v; app.saveSettings(); if (v) app.checkForUpdates({ force: true }); }),
-            'Asks GitHub once a day whether a newer version exists, and tells you if so. Nothing is downloaded or installed automatically, and nothing about you or your boards is ever sent. Off means the app never touches the network.'),
+            'Asks GitHub at most twice a day whether a newer version exists, and tells you if so. Nothing is downloaded or installed automatically, and nothing about you or your boards is ever sent. Off means the app never touches the network.'),
           row('Shortcut letters on the toolbar', mkToggle(() => s.showToolKeys !== false, (v) => (s.showToolKeys = v)),
             'Shows the key for each tool in the corner of its button — V, P, H, E and so on — so you can switch without stopping to look them up.'),
           row('Low-latency inking', mkToggle(() => s.lowLatencyInk, (v) => { s.lowLatencyInk = v; app.toast('Takes effect next time GazBoard opens'); }),

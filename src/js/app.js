@@ -2137,9 +2137,9 @@ class App {
    *  never downloads or installs anything; the most it will do is offer to
    *  open the releases page in your browser.
    * ================================================================= */
-  static UPDATE_INTERVAL = 24 * 60 * 60 * 1000;
+  static UPDATE_INTERVAL = 12 * 60 * 60 * 1000;
 
-  /** Consent first if it has never been given, otherwise a quiet daily look. */
+  /** Consent first if it has never been given, otherwise a quiet twice-a-day look. */
   async startUpdateFlow() {
     try {
       const info = await this.appInfo();
@@ -2175,7 +2175,7 @@ class App {
     if (this.settings.updateCheck !== null && this.settings.updateCheck !== undefined) return;
     const answer = await this.choose(
       'Check for updates?',
-      'GazBoard can ask GitHub once a day whether a newer version has been released, and tell you if there is one. It never downloads or installs anything on its own, and nothing about you or your boards is ever sent. Everything else in the app stays offline either way.',
+      'GazBoard can ask GitHub at most twice a day whether a newer version has been released, and tell you if there is one. It never downloads or installs anything on its own, and nothing about you or your boards is ever sent. Everything else in the app stays offline either way.',
       [{ id: 'yes', label: 'Yes, tell me about updates', primary: true },
        { id: 'no', label: 'No, stay fully offline' }],
       { cancel: false }
@@ -2196,16 +2196,33 @@ class App {
   /**
    * @param {object} opts
    * @param {boolean} opts.silent   say nothing when already up to date
-   * @param {boolean} opts.force    ignore the once-a-day limit and any skip
+   * @param {boolean} opts.force    ignore the twice-a-day limit and any skip
    */
   async checkForUpdates({ silent = false, force = false } = {}) {
     if (!force) {
       if (!this.settings.updateCheck) return null;
       if (Date.now() - (this.settings.lastUpdateCheck || 0) < App.UPDATE_INTERVAL) return null;
     }
-    const res = await window.board.checkForUpdate();
-    this.settings.lastUpdateCheck = Date.now();
-    this.saveSettings();
+    const res = await this.fetchUpdate();
+
+    /*
+     * Only a real answer starts the clock.
+     *
+     * The stamp used to go down the moment the call came back, success or not.
+     * So a laptop that happened to be on a train, or behind a hotel portal, or
+     * simply off the network for the minute the app opened, spent the next
+     * half-day believing it had already looked - and the news of a new version
+     * arrived a day late for no reason anybody could see. A failed attempt is
+     * not a look; leave the clock where it was and try again next launch.
+     *
+     * Nothing runs away as a result: the automatic check happens once per
+     * launch, so "try again next time" is one more request when the app is
+     * opened, not a retry loop.
+     */
+    if (res?.ok) {
+      this.settings.lastUpdateCheck = Date.now();
+      this.saveSettings();
+    }
 
     if (!res || !res.ok) {
       if (!silent) this.toast(res?.error ? `Could not check: ${res.error}` : 'Could not check for updates', 'help');
@@ -2231,6 +2248,17 @@ class App {
     else if (answer === 'skip') { this.settings.skippedVersion = res.version; this.saveSettings(); }
     return res;
   }
+
+  /**
+   * The one network call in the app, behind a method of its own.
+   *
+   * Everything around it - consent, the gap between looks, what counts as
+   * newer - is logic worth testing, and testing it meant either talking to
+   * GitHub for real (a different answer every day, and none at all offline) or
+   * not testing it. A seam here lets the tests answer for GitHub and leaves
+   * the shipping path exactly one line long.
+   */
+  fetchUpdate() { return window.board.checkForUpdate(); }
 
   /** Cached app:info, so the version is not re-fetched on every call. */
   async appInfo() {
