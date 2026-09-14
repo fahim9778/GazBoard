@@ -535,35 +535,81 @@ export function drawText(ctx, o, hideText = false) {
  * a smiley look identical everywhere, which is not a trade worth making.
  */
 const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla","EmojiOne Color",sans-serif';
+const EMOJI_BASE = 100;
+const emojiInk = new Map();
+let emojiRuler = null;
 
 /**
- * An emoji, filling its box.
+ * How much room a character's ink actually takes, measured once and kept.
  *
- * The glyph is measured once at a known size and then scaled into the box,
- * rather than hunting for the font size that happens to fit. That keeps it
- * steady while a handle is being dragged, and it means a box stretched wide
- * stretches the emoji - the same bargain the shapes make, so the handles do
- * not appear to be broken when a drag has no visible effect.
+ * Emoji are not square. A face is round, a rocket is long, a prohibition sign
+ * is wider than it is tall, and the advance width a font reports is not the
+ * same as the ink. Measuring is what stops one landing stretched, and the
+ * answer never changes for a given character, so it is worth remembering.
+ *
+ * Falls back to a square when there is no canvas to measure with - during a
+ * board rebuild, say - which is a fair guess and never a crash.
+ */
+export function emojiInkSize(ch) {
+  const key = ch || '';
+  const hit = emojiInk.get(key);
+  if (hit) return hit;
+  let out = { w: EMOJI_BASE, h: EMOJI_BASE };
+  try {
+    if (!emojiRuler && typeof document !== 'undefined') {
+      emojiRuler = document.createElement('canvas').getContext('2d');
+    }
+    if (emojiRuler) {
+      emojiRuler.font = `${EMOJI_BASE}px ${EMOJI_FONT}`;
+      emojiRuler.textAlign = 'center';
+      emojiRuler.textBaseline = 'alphabetic';
+      const m = emojiRuler.measureText(key);
+      const left = m.actualBoundingBoxLeft, right = m.actualBoundingBoxRight;
+      const w = (left != null && right != null) ? left + right : m.width;
+      const asc = m.actualBoundingBoxAscent, desc = m.actualBoundingBoxDescent;
+      const h = (asc != null && desc != null) ? asc + desc : EMOJI_BASE;
+      if (w > 1 && h > 1) out = { w, h, asc, desc };
+    }
+  } catch { /* no canvas, no measurement, square it is */ }
+  emojiInk.set(key, out);
+  return out;
+}
+
+/** The shape of a character: wider than tall is above 1. */
+export function emojiAspect(ch) {
+  const { w, h } = emojiInkSize(ch);
+  return w / h;
+}
+
+/**
+ * An emoji, sitting in its box without being squashed into it.
+ *
+ * It used to stretch to fill, on the reasoning that shapes do and handles
+ * should never look broken. That was wrong here: a rectangle stretched is
+ * still a rectangle, but a face stretched is a face with something wrong with
+ * it, and every emoji dropped on a square box arrived subtly wrong because
+ * almost none of them are square. So the glyph is scaled by whichever of the
+ * two fits, keeping its proportions, and centred in whatever room is left.
+ * New ones are given a box shaped like the character in the first place, so
+ * there is usually no room left over to notice.
  */
 export function drawEmoji(ctx, o) {
   const ch = o.ch || '\u{1F642}';
   const aw = Math.abs(o.w), ah = Math.abs(o.h);
   if (aw < 1 || ah < 1) return;
   const x = o.w < 0 ? o.x + o.w : o.x, y = o.h < 0 ? o.y + o.h : o.y;
+  const ink = emojiInkSize(ch);
+  const asc = ink.asc ?? EMOJI_BASE * 0.78;
+  const desc = ink.desc ?? EMOJI_BASE * 0.08;
+  const k = Math.min(aw / ink.w, ah / ink.h);
   ctx.save();
-  const BASE = 100;
-  ctx.font = `${BASE}px ${EMOJI_FONT}`;
+  ctx.font = `${EMOJI_BASE}px ${EMOJI_FONT}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  const m = ctx.measureText(ch);
-  const gw = m.width || BASE;
-  const asc = m.actualBoundingBoxAscent || BASE * 0.78;
-  const desc = m.actualBoundingBoxDescent || BASE * 0.08;
-  const gh = Math.max(1, asc + desc);
   ctx.translate(x + aw / 2, y + ah / 2);
-  ctx.scale(aw / gw, ah / gh);
-  // Put the ink's middle on the box's middle. Emoji sit high on the line, so
-  // centring on the baseline instead leaves them visibly low in their box.
+  ctx.scale(k, k);
+  // Emoji sit high on the line, so putting the baseline on the middle leaves
+  // them low in the box; this puts the ink's middle there instead.
   ctx.fillText(ch, 0, (asc - desc) / 2);
   ctx.restore();
 }

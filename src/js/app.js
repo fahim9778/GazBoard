@@ -9,6 +9,7 @@ import { pick } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
 import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP } from './core/pages.js';
 import { isNewer } from './core/version.js';
+import { emojiAspect } from './core/render.js';
 import { TextEditor } from './ui/textedit.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { createPanels } from './ui/panels.js';
@@ -918,9 +919,15 @@ class App {
    */
   addEmojiAt(wp, ch = this.settings.emojiChar) {
     const size = this.worldSize(this.settings.emojiSize);
+    // Shaped like the character rather than square, so a long rocket lands
+    // long and a wide sign lands wide. The longer side is the chosen size, so
+    // every emoji lands about as big as the last regardless of its shape.
+    const a = emojiAspect(ch);
+    const w = a >= 1 ? size : size * a;
+    const h = a >= 1 ? size / a : size;
     const o = {
       id: uid('e'), type: 'emoji', ch,
-      x: wp.x - size / 2, y: wp.y - size / 2, w: size, h: size, rotation: 0
+      x: wp.x - w / 2, y: wp.y - h / 2, w, h, rotation: 0
     };
     // Keeping it on the sheet is the interaction layer's job, and it may not
     // exist yet when a board is being rebuilt, so ask rather than assume.

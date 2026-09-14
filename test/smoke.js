@@ -4422,7 +4422,12 @@ async function run(win, app) {
     tap(12000, 9000);
     r.afterTap = count() - before;
     const made = a.store.objects.filter((o) => o.type === 'emoji' && !had.has(o.id))[0];
-    r.square = !!made && Math.abs(made.w - made.h) < 0.01 && made.w > 0;
+    const { emojiAspect } = await import('./js/core/render.js');
+    // Not square - shaped like the character, so nothing arrives squashed.
+    const want = emojiAspect(made?.ch || '');
+    r.naturalShape = !!made && made.w > 0 && made.h > 0
+      && Math.abs((made.w / made.h) - want) < 0.02;
+    r.sensibleSize = !!made && Math.max(made.w, made.h) > 10;
     r.centred = !!made && Math.abs((made.x + made.w / 2) - 12000) < 0.01;
     r.stamped = made?.ch;
     r.selected = a.selected.length === 1 && a.selected[0].type === 'emoji';
@@ -4474,7 +4479,9 @@ async function run(win, app) {
   check('the tap that shuts the emoji picker stamps nothing',
     emo.afterDismiss === 0 && emo.toolAfterDismiss === 'emoji');
   check('a tap stamps one emoji, centred on the tap', emo.afterTap === 1 && emo.centred);
-  check('it arrives square and selected, ready for the handles', emo.square && emo.selected);
+  check('it arrives shaped like the character, not squashed into a square',
+    emo.naturalShape && emo.sensibleSize);
+  check('and arrives selected, ready for the handles', emo.selected);
   check('the stamped character is the chosen one', emo.stamped === '\u2705', emo.stamped);
   check('choosing another swaps the selected one instead of stamping',
     emo.swapReported === true && emo.swapped === '\u274C', emo.swapped);
