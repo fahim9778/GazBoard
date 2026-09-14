@@ -74,13 +74,31 @@ class EditorTest {
              * this test a race that the slower device loses - which is exactly
              * how it failed on the tablet while passing on the phone.
              */
-            let saved = null;
-            for (let waited = 0; waited < 5000 && saved?.name !== 'Android test বাংলা'; waited += 100) {
-              saved = await board.boards.load(app.store.doc.id);
+            let saved = null, waited = 0, readError = null;
+            const wantId = app.store.doc.id;
+            for (; waited < 5000 && saved?.name !== 'Android test বাংলা'; waited += 100) {
+              try { saved = await board.boards.load(wantId); }
+              catch (readFailed) { readError = String(readFailed); }
               if (saved?.name === 'Android test বাংলা') break;
               await new Promise(resolve => setTimeout(resolve, 100));
             }
-            if (!saved || saved.name !== 'Android test বাংলা') throw Error('Native save failed');
+            /*
+             * Say which of the several ways this can go wrong actually
+             * happened. "Native save failed" on its own cannot tell apart a
+             * file that was never written, one written under a different id, a
+             * board whose name did not stick, and a read that threw - and the
+             * only place this ever fails is a CI emulator nobody can poke at.
+             */
+            if (!saved || saved.name !== 'Android test বাংলা') {
+              throw Error('Native save failed after ' + waited + 'ms'
+                + ' | asked for id ' + wantId
+                + ' | load returned ' + (saved === null ? 'null' : saved === undefined ? 'undefined'
+                    : 'a board named ' + JSON.stringify(saved.name) + ' with id ' + saved.id
+                      + ' holding ' + (saved.objects?.length ?? saved.doc?.objects?.length ?? '?') + ' objects')
+                + ' | in-memory name is ' + JSON.stringify(app.store.doc.name)
+                + ' | read error: ' + (readError || 'none')
+                + ' | saved badge says ' + JSON.stringify(document.getElementById('savedBadge').textContent));
+            }
             const resumed = await board.boards.resume();
             if (resumed.board.id !== saved.id) throw Error('Resume pointer lost');
             let rejected = false;

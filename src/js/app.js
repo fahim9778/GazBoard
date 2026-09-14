@@ -140,12 +140,18 @@ class App {
     this.interaction = new Interaction(this);
 
     initToolbar(this);
-    this.loadEmojiFont();
     this.wireGlobalEvents();
     this.initDismissal();
     this.wireStore();
     this.initSync();
     this.restoreLastBoard();
+    // Emoji artwork can wait. Nothing on screen at start-up is an emoji, so
+    // fetching and decoding half a megabyte of it while the board is still
+    // restoring, wiring up and painting its first frame is work in the way of
+    // work that matters. On a desktop the difference is invisible; on a slow
+    // two-core machine it is the difference between a board that is ready and
+    // one that is still busy.
+    this.whenIdle(() => this.loadEmojiFont());
     // after the board is up, never before: the first thing anyone sees should
     // be their work, not a question
     setTimeout(() => this.startUpdateFlow(), 2500);
@@ -2396,6 +2402,19 @@ class App {
    * emoji exactly as it did before, which is a worse picture and not a broken
    * one.
    */
+  /**
+   * Run something once the machine has a spare moment, or shortly anyway.
+   *
+   * requestIdleCallback waits for a gap between the things the browser is
+   * already doing; the timeout is there because on a busy machine that gap may
+   * never come, and "later" has to mean later rather than never. Falls back to
+   * a plain wait where idle callbacks do not exist.
+   */
+  whenIdle(fn, timeout = 1500) {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(fn, { timeout });
+    else setTimeout(fn, timeout);
+  }
+
   loadEmojiFont() {
     try {
       if (!document.fonts?.load) return;
