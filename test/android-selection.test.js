@@ -7,7 +7,7 @@ global.document = { createElement: () => ({ getContext: () => ({}) }) };
 
 async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true, android = false } = {}) {
   document.documentElement = { dataset: { platform: android ? 'android' : 'electron' } };
-  const [{ Interaction }, { Store, boundsOf }, { Camera }, { unionBox }] = await Promise.all([
+  const [{ Interaction }, { Store, boundsOf, withGroups }, { Camera }, { unionBox }] = await Promise.all([
     import('../src/js/core/tools.js'), import('../src/js/core/store.js'),
     import('../src/js/core/camera.js'), import('../src/js/core/util.js')
   ]);
@@ -40,6 +40,15 @@ async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true, 
     syncZoom() {}, afterCamera() {}, trackCanvasMove() {},
     showContextMenu() { app.menuShown = true; },
     setSelection(ids) { surface.selection.clear(); for (const id of ids) surface.selection.add(id); },
+    chooseObject(id, toggle = app.multiSelect) {
+      if (!toggle) { app.setSelection([id]); return 'replaced'; }
+      const ids = new Set(surface.selection);
+      const family = withGroups(store, [id], app.openGroup);
+      const alreadyIn = family.every((f) => ids.has(f));
+      for (const f of family) alreadyIn ? ids.delete(f) : ids.add(f);
+      app.setSelection([...ids]);
+      return alreadyIn ? 'removed' : 'added';
+    },
     setTool(value) { app.tool = value; },
     armToolRestore() {},
     beginTextEdit(obj) { app.textEditor = { active: true, target: obj }; },
