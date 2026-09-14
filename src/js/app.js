@@ -1,7 +1,7 @@
 // GazBoard - application shell and command surface.
 
 import './platform/platform.js';
-import { Store, withAttached, worldBounds, boundsOf } from './core/store.js';
+import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf } from './core/store.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
 import { Interaction } from './core/tools.js';
@@ -674,12 +674,94 @@ class App {
     this.surface.invalidate();
   }
 
-  setSelection(ids, additive = false) {
+  /**
+   * Select these, and whatever they are grouped with.
+   *
+   * Every path into selection goes through here - a click, a marquee, a lasso,
+   * a press-and-hold, a freshly created object - so widening to whole groups
+   * in this one place is what makes grouping work everywhere at once, rather
+   * than in the four places someone remembered to handle it.
+   *
+   * `whole: false` asks for exactly what was named, which is how a member gets
+   * picked out from inside a group that has been opened for editing.
+   */
+  setSelection(ids, additive = false, { whole = true } = {}) {
     const sel = this.surface.selection;
     if (!additive) sel.clear();
-    for (const id of ids) if (this.store.has(id)) sel.add(id);
+    const wanted = whole ? withGroups(this.store, ids, this.openGroup) : ids;
+    for (const id of wanted) if (this.store.has(id)) sel.add(id);
+    // Stepping outside the opened group closes it again, so the next click on
+    // it picks up the whole thing as usual.
+    if (this.openGroup && ![...sel].some((id) => this.store.get(id)?.groupId === this.openGroup)) {
+      this.openGroup = null;
+    }
     this.syncUI();
     this.surface.invalidate();
+  }
+
+  /** Which group, if any, is currently opened for picking single members. */
+  openGroup = null;
+
+  /** The groups represented in the current selection. */
+  selectedGroups() {
+    return new Set(this.selected.map((o) => o.groupId).filter(Boolean));
+  }
+
+  /**
+   * Tie the selection together.
+   *
+   * Grouping something that is already grouped folds the lot into one new
+   * group rather than nesting - a house made of a roof group and a wall group
+   * becomes a house, and "ungroup" on it gives back the parts rather than two
+   * mystery sub-groups nobody can see the edges of. Nesting is a thing people
+   * ask for and then regret.
+   */
+  groupSelection() {
+    const objs = this.selected.filter((o) => !o.locked);
+    if (objs.length < 2) {
+      this.toast('Select two or more things to group', 'help');
+      return false;
+    }
+    const gid = uid('g');
+    this.store.updateMany(objs.map((o) => o.id), { groupId: gid }, 'group');
+    this.openGroup = null;
+    this.setSelection(objs.map((o) => o.id));
+    this.toast(`${objs.length} items grouped`, 'check');
+    return true;
+  }
+
+  /** Undo the tying, for every group in the selection. */
+  ungroupSelection() {
+    const gids = this.selectedGroups();
+    if (!gids.size) {
+      this.toast('Nothing grouped is selected', 'help');
+      return false;
+    }
+    const ids = [];
+    for (const gid of gids) ids.push(...groupMembers(this.store, gid));
+    // null rather than undefined: an undefined value can be dropped entirely
+    // by a clone or a round trip through a file, and a patch that loses its
+    // only key silently does nothing at all.
+    this.store.updateMany(ids, { groupId: null }, 'ungroup');
+    this.openGroup = null;
+    this.setSelection(ids);
+    this.toast(gids.size > 1 ? `${gids.size} groups undone` : 'Group undone', 'check');
+    return true;
+  }
+
+  /**
+   * Open a group so one member can be worked on alone.
+   *
+   * Without this, a group is a cage: the roof of a grouped house could never
+   * be recoloured without breaking the house apart first and remembering to
+   * put it back together. Double-clicking steps inside; clicking anything
+   * outside steps back out, which is handled in setSelection.
+   */
+  enterGroup(o) {
+    if (!o?.groupId) return false;
+    this.openGroup = o.groupId;
+    this.setSelection([o.id], false, { whole: false });
+    return true;
   }
 
   get selected() { return [...this.surface.selection].map((id) => this.store.get(id)).filter(Boolean); }
@@ -1049,6 +1131,8 @@ class App {
       case 'edit.cut': this.copy(); if (sf.selection.size) { s.remove([...sf.selection]); sf.selection.clear(); } break;
       case 'edit.paste': this.paste(); break;
       case 'edit.duplicate': this.duplicate(); break;
+      case 'edit.group': this.groupSelection(); break;
+      case 'edit.ungroup': this.ungroupSelection(); break;
       case 'edit.clear':
         this.confirm('Clear canvas?', 'Everything on this board will be removed. You can undo this.', 'Clear')
           .then((ok) => { if (ok) { s.clear(); sf.selection.clear(); } });
@@ -1153,9 +1237,30 @@ class App {
   duplicate() {
     const objs = this.selected;
     if (!objs.length) return;
-    const copies = objs.map((o) => this.cloneWithOffset(o, 28, 28));
+    const copies = this.regroup(objs.map((o) => this.cloneWithOffset(o, 28, 28)));
     this.store.addMany(copies, 'duplicate');
     this.setSelection(copies.map((o) => o.id));
+  }
+
+  /*
+   * Copies of a group are a group of their own.
+   *
+   * Keeping the original group name would quietly weld the copy to the
+   * original: move the new house and the old one comes too, which looks like
+   * the app has lost its mind. Each group name in the batch is swapped for a
+   * fresh one, so the copy holds together exactly as the original did without
+   * being tied to it. A copy of only PART of a group is still a group, which
+   * is what someone who selected three of five things and pressed Ctrl+D
+   * meant.
+   */
+  regroup(copies) {
+    const map = new Map();
+    for (const c of copies) {
+      if (!c.groupId) continue;
+      if (!map.has(c.groupId)) map.set(c.groupId, uid('g'));
+      c.groupId = map.get(c.groupId);
+    }
+    return copies;
   }
 
   cloneWithOffset(o, dx, dy) {
@@ -1171,7 +1276,7 @@ class App {
 
   paste() {
     if (!this.clipboard.length) return;
-    const copies = this.clipboard.map((o) => this.cloneWithOffset(o, 32, 32));
+    const copies = this.regroup(this.clipboard.map((o) => this.cloneWithOffset(o, 32, 32)));
     this.store.addMany(copies, 'paste');
     this.setSelection(copies.map((o) => o.id));
     this.clipboard = copies.map((o) => structuredClone(o));
@@ -1591,6 +1696,7 @@ class App {
     // everything from `at` onwards shifts one place down the strip
     const ops = [...this.relayoutOps(this.pages, next, (i) => (i >= at ? i + 1 : i)), this.store.pagesOp(next)];
 
+    const pageGroups = [];
     if (copyOf >= 0 && copyOf < this.pageCount) {
       const srcRect = pageRects(this.pages)[copyOf];
       const dstRect = pageRects(next)[at];
@@ -1599,11 +1705,13 @@ class App {
         const copy = structuredClone(o);
         copy.id = uid(o.type === 'stroke' ? 's' : 'o');
         delete copy.attachedTo;
+        pageGroups.push(copy);
         translateObject(copy, dstRect.x - srcRect.x, dstRect.y - srcRect.y);
         ops.push({ t: 'add', obj: copy });
       }
     }
 
+    this.regroup(pageGroups);
     this.store.commit(copyOf >= 0 ? 'duplicate page' : 'add page', ops);
     this.goToPage(at);
     this.toast(copyOf >= 0 ? `Page ${at + 1} duplicated` : `Page ${at + 1} of ${next.length}`);
@@ -2277,6 +2385,7 @@ class App {
       if (k === 'c') { this.command('edit.copy'); return; }
       if (k === 'x') { this.command('edit.cut'); return; }
       if (k === 'd') { e.preventDefault(); this.command('edit.duplicate'); return; }
+      if (k === 'g') { e.preventDefault(); this.command(e.shiftKey ? 'edit.ungroup' : 'edit.group'); return; }
       if (k === 's') { e.preventDefault(); this.command('board.save'); return; }
       if (k === 'o') { e.preventDefault(); this.command('board.open'); return; }
       if (k === 'n') { e.preventDefault(); this.command('board.new'); return; }

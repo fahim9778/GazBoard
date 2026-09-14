@@ -4370,6 +4370,113 @@ async function run(win, app) {
   check('and a plain tap still drops a default-sized one',
     shapes.afterTap === shapes.before + 3, `${shapes.afterTap - shapes.before} shape(s)`);
 
+  /* ---- grouping -------------------------------------------------------- *
+   * A poster made of shapes should move as one thing. Grouping is a shared
+   * name rather than a container, so what is tested here is that selection
+   * widens to the whole group everywhere, that copies get a group of their
+   * own rather than being welded to the original, and that a group can be
+   * opened to work on one piece.
+   */
+  const grp = await js(`
+    const a = window.app, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.setSelection([]); a.openGroup = null;
+    const mk = (n, x) => a.store.add({ id: 'grp' + n, type: 'shape', kind: 'rect',
+      x, y: 500, w: 40, h: 30, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'test');
+    const parts = [mk('A', 100), mk('B', 200), mk('C', 300)];
+    const loose = mk('D', 900);
+    const r = {};
+
+    // group the first three
+    a.setSelection(['grpA', 'grpB', 'grpC']);
+    r.grouped = a.groupSelection();
+    const gid = a.store.get('grpA').groupId;
+    r.allShareOneName = !!gid && ['grpA','grpB','grpC'].every((id) => a.store.get(id).groupId === gid);
+    r.looseUntouched = !a.store.get('grpD').groupId;
+
+    // touching one member selects the lot
+    a.setSelection([]);
+    a.setSelection(['grpB']);
+    r.oneSelectsAll = a.surface.selection.size === 3;
+
+    // a marquee that catches one member catches the group too
+    a.setSelection([]);
+    a.setSelection(['grpC', 'grpD']);
+    r.marqueeWidens = a.surface.selection.size === 4;
+
+    // moving the selection moves every member
+    a.setSelection(['grpA']);
+    const beforeX = a.store.get('grpB').x;
+    const { translateObject } = await import('./js/core/transform.js');
+    for (const o of a.selected) translateObject(o, 17, 0);
+    r.movesTogether = a.store.get('grpB').x === beforeX + 17;
+
+    // a copy is its own group, not welded to the original
+    a.setSelection(['grpA']);
+    a.duplicate();
+    const copies = a.selected;
+    const copyGid = copies[0]?.groupId;
+    r.copyIsThree = copies.length === 3;
+    r.copyHasOwnName = !!copyGid && copyGid !== gid;
+    r.copyHoldsTogether = copies.every((o) => o.groupId === copyGid);
+    const copyIds = copies.map((o) => o.id);
+    a.store.remove(copyIds);
+
+    // one member can be picked out once the group is opened
+    a.setSelection([]);
+    r.enterReported = a.enterGroup(a.store.get('grpB'));
+    r.insideIsOne = a.surface.selection.size === 1 && [...a.surface.selection][0] === 'grpB';
+    r.openRemembered = a.openGroup === gid;
+    // and the group closes again when something outside it is picked
+    a.setSelection(['grpD']);
+    r.leavingCloses = a.openGroup === null;
+    a.setSelection(['grpA']);
+    r.closedMeansWholeAgain = a.surface.selection.size === 3;
+
+    // grouping something already grouped folds it in rather than nesting
+    a.setSelection(['grpA', 'grpD']);
+    a.groupSelection();
+    const gid2 = a.store.get('grpD').groupId;
+    r.foldsInRatherThanNesting =
+      ['grpA','grpB','grpC','grpD'].every((id) => a.store.get(id).groupId === gid2) && gid2 !== gid;
+
+    // ungroup frees every one of them
+    a.setSelection(['grpA']);
+    r.ungrouped = a.ungroupSelection();
+    r.allFree = ['grpA','grpB','grpC','grpD'].every((id) => !a.store.get(id).groupId);
+
+    // one object is not a group
+    a.setSelection(['grpA']);
+    r.refusesSingle = a.groupSelection() === false;
+
+    // and undo puts a group back
+    a.setSelection(['grpA','grpB']);
+    a.groupSelection();
+    const gid3 = a.store.get('grpA').groupId;
+    a.store.undo();
+    r.undoUngroups = !a.store.get('grpA').groupId && !!gid3;
+
+    a.setSelection([]); a.openGroup = null;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    return r;
+  `);
+  check('grouping gives every member one shared name', grp.grouped && grp.allShareOneName);
+  check('and leaves anything outside the selection alone', grp.looseUntouched);
+  check('touching one member selects the whole group', grp.oneSelectsAll);
+  check('a marquee catching one member catches the group', grp.marqueeWidens);
+  check('moving the selection moves every member', grp.movesTogether);
+  check('a duplicate holds together as a group of its own',
+    grp.copyIsThree && grp.copyHasOwnName && grp.copyHoldsTogether);
+  check('a group can be opened to pick out one piece',
+    grp.enterReported && grp.insideIsOne && grp.openRemembered);
+  check('and closes again as soon as something outside is picked',
+    grp.leavingCloses && grp.closedMeansWholeAgain);
+  check('grouping a group folds it in rather than nesting', grp.foldsInRatherThanNesting);
+  check('ungrouping frees every member', grp.ungrouped && grp.allFree);
+  check('one object on its own is not a group', grp.refusesSingle);
+  check('undo puts a group back the way it was', grp.undoUngroups);
+
   /* ---- emoji ---------------------------------------------------------- *
    * Stamping one, the search that finds it, swapping the character on a
    * selection, and the tap that only shuts the picker.

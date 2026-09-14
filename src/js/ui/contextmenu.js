@@ -44,6 +44,17 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item('Copy', 'copy', () => app.command('edit.copy'), { key: 'Ctrl+C' }));
     menu.appendChild(item('Duplicate', 'duplicate', () => app.command('edit.duplicate'), { key: 'Ctrl+D' }));
     menu.appendChild(h('div', { class: 'menu-sep' }));
+    const grouped = app.selectedGroups().size > 0;
+    if (app.surface.selection.size > 1 && !grouped) {
+      menu.appendChild(item('Group', 'group', () => app.command('edit.group'), { key: 'Ctrl+G' }));
+    }
+    if (grouped) {
+      menu.appendChild(item('Ungroup', 'ungroup', () => app.command('edit.ungroup'), { key: 'Ctrl+Shift+G' }));
+      if (app.surface.selection.size > 1) {
+        menu.appendChild(item('Group again', 'group', () => app.command('edit.group'), { key: 'Ctrl+G' }));
+      }
+    }
+    if (grouped || app.surface.selection.size > 1) menu.appendChild(h('div', { class: 'menu-sep' }));
     menu.appendChild(item('Bring to front', 'front', () => app.command('order.front'), { key: 'Ctrl+Shift+]' }));
     menu.appendChild(item('Send to back', 'front', () => app.command('order.back'), { key: 'Ctrl+Shift+[' }));
     menu.appendChild(h('div', { class: 'menu-sep' }));
@@ -137,6 +148,9 @@ export function updateSelectionBar(app) {
     bar.appendChild(h('span', { class: 'bar-sep' }));
   }
 
+  const grouped = app.selectedGroups().size > 0;
+  if (grouped) bar.appendChild(mk('Ungroup (Ctrl+Shift+G)', 'ungroup', () => app.command('edit.ungroup')));
+  else if (sel.length > 1) bar.appendChild(mk('Group (Ctrl+G)', 'group', () => app.command('edit.group')));
   bar.appendChild(mk('Duplicate (Ctrl+D)', 'duplicate', () => app.command('edit.duplicate')));
   bar.appendChild(mk('Bring to front', 'front', () => app.command('order.front')));
   bar.appendChild(mk(sel.every((o) => o.locked) ? 'Unlock' : 'Lock', sel.every((o) => o.locked) ? 'unlock' : 'lock', () => app.command('edit.lock')));

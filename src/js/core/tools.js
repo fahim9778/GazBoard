@@ -1912,6 +1912,15 @@ export class Interaction {
     // only the picking tools own selection chrome
     if (this.tool !== 'pen' && this.tool !== 'highlighter') this.app.setSelection([hit.id]);
     if (hit.locked) { this.app.setSelection([hit.id]); this.app.hintLocked(); return; }
+    // A double-click on something grouped steps INTO the group and takes hold
+    // of the one piece, rather than editing its text. Double-click again and
+    // the text opens as usual, because by then the group is already open and
+    // the piece is what got picked. That second step is what keeps a grouped
+    // sticky note editable without pulling the group apart first.
+    if (hit.groupId && this.app.openGroup !== hit.groupId) {
+      this.app.enterGroup(hit);
+      return;
+    }
     if (hit.type === 'note' || hit.type === 'text' || hit.type === 'shape') {
       this.app.setSelection([hit.id]);
       this.app.beginTextEdit(hit);
