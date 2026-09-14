@@ -524,6 +524,50 @@ export function drawText(ctx, o, hideText = false) {
   });
 }
 
+/*
+ * Whatever emoji font the machine already has.
+ *
+ * Nothing is bundled and nothing is fetched, so this keeps working on a plane
+ * like the rest of the app. The cost is that the same character is drawn in
+ * each platform's own style - a board made on Windows and opened on a phone
+ * shows Samsung's version of the smile. Every app that leans on the system
+ * font has this, and the alternative is shipping a ten-megabyte font to make
+ * a smiley look identical everywhere, which is not a trade worth making.
+ */
+const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla","EmojiOne Color",sans-serif';
+
+/**
+ * An emoji, filling its box.
+ *
+ * The glyph is measured once at a known size and then scaled into the box,
+ * rather than hunting for the font size that happens to fit. That keeps it
+ * steady while a handle is being dragged, and it means a box stretched wide
+ * stretches the emoji - the same bargain the shapes make, so the handles do
+ * not appear to be broken when a drag has no visible effect.
+ */
+export function drawEmoji(ctx, o) {
+  const ch = o.ch || '\u{1F642}';
+  const aw = Math.abs(o.w), ah = Math.abs(o.h);
+  if (aw < 1 || ah < 1) return;
+  const x = o.w < 0 ? o.x + o.w : o.x, y = o.h < 0 ? o.y + o.h : o.y;
+  ctx.save();
+  const BASE = 100;
+  ctx.font = `${BASE}px ${EMOJI_FONT}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  const m = ctx.measureText(ch);
+  const gw = m.width || BASE;
+  const asc = m.actualBoundingBoxAscent || BASE * 0.78;
+  const desc = m.actualBoundingBoxDescent || BASE * 0.08;
+  const gh = Math.max(1, asc + desc);
+  ctx.translate(x + aw / 2, y + ah / 2);
+  ctx.scale(aw / gw, ah / gh);
+  // Put the ink's middle on the box's middle. Emoji sit high on the line, so
+  // centring on the baseline instead leaves them visibly low in their box.
+  ctx.fillText(ch, 0, (asc - desc) / 2);
+  ctx.restore();
+}
+
 export function drawImage(ctx, o, onload) {
   const img = getImage(o.src, onload);
   ctx.save();
@@ -634,6 +678,7 @@ export function drawObject(ctx, o, onload, editing = null) {
     case 'note': drawNote(ctx, o, hideText); break;
     case 'text': drawText(ctx, o, hideText); break;
     case 'image': drawImage(ctx, o, onload); break;
+    case 'emoji': drawEmoji(ctx, o); break;
     case 'table': drawTable(ctx, o, hideCell); break;
   }
   ctx.restore();

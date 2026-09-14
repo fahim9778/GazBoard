@@ -4370,6 +4370,120 @@ async function run(win, app) {
   check('and a plain tap still drops a default-sized one',
     shapes.afterTap === shapes.before + 3, `${shapes.afterTap - shapes.before} shape(s)`);
 
+  /* ---- emoji ---------------------------------------------------------- *
+   * Stamping one, the search that finds it, swapping the character on a
+   * selection, and the tap that only shuts the picker.
+   */
+  const emo = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.hideMenus(); a.setSelection([]);
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons) => ({ pointerId: 77, pointerType: 'touch', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const count = () => a.store.objects.filter((o) => o.type === 'emoji').length;
+    const tap = (x, y) => { it.action = null; it.pointers.clear();
+      it.onDown(mk(at(x, y), 1)); it.onUp(mk(at(x, y), 0)); };
+
+    const { searchEmoji, EMOJI, EMOJI_GROUPS } = await import('./js/core/emoji.js');
+    const names = EMOJI.map((e) => e.name);
+    const r = {
+      catalogue: EMOJI.length,
+      everyGroupHasItems: EMOJI_GROUPS.every((g) => g.items.length > 0),
+      allGrouped: EMOJI_GROUPS.reduce((n, g) => n + g.items.length, 0) === EMOJI.length,
+      noDuplicates: new Set(EMOJI.map((e) => e.ch)).size === EMOJI.length,
+      everyOneSearchable: names.every((n) => searchEmoji(n, 80).some((e) => e.name === n)),
+      tickFindsTheCheck: searchEmoji('tick', 1)[0]?.name === 'check mark button',
+      starBeatsStarStruck: searchEmoji('star', 1)[0]?.name === 'star',
+      nonsenseFindsNothing: searchEmoji('qzqzqz').length === 0,
+      emptyFindsNothing: searchEmoji('').length === 0,
+      twoWordsNarrow: searchEmoji('up arrow').every((e) => /up/.test(e.name + e.keywords))
+    };
+
+    a.setTool('emoji');
+    a.settings.emojiChar = '\u2705';
+    const before = count();
+
+    // the tap that shuts the picker must not stamp anything
+    const { openPopover } = await import('./js/ui/popover.js');
+    openPopover(document.getElementById('toolbar'), document.createElement('div'), { key: 'tool:emoji' });
+    tap(12000, 9000);
+    r.afterDismiss = count() - before;
+    r.toolAfterDismiss = a.tool;
+
+    // now a real tap
+    const returnWas = a.settings.returnToSelect;
+    a.settings.returnToSelect = false;
+    tap(12000, 9000);
+    r.afterTap = count() - before;
+    const made = a.store.objects.filter((o) => o.type === 'emoji' && !had.has(o.id))[0];
+    r.square = !!made && Math.abs(made.w - made.h) < 0.01 && made.w > 0;
+    r.centred = !!made && Math.abs((made.x + made.w / 2) - 12000) < 0.01;
+    r.stamped = made?.ch;
+    r.selected = a.selected.length === 1 && a.selected[0].type === 'emoji';
+    r.toolStays = a.tool;
+
+    // the character can be swapped on an existing one
+    r.swapReported = a.applyToSelection({ ch: '\u274C' }, 'emoji');
+    r.swapped = a.store.get(made.id).ch;
+    r.swapMissesOtherTypes = a.applyToSelection({ ch: '\u2705' }, 'note') === false;
+
+    // Resizing is the ordinary box resize - no special case, no font to chase.
+    // The numbers are copied out first: the variable holds the stored object
+    // itself, so reading its width after the change compares it against itself.
+    const wasW = made.w, wasH = made.h;
+    a.store.update(made.id, { w: wasW * 2, h: wasH * 3 });
+    const grown = a.store.get(made.id);
+    r.resizes = grown.w === wasW * 2 && grown.h === wasH * 3;
+
+    // and it is picked by a click inside it, like any other boxy object
+    const { pick } = await import('./js/core/hit.js');
+    r.hittable = pick(a.store, { x: grown.x + grown.w / 2, y: grown.y + grown.h / 2 })?.id === made.id;
+
+    // A fresh stamp, so the undo under test is the stamp itself rather than
+    // the resize and the swap that happened to it above.
+    a.setSelection([]);
+    const wasThere = count();
+    tap(12600, 9000);
+    r.secondStamped = count() === wasThere + 1;
+    a.store.undo();
+    r.undone = count() === wasThere;
+
+    a.settings.returnToSelect = returnWas;
+    a.setTool('select'); a.setSelection([]); a.hideMenus();
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('the emoji catalogue is a useful size and free of repeats',
+    emo.catalogue > 150 && emo.noDuplicates, `${emo.catalogue} entries`);
+  check('every emoji sits in exactly one group', emo.allGrouped && emo.everyGroupHasItems);
+  check('every emoji can be found by its own name', emo.everyOneSearchable);
+  check('searching "tick" offers the check mark, not the joystick', emo.tickFindsTheCheck);
+  check('searching "star" offers the star before anything starting', emo.starBeatsStarStruck);
+  check('a search that matches nothing says so rather than guessing',
+    emo.nonsenseFindsNothing && emo.emptyFindsNothing);
+  check('two words narrow the search instead of widening it', emo.twoWordsNarrow);
+  check('the tap that shuts the emoji picker stamps nothing',
+    emo.afterDismiss === 0 && emo.toolAfterDismiss === 'emoji');
+  check('a tap stamps one emoji, centred on the tap', emo.afterTap === 1 && emo.centred);
+  check('it arrives square and selected, ready for the handles', emo.square && emo.selected);
+  check('the stamped character is the chosen one', emo.stamped === '\u2705', emo.stamped);
+  check('choosing another swaps the selected one instead of stamping',
+    emo.swapReported === true && emo.swapped === '\u274C', emo.swapped);
+  check('a swap aimed at another kind of object changes nothing', emo.swapMissesOtherTypes);
+  check('it resizes like any other box, in both directions', emo.resizes);
+  check('and a click inside it picks it up', emo.hittable);
+  check('a second stamp lands without a trip to the picker', emo.secondStamped);
+  check('one undo removes a stamped emoji', emo.undone);
+
   await js(`window.app.setSelection([window.app.store.doc.order[0]]);`);
   await sleep(250);
   check('selection bar shows', await js(`return document.getElementById('ctxbar').classList.contains('show');`));

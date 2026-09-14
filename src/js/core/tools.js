@@ -367,6 +367,20 @@ export class Interaction {
         this.action = { type: 'lasso', pts: [wp] };
         break;
       case 'shape': this.action = { type: 'shapeDraw', start: wp, cur: wp, shift: e.shiftKey, dismissedMenu }; break;
+      case 'emoji': {
+        // Landing on something that is already there should pick it up rather
+        // than stamp on top of it - the same courtesy notes and text extend.
+        const hit = pick(this.store, wp, 8 / this.surface.cam.z);
+        if (hit) {
+          this.app.setSelection([hit.id]);
+          if (hit.locked) { this.app.hintLocked(); break; }
+          this.app.setTool('select');
+          this.startSelect(e, sp, wp);
+          break;
+        }
+        if (!dismissedMenu) this.app.addEmojiAt(wp);
+        break;
+      }
       case 'text': case 'note': {
         // clicking something that is already there should get hold of it,
         // not drop a new note or text box on top of it

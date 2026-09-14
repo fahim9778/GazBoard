@@ -7,10 +7,11 @@ import {
   SHAPE_STROKES, SHAPE_FILLS, SHAPES, SHAPE_LABELS, shapeIcon,
   PENS, penIcon, FONTS
 } from './palettes.js';
+import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
 
 const TOOL_ICON = {
   select: 'select', lasso: 'lasso', pen: 'pen', highlighter: 'highlighter',
-  eraser: 'eraser', note: 'note', text: 'text', shape: 'shapes'
+  eraser: 'eraser', note: 'note', text: 'text', shape: 'shapes', emoji: 'emoji'
 };
 const CMD_ICON = { undo: 'undo', redo: 'redo', insert: 'insert', ruler: 'ruler', more: 'more' };
 
@@ -113,6 +114,8 @@ export function initToolbar(app) {
   iconTool({ tool: 'note', icon: 'note', dot: true, key: 'N', title: 'Sticky note (N) \u2014 click again for colours',
     onClick: toggleTool('note') });
   iconTool({ tool: 'shape', icon: 'shapes', dot: true, key: 'S', title: 'Shapes (S)', onClick: toggleTool('shape') });
+  iconTool({ tool: 'emoji', icon: 'emoji', title: 'Emoji \u2014 click again to pick another',
+    onClick: toggleTool('emoji') });
   iconTool({ cmd: 'insert.image', icon: 'image', title: 'Insert image', onClick: () => app.command('insert.image') });
   iconTool({ cmd: 'insert', icon: 'insert', pop: 'insert', title: 'Insert document, table or template',
     onClick: (e, b) => openInsertPopover(app, b) });
@@ -238,6 +241,7 @@ function initPhoneToolbar(app, bar) {
     openPopover(add, h('div', { class: 'menu' },
       menuItem('Sticky note', 'note', pickTool('note')),
       menuItem('Text', 'text', pickTool('text')),
+      menuItem('Emoji', 'emoji', () => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, add, 'emoji'); }),
       // Shapes are a family, not one square. The chooser lives in the tool
       // popover, and on a phone there is no shape button to open it from - so
       // picking Shape here opens it, anchored where the finger already is.
@@ -398,6 +402,91 @@ function toggle(label, checked, onChange) {
   return h('label', { class: 'toggle' }, input, h('span', {}, label));
 }
 
+/**
+ * The emoji picker: a search box, the ones you used lately, then the groups.
+ *
+ * Choosing one does two things at once, and which one matters depends on what
+ * is selected. With an emoji selected it swaps that emoji's character, so a
+ * tick placed by mistake becomes a cross without deleting anything. With
+ * nothing selected it simply becomes the one the next tap will stamp. Both
+ * cases remember it, so the picker opens on what you were last using rather
+ * than scrolling back to the top every time.
+ */
+function emojiPicker(app) {
+  const s = app.settings;
+  const results = h('div', { class: 'emoji-grid' });
+  const sections = h('div', { class: 'emoji-sections' });
+
+  const choose = (ch) => {
+    app.rememberEmoji(ch);
+    const swapped = app.applyToSelection({ ch }, 'emoji');
+    if (!swapped) app.setTool('emoji');
+    app.syncUI();
+    closePopover();
+  };
+
+  const cell = (e) => {
+    const b = h('button', { class: 'emoji-cell' + (e.ch === s.emojiChar ? ' active' : ''), title: e.name });
+    b.textContent = e.ch;
+    b.addEventListener('click', () => choose(e.ch));
+    return b;
+  };
+
+  const search = h('input', {
+    class: 'emoji-search', type: 'search', placeholder: 'Search \u2014 tick, arrow, idea\u2026',
+    // a phone keyboard that autocorrects a search term is nobody's friend
+    autocomplete: 'off', autocorrect: 'off', autocapitalize: 'none', spellcheck: 'false'
+  });
+
+  const render = () => {
+    const q = search.value.trim();
+    results.replaceChildren();
+    if (!q) {
+      results.style.display = 'none';
+      sections.style.display = '';
+      return;
+    }
+    sections.style.display = 'none';
+    results.style.display = '';
+    const found = searchEmoji(q);
+    if (!found.length) {
+      results.appendChild(h('div', { class: 'emoji-empty' }, 'Nothing matches \u201c' + q + '\u201d'));
+      return;
+    }
+    for (const e of found) results.appendChild(cell(e));
+  };
+
+  search.addEventListener('input', render);
+  // Enter takes the first match, so a search can be finished without aiming.
+  search.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter') return;
+    const first = searchEmoji(search.value.trim(), 1)[0];
+    if (first) { ev.preventDefault(); choose(first.ch); }
+  });
+
+  const recent = (s.emojiRecent || []).filter(Boolean);
+  if (recent.length) {
+    const row = h('div', { class: 'emoji-grid' });
+    for (const ch of recent) row.appendChild(cell({ ch, name: 'Recently used' }));
+    sections.appendChild(h('h4', {}, 'Recent'));
+    sections.appendChild(row);
+  }
+  for (const g of EMOJI_GROUPS) {
+    const row = h('div', { class: 'emoji-grid' });
+    for (const e of g.items) row.appendChild(cell(e));
+    sections.appendChild(h('h4', {}, g.label));
+    sections.appendChild(row);
+  }
+
+  const body = h('div', { class: 'emoji-pop' }, search, results, sections);
+  render();
+  // The board is the thing being used; grabbing focus here would raise the
+  // on-screen keyboard on a phone every time the picker opened. Only a real
+  // pointer gets the cursor put in the box for it.
+  if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => search.focus(), 0);
+  return body;
+}
+
 /* ------------------------------------------------------------------ */
 export function openToolPopover(app, anchor, tool) {
   const s = app.settings;
@@ -493,6 +582,8 @@ export function openToolPopover(app, anchor, tool) {
         s.textFont = id; app.saveSettings(); app.applyToSelection({ font: id }, 'text');
       })
     );
+  } else if (tool === 'emoji') {
+    body = emojiPicker(app);
   } else if (tool === 'shape') {
     const grid = h('div', { class: 'shape-grid' });
     for (const k of SHAPES) {

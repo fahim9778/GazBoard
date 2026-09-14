@@ -29,6 +29,7 @@ export const DEFAULT_SETTINGS = {
   eraserSize: 30, eraserMode: 'partial',
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,
   noteColor: '#ffd94a', noteSize: 200, noteFont: 'hand',
+  emojiChar: '\u2705', emojiSize: 96, emojiRecent: [],
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
@@ -837,9 +838,12 @@ class App {
     this.saveSettings();
   }
 
+  /** Returns whether anything was actually changed, so a caller can tell. */
   applyToSelection(patch, onlyType) {
     const ids = this.selected.filter((o) => !onlyType || o.type === onlyType).map((o) => o.id);
-    if (ids.length) this.store.updateMany(ids, patch, 'format');
+    if (!ids.length) return false;
+    this.store.updateMany(ids, patch, 'format');
+    return true;
   }
 
   /** Bring a set of objects into view without selecting them. */
@@ -901,6 +905,41 @@ class App {
     if (this.tool !== 'select') this.setTool('select');
     this.setSelection([o.id]);
     this.beginTextEdit(o);
+  }
+
+  /*
+   * Stamp an emoji where the board was tapped.
+   *
+   * Square, because every emoji is drawn square and starting it that way means
+   * the first thing anyone does with the handles is make it bigger rather than
+   * un-squash it. Nothing opens afterwards - there is no text to type - so the
+   * tool follows the same "return to select" setting that notes and text do,
+   * and someone stamping a row of ticks can turn that off once and stay put.
+   */
+  addEmojiAt(wp, ch = this.settings.emojiChar) {
+    const size = this.worldSize(this.settings.emojiSize);
+    const o = {
+      id: uid('e'), type: 'emoji', ch,
+      x: wp.x - size / 2, y: wp.y - size / 2, w: size, h: size, rotation: 0
+    };
+    // Keeping it on the sheet is the interaction layer's job, and it may not
+    // exist yet when a board is being rebuilt, so ask rather than assume.
+    this.interaction?.placeOnPaper?.(o);
+    this.store.add(o, 'emoji');
+    this.rememberEmoji(ch);
+    this.armToolRestore();
+    if (this.settings.returnToSelect && this.tool !== 'select') this.setTool('select');
+    this.setSelection([o.id]);
+    this.syncUI();
+    return o;
+  }
+
+  /** The last few used, newest first, so the picker can offer them back. */
+  rememberEmoji(ch) {
+    const s = this.settings;
+    s.emojiChar = ch;
+    s.emojiRecent = [ch, ...(s.emojiRecent || []).filter((c) => c !== ch)].slice(0, 16);
+    this.saveSettings();
   }
 
   addTextAt(wp) {

@@ -93,6 +93,16 @@ function buildSvg(app, box) {
       if (o.text) parts.push(textSvg(meas, o.text, o.x + 14, o.y + 14, o.w - 28, o.h - 28, { align: o.align || 'center', valign: 'middle', color: o.textColor || '#201f1e', size: o.fontSize || 22 }, rot));
     } else if (o.type === 'text') {
       parts.push(textSvg(meas, o.text, o.x, o.y, o.w, o.h, { align: o.align || 'left', valign: 'top', color: o.color, size: o.fontSize || 24, font: o.font }, rot));
+    } else if (o.type === 'emoji') {
+      /*
+       * An emoji goes out as the character itself, not as a picture of it.
+       * Whoever opens the SVG sees it in their own emoji font, which is the
+       * same bargain the board makes on screen; a viewer with no emoji font
+       * at all gets a placeholder box, and there is nothing to be done about
+       * that short of embedding a font in every export.
+       */
+      const size = Math.min(o.w, o.h);
+      parts.push(`<text x="${o.x + o.w / 2}" y="${o.y + o.h / 2}" font-size="${size}" text-anchor="middle" dominant-baseline="central" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, sans-serif"${rot}>${esc(o.ch || '')}</text>`);
     } else if (o.type === 'image') {
       parts.push(`<image x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" href="${o.src}" preserveAspectRatio="none"${rot}/>`);
     } else if (o.type === 'table') {

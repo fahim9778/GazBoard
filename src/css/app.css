@@ -187,6 +187,31 @@ input, textarea { font: inherit; }
 .shape-btn:hover { background: var(--surface-2); }
 .shape-btn.active { background: var(--accent-soft); color: var(--accent); }
 
+/* The emoji picker. The list is long on purpose, so it scrolls inside the
+   popover rather than growing a popover taller than the screen. */
+.emoji-pop { width: 312px; max-width: 78vw; }
+.emoji-search {
+  width: 100%; box-sizing: border-box; margin-bottom: 10px;
+  padding: 8px 10px; font: inherit; font-size: 13.5px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+}
+.emoji-search:focus { outline: none; border-color: var(--accent); }
+.emoji-sections, .emoji-grid { max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; }
+.emoji-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.emoji-sections .emoji-grid { max-height: none; overflow: visible; }
+.emoji-sections h4 { margin: 10px 0 4px; }
+.emoji-sections h4:first-child { margin-top: 0; }
+.emoji-cell {
+  aspect-ratio: 1; width: 100%; border: 0; border-radius: 8px; background: none;
+  font-size: 21px; line-height: 1; cursor: pointer; padding: 0;
+  display: grid; place-items: center;
+}
+.emoji-cell:hover { background: var(--surface-2); }
+.emoji-cell.active { background: var(--accent-soft); }
+.emoji-empty { padding: 14px 2px; color: var(--text-2); font-size: 13px; }
+@media (pointer: coarse) { .emoji-cell { font-size: 24px; } }
+
 .menu { min-width: 240px; padding: 6px; }
 .menu-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 6px;
