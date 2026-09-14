@@ -40,6 +40,10 @@ async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true, 
     syncZoom() {}, afterCamera() {}, trackCanvasMove() {},
     showContextMenu() { app.menuShown = true; },
     setSelection(ids) { surface.selection.clear(); for (const id of ids) surface.selection.add(id); },
+    // Gathering mode (the touch multi-select button) and the group you have
+    // stepped inside, both of which the real app keeps on itself.
+    multiSelect: false,
+    openGroup: null,
     chooseObject(id, toggle = app.multiSelect) {
       if (!toggle) { app.setSelection([id]); return 'replaced'; }
       const ids = new Set(surface.selection);
@@ -138,6 +142,46 @@ test('A finger can still tap another note to edit it without ink', async () => {
   tap('touch', 350, 150);
   assert.equal(store.count, before);
   assert.equal(app.textEditor.target.id, 'other');
+});
+
+test('With gathering on, a finger tap adds a note instead of replacing and typing', async () => {
+  const { app, surface, tap } = await setup();
+  app.multiSelect = true;
+  tap('touch', 350, 150);
+  const got = { picked: [...surface.selection].sort(), typing: !!app.textEditor.active,
+    target: app.textEditor.target?.id ?? null };
+  assert.deepEqual(got, { picked: ['other', 'selected'], typing: false, target: null },
+    `gathering tap should add 'other' beside 'selected' and open no keyboard, got ${JSON.stringify(got)}`);
+});
+
+test('With gathering on, tapping a chosen note again puts it back down', async () => {
+  const { app, surface, tap } = await setup();
+  app.multiSelect = true;
+  tap('touch', 350, 150);
+  const mid = [...surface.selection].sort();
+  tap('touch', 350, 150);
+  const got = { after: [...surface.selection].sort(), typing: !!app.textEditor.active };
+  assert.deepEqual(got, { after: ['selected'], typing: false },
+    `second tap should drop 'other' again; after first tap ${JSON.stringify(mid)}, got ${JSON.stringify(got)}`);
+});
+
+test('With gathering on, a finger tap brings in the whole group', async () => {
+  const { app, store, surface, tap } = await setup();
+  for (const id of ['selected', 'other']) store.get(id).groupId = 'g1';
+  app.setSelection([]);
+  app.multiSelect = true;
+  tap('touch', 350, 150);
+  const got = { picked: [...surface.selection].sort(), typing: !!app.textEditor.active };
+  assert.deepEqual(got, { picked: ['other', 'selected'], typing: false },
+    `tapping one of a group should bring both in, got ${JSON.stringify(got)}`);
+});
+
+test('Without gathering, a finger tap still replaces the selection and opens the note', async () => {
+  const { app, surface, tap } = await setup();
+  tap('touch', 350, 150);
+  const got = { picked: [...surface.selection].sort(), target: app.textEditor.target?.id ?? null };
+  assert.deepEqual(got, { picked: ['other'], target: 'other' },
+    `a plain tap should replace the selection and open 'other' for writing, got ${JSON.stringify(got)}`);
 });
 
 test('Finger panning still dismisses the selection without ink', async () => {
