@@ -1,7 +1,7 @@
 // Pointer interaction: one small state machine covering every tool.
 
 import { uid, bboxOfPoints, clamp, dist, simplify, unionBox } from './util.js';
-import { boundsOf, worldBounds, withAttached } from './store.js';
+import { boundsOf, worldBounds, withAttached, withGroups} from './store.js';
 import { pick, inBox, inLasso, strokesAlong, normalizeBox } from './hit.js';
 import { handlePositions, HANDLE, HANDLES, drawShape } from './render.js';
 import { translateObject, scaleObject, rotateObjectAround, normalizeRect, anchorFor, CURSORS } from './transform.js';
@@ -892,11 +892,25 @@ export class Interaction {
       return;
     }
     if (hit) {
-      let ids;
       if (e.shiftKey || e.ctrlKey || e.metaKey) {
-        ids = new Set(sel);
-        ids.has(hit.id) ? ids.delete(hit.id) : ids.add(hit.id);
-        this.app.setSelection([...ids], false);
+        /*
+         * Add this to the selection, or take it back out.
+         *
+         * A grouped object goes in and out as a whole group, and the result is
+         * set without the usual widening - otherwise removing one member would
+         * be undone on the spot by the group being re-added, and a group could
+         * be put into a selection but never taken out of it again.
+         */
+        const ids = new Set(sel);
+        const family = withGroups(this.store, [hit.id], this.app.openGroup);
+        const alreadyIn = family.every((id) => ids.has(id));
+        for (const id of family) alreadyIn ? ids.delete(id) : ids.add(id);
+        this.app.setSelection([...ids], false, { whole: false });
+        // Taking something out is not the start of a drag; leaving the move
+        // armed here meant a shaky hand dragged everything still selected.
+        if (alreadyIn) return;
+      } else if (this.app.multiSelect) {
+        if (this.app.chooseObject(hit.id) === 'removed') return;
       } else if (!sel.has(hit.id)) {
         this.app.setSelection([hit.id], false);
       }
@@ -912,8 +926,12 @@ export class Interaction {
       return;
     }
 
-    if (!e.shiftKey) this.app.setSelection([], false);
-    this.action = { type: 'marquee', start: wp, cur: wp, additive: e.shiftKey };
+    // Dragging a box over empty board. The same keys that add one object at a
+    // time add a boxful, because having to remember which key does which is
+    // the sort of detail that makes people give up and start again.
+    const extend = e.shiftKey || e.ctrlKey || e.metaKey;
+    if (!extend) this.app.setSelection([], false);
+    this.action = { type: 'marquee', start: wp, cur: wp, additive: extend };
   }
 
   /* ------------------------------------------------------------ *
@@ -1048,7 +1066,10 @@ export class Interaction {
 
     if (hit.locked) { this.app.setSelection([hit.id]); this.app.hintLocked(); return true; }
 
-    this.app.setSelection([hit.id]);
+    const how = this.app.chooseObject(hit.id);
+    // While several are being gathered up, a tap means "this one as well" and
+    // nothing more - opening the keyboard on top of that would be a surprise.
+    if (how !== 'replaced') { this.surface.invalidate(); return true; }
     // Something with words in it opens for writing; everything else is simply
     // picked up, which is what a tap on a picture should do.
     if (['note', 'text', 'shape', 'table'].includes(hit.type)) {

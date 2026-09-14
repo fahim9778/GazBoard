@@ -695,12 +695,54 @@ class App {
     if (this.openGroup && ![...sel].some((id) => this.store.get(id)?.groupId === this.openGroup)) {
       this.openGroup = null;
     }
+    if (!sel.size) this.multiSelect = false;
     this.syncUI();
     this.surface.invalidate();
   }
 
   /** Which group, if any, is currently opened for picking single members. */
   openGroup = null;
+
+  /*
+   * Picking several things with a finger.
+   *
+   * A mouse says "and this one too" by holding Ctrl. A finger has no Ctrl, and
+   * the gestures that might stand in for it are all taken: a tap selects, a
+   * press-and-hold picks up, two fingers move the board. So on a touchscreen
+   * it is a mode instead - a button on the selection bar that says the next
+   * taps are adding rather than replacing. A mode is a worse idea than a
+   * modifier key in almost every case, but it is visible, it is reversible,
+   * and it does not fight any gesture that already exists.
+   *
+   * It switches itself off when the selection empties, so it can never be left
+   * on in a way that makes the next tap behave strangely.
+   */
+  multiSelect = false;
+
+  setMultiSelect(on) {
+    this.multiSelect = !!on;
+    this.toast(this.multiSelect ? 'Tap things to add them to the selection' : 'Back to normal tapping',
+      this.multiSelect ? 'select' : 'check', 1600);
+    this.syncUI();
+  }
+
+  /**
+   * A tap or click has chosen this object: replace the selection, or extend it.
+   *
+   * `toggle` is what a modifier key or the add-to-selection mode asks for.
+   * Returns 'added', 'removed' or 'replaced', because the caller needs to know
+   * whether a drag should now be armed - taking something OUT of a selection
+   * is not the beginning of moving what remains.
+   */
+  chooseObject(id, toggle = this.multiSelect) {
+    if (!toggle) { this.setSelection([id]); return 'replaced'; }
+    const ids = new Set(this.surface.selection);
+    const family = withGroups(this.store, [id], this.openGroup);
+    const alreadyIn = family.every((f) => ids.has(f));
+    for (const f of family) alreadyIn ? ids.delete(f) : ids.add(f);
+    this.setSelection([...ids], false, { whole: false });
+    return alreadyIn ? 'removed' : 'added';
+  }
 
   /** The groups represented in the current selection. */
   selectedGroups() {

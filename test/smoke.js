@@ -4477,6 +4477,79 @@ async function run(win, app) {
   check('one object on its own is not a group', grp.refusesSingle);
   check('undo puts a group back the way it was', grp.undoUngroups);
 
+  /* ---- picking several ------------------------------------------------- */
+  const multi = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.setSelection([]); a.openGroup = null; a.multiSelect = false;
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const mk = (n, x) => a.store.add({ id: 'ms' + n, type: 'shape', kind: 'rect',
+      x, y: 2000, w: 60, h: 40, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'test');
+    ['A','B','C'].forEach((n, i) => mk(n, 2000 + i * 200));
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y); return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const click = (x, y, mods = {}) => {
+      it.action = null; it.pointers.clear();
+      const base = { pointerId: 5, pointerType: 'mouse', button: 0,
+        clientX: at(x, y).x, clientY: at(x, y).y, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false };
+      it.onDown({ ...base, ...mods, buttons: 1 });
+      it.onUp({ ...base, ...mods, buttons: 0 });
+    };
+    const r = {};
+    a.setTool('select');
+
+    click(2030, 2020);
+    r.plainClick = sf.selection.size === 1;
+    click(2230, 2020, { ctrlKey: true });
+    r.ctrlAdds = sf.selection.size === 2;
+    click(2430, 2020, { shiftKey: true });
+    r.shiftAddsToo = sf.selection.size === 3;
+    click(2230, 2020, { ctrlKey: true });
+    r.ctrlRemoves = sf.selection.size === 2 && !sf.selection.has('msB');
+    r.removalArmsNoDrag = it.action === null;
+
+    // a group goes in and comes back out as one piece
+    a.setSelection(['msA', 'msB']);
+    a.groupSelection();
+    a.setSelection([]);
+    click(2030, 2020);
+    r.groupClicksIn = sf.selection.size === 2;
+    click(2430, 2020, { ctrlKey: true });
+    r.thirdAdded = sf.selection.size === 3;
+    click(2030, 2020, { ctrlKey: true });
+    r.groupComesOut = sf.selection.size === 1 && sf.selection.has('msC');
+    a.setSelection(['msA']); a.ungroupSelection();
+
+    // and the touch mode adds without any key held
+    a.setSelection(['msA']);
+    a.setMultiSelect(true);
+    r.modeOn = a.multiSelect === true;
+    r.modeAdds = a.chooseObject('msB') === 'added' && sf.selection.size === 2;
+    r.modeRemoves = a.chooseObject('msB') === 'removed' && sf.selection.size === 1;
+    a.setSelection([]);
+    r.modeDiesWithSelection = a.multiSelect === false;
+
+    a.setSelection([]); a.multiSelect = false;
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('a plain click selects just the one thing', multi.plainClick);
+  check('Ctrl-click adds another, and Shift-click does the same',
+    multi.ctrlAdds && multi.shiftAddsToo);
+  check('Ctrl-clicking a selected object takes it back out', multi.ctrlRemoves);
+  check('and taking one out does not arm a drag of the rest', multi.removalArmsNoDrag);
+  check('a group joins the selection whole', multi.groupClicksIn && multi.thirdAdded);
+  check('and leaves it whole, rather than being re-added a moment later',
+    multi.groupComesOut);
+  check('on a touchscreen the add-to-selection mode adds and removes',
+    multi.modeOn && multi.modeAdds && multi.modeRemoves);
+  check('and the mode switches itself off when nothing is selected',
+    multi.modeDiesWithSelection);
+
   /* ---- emoji ---------------------------------------------------------- *
    * Stamping one, the search that finds it, swapping the character on a
    * selection, and the tap that only shuts the picker.

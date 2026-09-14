@@ -148,6 +148,14 @@ export function updateSelectionBar(app) {
     bar.appendChild(h('span', { class: 'bar-sep' }));
   }
 
+  // Touchscreens have no Ctrl to hold, so gathering several up is a mode here.
+  if (matchMedia('(pointer: coarse)').matches) {
+    const more = mk(app.multiSelect ? 'Done adding' : 'Add more to the selection',
+      app.multiSelect ? 'check' : 'select', () => app.setMultiSelect(!app.multiSelect));
+    if (app.multiSelect) more.classList.add('on');
+    bar.appendChild(more);
+  }
+
   const grouped = app.selectedGroups().size > 0;
   if (grouped) bar.appendChild(mk('Ungroup (Ctrl+Shift+G)', 'ungroup', () => app.command('edit.ungroup')));
   else if (sel.length > 1) bar.appendChild(mk('Group (Ctrl+G)', 'group', () => app.command('edit.group')));
