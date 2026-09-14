@@ -34,6 +34,7 @@ export const DEFAULT_SETTINGS = {
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
   shapeKind: 'rect', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
+  showGroupOutlines: true,
   edgePan: true, importQuality: 2, lowLatencyInk: false, laserColor: '#ff2d2d',
   /*
    * The letters under the tool icons.
@@ -130,6 +131,7 @@ class App {
     this.store = new Store();
     this.settings = this.loadSettings();
     this.surface = new Surface(document.getElementById('c'), this.store, { lowLatency: !!this.settings.lowLatencyInk });
+    this.surface.showGroupOutlines = this.settings.showGroupOutlines !== false;
     this.tool = 'pen';
     this.clipboard = [];
     this.ruler = { visible: false, x: 0, y: 0, angle: 0, length: 900, thickness: 78, snap: true };
@@ -660,9 +662,22 @@ class App {
   }
 
   /* ---------------- tools & selection ---------------- */
+  /** The tools that arm themselves and wait for you to drop something. */
+  static PLACING = ['note', 'text', 'shape', 'emoji', 'table'];
+
   setTool(tool) {
     if (tool === 'pen' || tool === 'highlighter') this.lastInkTool = tool;
     if (this.tool === tool) return;
+    /*
+     * Reaching for a tool that drops something remembers what you were doing
+     * before, so backing out can put it back rather than guessing.
+     *
+     * Select is the obvious guess and it is wrong half the time: someone
+     * mid-sentence with the pen who reaches for a sticky note and changes
+     * their mind wants the pen back, not a selection arrow. The other half
+     * is equally wrong the other way. Remembering costs one field.
+     */
+    if (App.PLACING.includes(tool) && !App.PLACING.includes(this.tool)) this.toolBefore = this.tool;
     this.textEditor.commit();
     this.tool = tool;
     // a pen nib left behind by the tool it belonged to is just a stray picture
@@ -765,10 +780,52 @@ class App {
       return false;
     }
     const gid = uid('g');
-    this.store.updateMany(objs.map((o) => o.id), { groupId: gid }, 'group');
+    /*
+     * One name survives a regroup, several do not.
+     *
+     * Regrouping pieces that all came from Solar should still be Solar -
+     * that is the "oops, undo that ungroup" case, and retyping the name would
+     * be a small insult. But folding Solar and Wind together into one group
+     * leaves no honest answer to what it is called, and picking whichever
+     * happened to be first is a guess dressed up as a decision. So it comes
+     * out unnamed, and asks to be told.
+     */
+    const names = new Set(objs.map((o) => o.groupName).filter(Boolean));
+    const keep = names.size === 1 ? [...names][0] : null;
+    this.store.updateMany(objs.map((o) => o.id), { groupId: gid, groupName: keep }, 'group');
     this.openGroup = null;
     this.setSelection(objs.map((o) => o.id));
     this.toast(`${objs.length} items grouped`, 'check');
+    return true;
+  }
+
+  /**
+   * Give the selected group a name.
+   *
+   * The name rides on the members beside the group id, which keeps a group one
+   * idea rather than two: no separate table to keep in step, nothing to tidy
+   * up when the last member is deleted, and a copied group keeps its name
+   * because the name travelled with the pieces. Passing null asks; passing a
+   * string sets it without asking, which is what the tests use.
+   */
+  async nameGroup(name) {
+    const gids = [...this.selectedGroups()];
+    if (gids.length !== 1) {
+      this.toast(gids.length ? 'Select one group to name it' : 'Select a group first', 'help');
+      return false;
+    }
+    const ids = groupMembers(this.store, gids[0]);
+    const current = this.store.get(ids[0])?.groupName || '';
+    let next = name;
+    if (next === undefined || next === null) {
+      next = await this.askText('Name this group',
+        'Shown on the group\u2019s outline, so a board full of parts says what each part is.',
+        { value: current, placeholder: 'Solar, Wind, Testing\u2026', ok: 'Save' });
+      if (next === null) return false;
+    }
+    this.store.updateMany(ids, { groupName: next || null }, next ? 'name group' : 'clear group name');
+    this.surface.invalidate();
+    this.toast(next ? `Group named \u201c${next}\u201d` : 'Group name removed', 'check');
     return true;
   }
 
@@ -781,10 +838,19 @@ class App {
     }
     const ids = [];
     for (const gid of gids) ids.push(...groupMembers(this.store, gid));
-    // null rather than undefined: an undefined value can be dropped entirely
-    // by a clone or a round trip through a file, and a patch that loses its
-    // only key silently does nothing at all.
-    this.store.updateMany(ids, { groupId: null }, 'ungroup');
+    /*
+     * The name goes with the tie.
+     *
+     * Leaving it behind meant a loose object still quietly remembered it was
+     * once part of Solar, and grouping two of those later brought the old name
+     * back from nowhere - a name nobody typed, on a group nobody called that.
+     * A name describes a grouping; when the grouping ends, so does it.
+     *
+     * null rather than undefined: an undefined value can be dropped entirely
+     * by a clone or a round trip through a file, and a patch that loses its
+     * only key silently does nothing at all.
+     */
+    this.store.updateMany(ids, { groupId: null, groupName: null }, 'ungroup');
     this.openGroup = null;
     this.setSelection(ids);
     this.toast(gids.size > 1 ? `${gids.size} groups undone` : 'Group undone', 'check');
@@ -1175,6 +1241,7 @@ class App {
       case 'edit.duplicate': this.duplicate(); break;
       case 'edit.group': this.groupSelection(); break;
       case 'edit.ungroup': this.ungroupSelection(); break;
+      case 'edit.nameGroup': this.nameGroup(); break;
       case 'edit.clear':
         this.confirm('Clear canvas?', 'Everything on this board will be removed. You can undo this.', 'Clear')
           .then((ok) => { if (ok) { s.clear(); sf.selection.clear(); } });
@@ -2004,6 +2071,38 @@ class App {
     });
   }
 
+  /**
+   * Ask for a line of text. Resolves to the string, or null if they backed out.
+   *
+   * Built the same way as choose() rather than on the browser's prompt(),
+   * which Electron refuses to show at all.
+   */
+  askText(title, text, { value = '', placeholder = '', ok = 'OK' } = {}) {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('overlay');
+      const card = document.getElementById('overlayCard');
+      card.innerHTML = '';
+      const done = (v) => { this._overlayDismiss = null; overlay.classList.remove('show'); resolve(v); };
+      card.appendChild(h('h3', {}, title));
+      if (text) card.appendChild(h('p', {}, text));
+      const input = h('input', {
+        type: 'text', value, placeholder,
+        style: 'width:100%;box-sizing:border-box;padding:8px 10px;font:inherit;font-size:14px;'
+          + 'border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--text)'
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); }
+        if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      });
+      card.appendChild(input);
+      card.appendChild(h('div', { class: 'actions' },
+        h('button', { class: 'btn', onclick: () => done(null) }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: () => done(input.value.trim()) }, ok)));
+      this.showOverlay(() => resolve(null));
+      setTimeout(() => { input.focus(); input.select(); }, 0);
+    });
+  }
+
   confirm(title, text, confirmLabel = 'OK') {
     return new Promise((resolve) => {
       const overlay = document.getElementById('overlay');
@@ -2443,13 +2542,31 @@ class App {
 
     switch (e.key) {
       case 'Delete': case 'Backspace': e.preventDefault(); this.command('edit.delete'); return;
-      case 'Escape':
-        // A dialog, a popover or the panel is dealt with in initDismissal(),
-        // which stops the event before it reaches here. Getting this far means
-        // nothing is layered over the board, so Escape means "never mind" about
-        // whatever is selected.
+      case 'Escape': {
+        /*
+         * Escape means "never mind", and there are three things it can mean
+         * that about, in the order they are most likely to be on your mind.
+         *
+         * A dialog, a popover or the panel is dealt with in initDismissal(),
+         * which stops the event before it reaches here, so getting this far
+         * means nothing is layered over the board.
+         */
+        // 1. Something is being drawn right now. Abandon it; nothing was ever
+        //    added to the board, so there is nothing to undo afterwards.
+        if (this.interaction?.cancelGesture?.()) return;
+        // 2. A tool is armed and waiting to drop something - a note, a text
+        //    box, a shape, an emoji. Changing your mind before the drop puts
+        //    you back where you were, which is the pen if you were writing and
+        //    Select if you were not.
+        if (App.PLACING.includes(this.tool)) {
+          this.setTool(this.toolBefore || 'select');
+          this.syncUI();
+          return;
+        }
+        // 3. Otherwise it is about whatever is selected.
         this.setSelection([]);
         return;
+      }
       case 'F2': {
         const o = this.selected[0];
         if (o && ['note', 'text', 'shape', 'table'].includes(o.type)) this.beginTextEdit(o);

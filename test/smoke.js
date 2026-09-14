@@ -4370,6 +4370,86 @@ async function run(win, app) {
   check('and a plain tap still drops a default-sized one',
     shapes.afterTap === shapes.before + 3, `${shapes.afterTap - shapes.before} shape(s)`);
 
+  /* ---- Escape means never mind ------------------------------------------ */
+  const esc = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.hideMenus(); a.setSelection([]);
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y); return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons) => ({ pointerId: 31, pointerType: 'mouse', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false });
+    const escape = () => a.onKeyDown({ key: 'Escape', preventDefault() {}, ctrlKey: false, metaKey: false, shiftKey: false, code: 'Escape' });
+    const count = (t) => a.store.objects.filter((o) => o.type === t).length;
+    const r = {};
+
+    // 1. a shape being dragged out is abandoned, and leaves nothing behind
+    a.setTool('shape');
+    const shapesWere = count('shape');
+    const undosWere = a.store.undoDepth ?? null;
+    it.onDown(mk(at(4000, 4000), 1));
+    it.onMove(mk(at(4120, 4090), 1));
+    r.midDrag = it.action?.type === 'shapeDraw' && it.pointers.size === 1;
+    escape();
+    r.dragAbandoned = it.action === null;
+    it.onUp(mk(at(4120, 4090), 0));
+    r.nothingAdded = count('shape') === shapesWere;
+
+    // 2. with a tool armed and nothing in flight, Escape puts you back where
+    //    you were - the pen if you were writing, Select if you were not
+    a.setTool('select');
+    a.setTool('note');
+    escape();
+    r.toolPutDown = a.tool === 'select';
+    a.setTool('pen');
+    a.setTool('emoji');
+    escape();
+    r.backToThePen = a.tool === 'pen';
+    a.setTool('highlighter');
+    a.setTool('shape');
+    escape();
+    r.backToTheHighlighter = a.tool === 'highlighter';
+
+    // 3. and otherwise it is about the selection, as before
+    const s1 = a.store.add({ id: 'escA', type: 'shape', kind: 'rect', x: 4300, y: 4000,
+      w: 50, h: 40, rotation: 0, stroke: '#000', fill: '#fff', lineWidth: 2 }, 'test');
+    a.setTool('select');
+    a.setSelection(['escA']);
+    escape();
+    r.selectionCleared = sf.selection.size === 0;
+
+    // a move abandoned halfway puts the object back where it started
+    a.setSelection(['escA']);
+    const xWas = a.store.get('escA').x;
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(at(4320, 4020), 1));
+    it.onMove(mk(at(4600, 4020), 1));
+    r.moved = a.store.get('escA').x !== xWas;
+    escape();
+    r.movePutBack = a.store.get('escA').x === xWas;
+    it.onUp(mk(at(4600, 4020), 0));
+
+    a.setTool('select'); a.setSelection([]); a.hideMenus();
+    const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
+    if (mine.length) a.store.remove(mine);
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('Escape abandons a shape being dragged out, and adds nothing',
+    esc.midDrag && esc.dragAbandoned && esc.nothingAdded);
+  check('Escape puts down a tool that is armed but has dropped nothing yet',
+    esc.toolPutDown);
+  check('and hands you back what you were using, not always Select',
+    esc.backToThePen && esc.backToTheHighlighter);
+  check('Escape still clears the selection when nothing else is pending',
+    esc.selectionCleared);
+  check('a move abandoned halfway puts the object back where it started',
+    esc.moved && esc.movePutBack);
+
   /* ---- grouping -------------------------------------------------------- *
    * A poster made of shapes should move as one thing. Grouping is a shared
    * name rather than a container, so what is tested here is that selection
@@ -4382,7 +4462,7 @@ async function run(win, app) {
     const had = new Set(a.store.objects.map((o) => o.id));
     a.setSelection([]); a.openGroup = null;
     const mk = (n, x) => a.store.add({ id: 'grp' + n, type: 'shape', kind: 'rect',
-      x, y: 500, w: 40, h: 30, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'test');
+      x, y: 500, w: 40, h: 30, rotation: 0, stroke: '#000', fill: '#ffffff', lineWidth: 2 }, 'test');
     const parts = [mk('A', 100), mk('B', 200), mk('C', 300)];
     const loose = mk('D', 900);
     const r = {};
@@ -4440,10 +4520,78 @@ async function run(win, app) {
     r.foldsInRatherThanNesting =
       ['grpA','grpB','grpC','grpD'].every((id) => a.store.get(id).groupId === gid2) && gid2 !== gid;
 
-    // ungroup frees every one of them
+    // a group can be named, and the name travels with its pieces
+    a.setSelection(['grpA']);
+    r.namedOk = await a.nameGroup('Solar');
+    r.nameOnEveryMember = ['grpA','grpB','grpC','grpD']
+      .every((id) => a.store.get(id).groupName === 'Solar');
+    a.duplicate();
+    const namedCopies = a.selected;
+    r.copyKeepsName = namedCopies.every((o) => o.groupName === 'Solar')
+      && namedCopies[0].groupId !== a.store.get('grpA').groupId;
+    a.store.remove(namedCopies.map((o) => o.id));
+    a.setSelection(['grpA']);
+    r.nameCleared = (await a.nameGroup('')) && a.store.get('grpA').groupName === null;
+    await a.nameGroup('Solar');
+    r.namingNeedsAGroup = (await (async () => {
+      a.setSelection([]);
+      return a.nameGroup('Nope');
+    })()) === false;
+    a.setSelection(['grpA']);
+
+    // ungroup frees every one of them, and takes the name with it
     a.setSelection(['grpA']);
     r.ungrouped = a.ungroupSelection();
     r.allFree = ['grpA','grpB','grpC','grpD'].every((id) => !a.store.get(id).groupId);
+    r.nameWentWithIt = ['grpA','grpB','grpC','grpD'].every((id) => !a.store.get(id).groupName);
+
+    // regrouping the same pieces keeps the name; mixing two named groups drops it
+    a.setSelection(['grpA','grpB']);
+    a.groupSelection();
+    await a.nameGroup('Solar');
+    a.setSelection(['grpC','grpD']);
+    a.groupSelection();
+    await a.nameGroup('Wind');
+    a.setSelection(['grpA']);
+    a.ungroupSelection();
+    a.setSelection(['grpA','grpB']);
+    a.groupSelection();
+    r.regroupForgets = !a.store.get('grpA').groupName;
+    await a.nameGroup('Solar');
+    a.setSelection(['grpA','grpC']);
+    a.groupSelection();
+    r.mixedDropsBothNames = !a.store.get('grpA').groupName && !a.store.get('grpC').groupName;
+    a.setSelection(['grpA']);
+    a.ungroupSelection();
+
+    /*
+     * The case that started this: name a group, break it up, then build a new
+     * group that happens to include one of the old pieces. The new group must
+     * be nameless - both in what is stored and in what gets drawn.
+     */
+    a.setSelection(['grpA','grpB','grpC']);
+    a.groupSelection();
+    await a.nameGroup('Solar');
+    a.setSelection(['grpA']);
+    a.ungroupSelection();
+    a.setSelection(['grpA','grpD']);          // one old piece, one that never was
+    a.groupSelection();
+    r.strayDoesNotResurrect =
+      !a.store.get('grpA').groupName && !a.store.get('grpD').groupName;
+    // and even if a name somehow clung to one piece, it must not be drawn
+    a.store.update('grpA', { groupName: 'Solar' });
+    sf._groupRev = -1;
+    const gidNow = a.store.get('grpA').groupId;
+    const boxes = new Map();
+    for (const o of a.store.objects) {
+      if (o?.groupId !== gidNow) continue;
+      const cur = boxes.get(gidNow);
+      if (!cur) { boxes.set(gidNow, { name: o.groupName || '' }); continue; }
+      if ((o.groupName || '') !== cur.name) cur.name = '';
+    }
+    r.disagreementShowsNoName = boxes.get(gidNow)?.name === '';
+    a.setSelection(['grpA']);
+    a.ungroupSelection();
 
     // one object is not a group
     a.setSelection(['grpA']);
@@ -4473,7 +4621,20 @@ async function run(win, app) {
   check('and closes again as soon as something outside is picked',
     grp.leavingCloses && grp.closedMeansWholeAgain);
   check('grouping a group folds it in rather than nesting', grp.foldsInRatherThanNesting);
+  check('a group can be given a name, and every member carries it',
+    grp.namedOk && grp.nameOnEveryMember);
+  check('a copy of a named group keeps the name but not the identity', grp.copyKeepsName);
+  check('an empty name clears it rather than storing nothing useful', grp.nameCleared);
+  check('naming with nothing selected is refused, not guessed at', grp.namingNeedsAGroup);
   check('ungrouping frees every member', grp.ungrouped && grp.allFree);
+  check('and the name goes with the grouping rather than haunting the pieces',
+    grp.nameWentWithIt && grp.regroupForgets);
+  check('folding two named groups together leaves it unnamed rather than guessing',
+    grp.mixedDropsBothNames);
+  check('a new group built from an old piece does not inherit the old name',
+    grp.strayDoesNotResurrect);
+  check('and a name only one member agrees with is not drawn at all',
+    grp.disagreementShowsNoName);
   check('one object on its own is not a group', grp.refusesSingle);
   check('undo puts a group back the way it was', grp.undoUngroups);
 
@@ -4484,8 +4645,11 @@ async function run(win, app) {
     a.setSelection([]); a.openGroup = null; a.multiSelect = false;
     const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
     sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    // Filled, because an unfilled shape is only hittable on its outline - a
+    // click in the hollow middle of one goes straight past it, which is how
+    // this test spent a run clicking through its own rectangles.
     const mk = (n, x) => a.store.add({ id: 'ms' + n, type: 'shape', kind: 'rect',
-      x, y: 2000, w: 60, h: 40, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'test');
+      x, y: 2000, w: 60, h: 40, rotation: 0, stroke: '#000', fill: '#ffffff', lineWidth: 2 }, 'test');
     ['A','B','C'].forEach((n, i) => mk(n, 2000 + i * 200));
     const rect = sf.canvas.getBoundingClientRect();
     const at = (x, y) => { const p = sf.cam.toScreen(x, y); return { x: rect.left + p.x, y: rect.top + p.y }; };
@@ -4497,17 +4661,112 @@ async function run(win, app) {
       it.onUp({ ...base, ...mods, buttons: 0 });
     };
     const r = {};
+    // If a click lands on nothing, every check below fails for one boring
+    // reason; say so plainly rather than leaving eight red lines to puzzle over.
+    const { pick } = await import('./js/core/hit.js');
+    r.shapesExist = ['msA','msB','msC'].every((id) => !!a.store.get(id));
+    r.clickLandsOnShape = pick(a.store, { x: 2030, y: 2020 })?.id === 'msA';
+    r.secondLands = pick(a.store, { x: 2230, y: 2020 })?.id === 'msB';
+
+    /*
+     * The same clicks with the PEN tool chosen and a stylus already seen,
+     * which is the path most people are actually on: the pen draws and the
+     * mouse points. It used to ignore Ctrl and behave like a plain click.
+     */
+    a.setTool('pen');
+    // mouseInks is a getter over this setting, so the setting is the way to
+    // put the mouse into pointer mode. Assigning to the getter does nothing at
+    // all, which is how an earlier version of this test ended up drawing ink
+    // over its own shapes and then failing to click them.
+    const inkWas = a.settings.inkWithMouse;
+    a.settings.inkWithMouse = 'no';
+    r.pointerModeOn = a.mouseInks === false;
+    a.setSelection([]);
+    click(2030, 2020);
+    const pointerFirst = sf.selection.size;
+    click(2230, 2020, { ctrlKey: true });
+    r.pointerCtrlAdds = sf.selection.size === pointerFirst + 1;
+    click(2430, 2020, { shiftKey: true });
+    r.pointerShiftAdds = sf.selection.size === pointerFirst + 2;
+    click(2230, 2020, { ctrlKey: true });
+    r.pointerCtrlRemoves = !sf.selection.has('msB');
+    /*
+     * And with the mouse set to DRAW, which is the other half of the trap:
+     * the press used to go straight off to start a stroke, so Ctrl-click left
+     * a dot instead of a selection.
+     */
+    a.settings.inkWithMouse = 'yes';
+    a.setSelection([]);
+    const inkBefore = a.store.objects.filter((o) => o.type === 'stroke').length;
+    click(2030, 2020, { ctrlKey: true });
+    click(2230, 2020, { ctrlKey: true });
+    r.inkingCtrlSelects = sf.selection.size === 2;
+    r.inkingCtrlDrewNothing =
+      a.store.objects.filter((o) => o.type === 'stroke').length === inkBefore;
+
+    // a stylus tap with Ctrl held picks up too, rather than leaving a dot
+    a.setSelection([]);
+    const penInk = a.store.objects.filter((o) => o.type === 'stroke').length;
+    const penClick = (x, y) => {
+      it.action = null; it.pointers.clear();
+      const p = at(x, y);
+      const base = { pointerId: 9, pointerType: 'pen', button: 0, pressure: 0.5,
+        clientX: p.x, clientY: p.y, shiftKey: false, ctrlKey: true, metaKey: false, altKey: false };
+      it.onDown({ ...base, buttons: 1 });
+      it.onUp({ ...base, buttons: 0 });
+    };
+    penClick(2030, 2020);
+    penClick(2430, 2020);
+    r.stylusCtrlSelects = sf.selection.size === 2;
+    r.stylusCtrlDrewNothing =
+      a.store.objects.filter((o) => o.type === 'stroke').length === penInk;
+
+    a.settings.inkWithMouse = inkWas;
+    a.setSelection([]);
+    // Anything the pen may have left behind goes now, so the clicks below land
+    // on the test shapes rather than on a stray dot lying over one of them.
+    const strays = a.store.objects.filter((o) => !had.has(o.id) && !/^ms[ABC]$/.test(o.id)).map((o) => o.id);
+    if (strays.length) a.store.remove(strays);
+
     a.setTool('select');
 
     click(2030, 2020);
+    r.sizeAfterPlain = sf.selection.size;
     r.plainClick = sf.selection.size === 1;
     click(2230, 2020, { ctrlKey: true });
+    r.sizeAfterCtrl = sf.selection.size;
     r.ctrlAdds = sf.selection.size === 2;
     click(2430, 2020, { shiftKey: true });
+    r.sizeAfterShift = sf.selection.size;
     r.shiftAddsToo = sf.selection.size === 3;
     click(2230, 2020, { ctrlKey: true });
     r.ctrlRemoves = sf.selection.size === 2 && !sf.selection.has('msB');
     r.removalArmsNoDrag = it.action === null;
+
+    // Dragging a grouped object with the mouse acting as a pointer - the pen
+    // drawing, the Wacom connected - has to bring the whole group. This path
+    // gathers its own objects and used to know only about attachment.
+    a.setSelection(['msA', 'msB']);
+    a.groupSelection();
+    a.setSelection([]);
+    const wasInk2 = a.settings.inkWithMouse;
+    a.settings.inkWithMouse = 'no';
+    a.setTool('pen');
+    const bWas = a.store.get('msB').x;
+    it.action = null; it.pointers.clear();
+    const from = at(2030, 2020), to = at(2090, 2020);
+    const drag = (p, buttons) => ({ pointerId: 6, pointerType: 'mouse', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false });
+    it.onDown(drag(from, 1));
+    it.onMove(drag(to, 1));
+    it.onUp(drag(to, 0));
+    r.pointerDragMovesGroup = a.store.get('msB').x !== bWas;
+    r.pointerDragMovedBoth = a.store.get('msA').x !== 2000 && a.store.get('msB').x !== bWas;
+    a.settings.inkWithMouse = wasInk2;
+    a.setTool('select');
+    a.setSelection(['msA']); a.ungroupSelection();
+    a.store.update('msA', { x: 2000 }); a.store.update('msB', { x: 2200 });
+    a.setSelection([]);
 
     // a group goes in and comes back out as one piece
     a.setSelection(['msA', 'msB']);
@@ -4537,11 +4796,28 @@ async function run(win, app) {
     it.action = null; it.pointers.clear();
     return r;
   `);
-  check('a plain click selects just the one thing', multi.plainClick);
+  check('the test shapes exist where the test clicks',
+    multi.shapesExist && multi.clickLandsOnShape && multi.secondLands,
+    `exist ${multi.shapesExist}, first ${multi.clickLandsOnShape}, second ${multi.secondLands}`);
+  check('the mouse can be put into pointer mode for this test', multi.pointerModeOn);
+  check('Ctrl-click gathers objects up even while the pen tool is chosen',
+    multi.pointerCtrlAdds && multi.pointerShiftAdds);
+  check('and Ctrl-clicking one of them there takes it back out', multi.pointerCtrlRemoves);
+  check('Ctrl-click selects even when the mouse is set to draw, and leaves no ink',
+    multi.inkingCtrlSelects && multi.inkingCtrlDrewNothing,
+    `selected ${multi.inkingCtrlSelects}, clean ${multi.inkingCtrlDrewNothing}`);
+  check('a stylus with Ctrl held picks things up rather than dotting them',
+    multi.stylusCtrlSelects && multi.stylusCtrlDrewNothing,
+    `selected ${multi.stylusCtrlSelects}, clean ${multi.stylusCtrlDrewNothing}`);
+  check('a plain click selects just the one thing', multi.plainClick,
+    `selection was ${multi.sizeAfterPlain}`);
   check('Ctrl-click adds another, and Shift-click does the same',
-    multi.ctrlAdds && multi.shiftAddsToo);
+    multi.ctrlAdds && multi.shiftAddsToo,
+    `after Ctrl ${multi.sizeAfterCtrl}, after Shift ${multi.sizeAfterShift}`);
   check('Ctrl-clicking a selected object takes it back out', multi.ctrlRemoves);
   check('and taking one out does not arm a drag of the rest', multi.removalArmsNoDrag);
+  check('dragging a grouped object with the pointer brings the whole group',
+    multi.pointerDragMovesGroup && multi.pointerDragMovedBoth);
   check('a group joins the selection whole', multi.groupClicksIn && multi.thirdAdded);
   check('and leaves it whole, rather than being re-added a moment later',
     multi.groupComesOut);
@@ -4639,6 +4915,23 @@ async function run(win, app) {
     a.store.undo();
     r.undone = count() === wasThere;
 
+    /*
+     * Stamping one sends the board back to Select, so the next press of the
+     * emoji button is its FIRST press again. Under the usual click-again rule
+     * that press only re-arms the tool and looks like nothing happened.
+     */
+    a.hideMenus();
+    a.setTool('select');
+    const emojiBtn = document.querySelector('#toolbar [data-tool="emoji"]');
+    r.buttonExists = !!emojiBtn;
+    emojiBtn?.click();
+    await new Promise((res) => setTimeout(res, 80));
+    r.oneClickOpensPicker = !!document.querySelector('.pop .emoji-search');
+    r.oneClickAlsoArmsTool = a.tool === 'emoji';
+    emojiBtn?.click();                       // and pressing it again puts it away
+    await new Promise((res) => setTimeout(res, 80));
+    r.secondClickCloses = !document.querySelector('.pop .emoji-search');
+
     a.settings.returnToSelect = returnWas;
     a.setTool('select'); a.setSelection([]); a.hideMenus();
     const mine = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id);
@@ -4647,6 +4940,9 @@ async function run(win, app) {
     it.action = null; it.pointers.clear();
     return r;
   `);
+  check('the emoji button opens the picker on the first press, not the second',
+    emo.buttonExists && emo.oneClickOpensPicker && emo.oneClickAlsoArmsTool);
+  check('and pressing it again puts the picker away', emo.secondClickCloses);
   check('the emoji catalogue is a useful size and free of repeats',
     emo.catalogue > 150 && emo.noDuplicates, `${emo.catalogue} entries`);
   check('every emoji sits in exactly one group', emo.allGrouped && emo.everyGroupHasItems);
@@ -6794,9 +7090,20 @@ module.exports.run = async (win, app) => {
       { key: 'Escape', bubbles: true, cancelable: true }));
     const pointerOn = (el) => el.dispatchEvent(new PointerEvent('pointerdown',
       { bubbles: true, clientX: 5, clientY: 5 }));
-    // a real "somewhere else": the board itself
-    const clickBoard = () => sf.canvas.dispatchEvent(new PointerEvent('pointerdown',
-      { bubbles: true, clientX: 40, clientY: 40, pointerId: 77, pointerType: 'mouse', button: 0, buttons: 1 }));
+    /*
+     * A real "somewhere else": the board itself.
+     *
+     * The button has to come back UP. Pressing and never lifting leaves the
+     * app genuinely mid-gesture - a marquee being dragged out with the mouse
+     * still held - and everything after it then behaves the way it should for
+     * someone holding the button down, which is not what these checks mean to
+     * be testing.
+     */
+    const clickBoard = () => {
+      const at = { bubbles: true, clientX: 40, clientY: 40, pointerId: 77, pointerType: 'mouse', button: 0 };
+      sf.canvas.dispatchEvent(new PointerEvent('pointerdown', { ...at, buttons: 1 }));
+      sf.canvas.dispatchEvent(new PointerEvent('pointerup', { ...at, buttons: 0 }));
+    };
     const timed = (p, ms = 1500) => Promise.race([p, sleep(ms).then(() => 'TIMED OUT')]);
 
     /* --- the shortcuts list: the one that had to be scrolled to be closed --- */
@@ -6859,13 +7166,41 @@ module.exports.run = async (win, app) => {
     esc(); await sleep(20);
     r.panelEsc = !panelShown();
 
-    /* --- and with nothing layered, Escape still means "deselect" --- */
+    /* --- and with nothing layered, Escape still means "deselect" ---
+     *
+     * The tool is said out loud here. Escape now has a ladder of meanings -
+     * abandon what is being drawn, put down a tool that is armed to drop
+     * something, then deselect - so a test about deselecting has to say which
+     * rung it is standing on rather than inheriting a tool from whatever ran
+     * before it.
+     */
+    a.setTool('select');
     a.store.add({ id: 'b1', type: 'shape', kind: 'rect', x: 100, y: 100, w: 80, h: 60,
       rotation: 0, stroke: '#000', fill: '#eee', lineWidth: 2 }, 'seed');
     a.setSelection(['b1']);
     r.hadSelection = sf.selection.size === 1;
+    // What this press is landing on, so a failure says why rather than no.
+    r.why = {
+      tool: a.tool,
+      focus: document.activeElement ? document.activeElement.tagName : 'none',
+      editing: !!a.textEditor.active,
+      action: a.interaction.action ? a.interaction.action.type : null,
+      pointers: a.interaction.pointers.size,
+      overlay: shown(),
+      panel: panelShown(),
+      pop: !!document.querySelector('.pop')
+    };
     esc(); await sleep(20);
     r.escapeStillDeselects = sf.selection.size === 0;
+
+    // There is no "armed tool AND a selection" case to test: choosing a tool
+    // that drops something clears the selection on the way in, by design, so
+    // the two can never be pending at once. Escape only ever has one job.
+    a.setSelection(['b1']);
+    a.setTool('shape');
+    r.armingClearedTheSelection = sf.selection.size === 0;
+    esc(); await sleep(20);
+    r.escapePutTheToolDown = a.tool === 'select';
 
     // a dialog on top must NOT let Escape reach the board and clear a selection
     a.setSelection(['b1']);
@@ -6895,7 +7230,10 @@ module.exports.run = async (win, app) => {
     dismiss.panelOpen && dismiss.panelEsc && dismiss.boardClickCloses);
   check('but not on a click inside it, nor on the toolbar that toggles it',
     dismiss.insideKeepsItOpen && dismiss.toolbarKeepsItOpen);
-  check('with nothing layered, Escape still clears the selection',
+  check('arming a placement tool clears the selection, so Escape is never ambiguous',
+    dismiss.armingClearedTheSelection && dismiss.escapePutTheToolDown);
+  check('with nothing layered, Escape still clears the selection ' +
+    JSON.stringify(dismiss.why),
     dismiss.hadSelection && dismiss.escapeStillDeselects);
   check('and Escape aimed at a dialog does not reach through and clear it',
     dismiss.selectionSurvivedDialogEscape);

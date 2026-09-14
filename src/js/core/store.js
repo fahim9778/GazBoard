@@ -272,6 +272,29 @@ export class Store {
     return snap;
   }
 
+  /**
+   * Put everything back the way the snapshot found it, and record nothing.
+   *
+   * The counterpart to commitSnapshot: that one keeps the change and files it
+   * as a single undo entry, this one throws the change away. Used when a drag
+   * is abandoned mid-flight, where the objects have already been moved on
+   * screen but nothing should be remembered - not the move, and not an undo
+   * step for a move that never happened.
+   */
+  restoreSnapshot(snap) {
+    if (!snap || !snap.size) return false;
+    let touched = false;
+    for (const [id, before] of snap) {
+      const now = this.get(id);
+      if (!now) continue;
+      for (const k of Object.keys(now)) if (!(k in before)) delete now[k];
+      Object.assign(now, structuredCloneSafe(before));
+      touched = true;
+    }
+    if (touched) this.rev++;
+    return touched;
+  }
+
   commitSnapshot(label, snap) {
     const ops = [];
     for (const [id, before] of snap) {

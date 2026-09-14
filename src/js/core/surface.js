@@ -1,7 +1,7 @@
 // The canvas view: sizing, the draw loop, culling, overlays.
 
 import { Camera } from './camera.js';
-import { drawBackground, drawObject, drawSelection, drawMemberOutline, drawLockBadge, FONT } from './render.js';
+import { drawBackground, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect } from './util.js';
@@ -31,6 +31,11 @@ export class Surface {
     this.laser = [];           // pointer trail: {x,y,t} world points, never saved
     this._lockedRev = -1;      // revision the locked-object list was built for
     this._locked = [];
+    this._groupRev = -1;       // and the same for the group outlines
+    this._groupBoxes = null;
+    // Outline every group, or only the one being touched. The app keeps this
+    // in step with its settings; the surface does not reach back for it.
+    this.showGroupOutlines = true;
     this.selection = new Set();
     this.hoverId = null;
     this._raf = null;
@@ -482,7 +487,60 @@ export class Surface {
     }
     for (const o of this._locked) {
       if (!boxesIntersect(vbox, worldBounds(o))) continue;
+      drawLockedOutline(ctx, cam, o);
       drawLockBadge(ctx, cam, o);
+    }
+
+    /*
+     * Groups worth pointing out: the one being touched, and the one under the
+     * cursor. Their outlines are measured when the document changes rather
+     * than every frame, for the same reason the locked list is.
+     */
+    const active = new Set();
+    for (const id of this.selection) {
+      const o = this.store.get(id);
+      if (o?.groupId) active.add(o.groupId);
+    }
+    const hovered = this.hoverId ? this.store.get(this.hoverId) : null;
+    if (hovered?.groupId) active.add(hovered.groupId);
+    // Every group on the board is outlined, faintly, so that a finished poster
+    // says which of its parts are tied together without being prodded first.
+    // Anyone who finds that busy can switch it off in Settings.
+    const showAll = this.showGroupOutlines !== false;
+    const gids = showAll ? null : active;
+    if (showAll || gids.size) {
+      if (this._groupRev !== this.store.rev || !this._groupBoxes) {
+        this._groupRev = this.store.rev;
+        this._groupBoxes = new Map();
+        for (const o of this.store.objects) {
+          if (!o?.groupId) continue;
+          const b = worldBounds(o);
+          const cur = this._groupBoxes.get(o.groupId);
+          if (!cur) {
+            this._groupBoxes.set(o.groupId, { x: b.x, y: b.y, r: b.x + b.w, d: b.y + b.h, name: o.groupName || '' });
+            continue;
+          }
+          /*
+           * Every member has to agree on the name for it to be shown.
+           *
+           * The name is stored on the pieces, so one piece carrying a name the
+           * others do not is not a group called that - it is a leftover from
+           * some earlier grouping. Taking the first one found would let an old
+           * name reappear on a group nobody gave it to, which is worse than
+           * showing no name at all.
+           */
+          if ((o.groupName || '') !== cur.name) cur.name = '';
+          cur.x = Math.min(cur.x, b.x); cur.y = Math.min(cur.y, b.y);
+          cur.r = Math.max(cur.r, b.x + b.w); cur.d = Math.max(cur.d, b.y + b.h);
+        }
+      }
+      for (const gid of (gids || this._groupBoxes?.keys() || [])) {
+        const c = this._groupBoxes?.get(gid);
+        if (!c) continue;
+        const box = { x: c.x, y: c.y, w: c.r - c.x, h: c.d - c.y };
+        if (!boxesIntersect(vbox, box)) continue;
+        drawGroupHint(ctx, cam, box, active.has(gid), c.name);
+      }
     }
 
     if (this.selection.size) {

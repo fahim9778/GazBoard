@@ -114,8 +114,22 @@ export function initToolbar(app) {
   iconTool({ tool: 'note', icon: 'note', dot: true, key: 'N', title: 'Sticky note (N) \u2014 click again for colours',
     onClick: toggleTool('note') });
   iconTool({ tool: 'shape', icon: 'shapes', dot: true, key: 'S', title: 'Shapes (S)', onClick: toggleTool('shape') });
-  iconTool({ tool: 'emoji', icon: 'emoji', title: 'Emoji \u2014 click again to pick another',
-    onClick: toggleTool('emoji') });
+  /*
+   * The emoji button always opens the picker.
+   *
+   * Every other tool follows "click to choose it, click again for its
+   * options", because a pen is useful the moment you pick it up and the
+   * options are a detour. The emoji tool is the other way round: choosing
+   * WHICH emoji is the whole act, and the tool on its own just repeats
+   * whatever you stamped last. Stamping one hands the board back to Select,
+   * so under the usual rule the next press only re-arms the tool and appears
+   * to do nothing at all - press, nothing, press again, there it is.
+   *
+   * Pressing it while the picker is open still shuts it, because openPopover
+   * treats a second press on the same key as "put that away".
+   */
+  iconTool({ tool: 'emoji', icon: 'emoji', title: 'Emoji \u2014 pick one to stamp on the board',
+    onClick: (e, b) => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, b, 'emoji'); } });
   iconTool({ cmd: 'insert.image', icon: 'image', title: 'Insert image', onClick: () => app.command('insert.image') });
   iconTool({ cmd: 'insert', icon: 'insert', pop: 'insert', title: 'Insert document, table or template',
     onClick: (e, b) => openInsertPopover(app, b) });
@@ -457,6 +471,12 @@ function emojiPicker(app) {
   };
 
   search.addEventListener('input', render);
+  // Escape while typing in the search box puts the picker away. Without this
+  // the press goes to the board, where the app ignores it because the focus is
+  // in a text field - so it appeared to do nothing at all.
+  search.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); closePopover(); }
+  });
   // Enter takes the first match, so a search can be finished without aiming.
   search.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter') return;

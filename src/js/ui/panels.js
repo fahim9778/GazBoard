@@ -1024,6 +1024,12 @@ export function createPanels(app) {
           row('Auto-pan at the edges', mkToggle(() => s.edgePan, (v) => (s.edgePan = v)),
             'While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.'),
           row('Return to select after drawing', mkToggle(() => s.returnToSelect, (v) => (s.returnToSelect = v))),
+          row('Outline grouped objects', mkToggle(() => s.showGroupOutlines !== false, (v) => {
+            s.showGroupOutlines = v;
+            app.saveSettings();
+            app.surface.showGroupOutlines = v;
+            app.surface.invalidate();
+          }), 'A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.'),
           row('Right-drag pans the canvas', mkToggle(() => s.rightDragPans !== false, (v) => (s.rightDragPans = v)),
             'Hold the right mouse button and drag to move around — useful on a laptop with no pen and no middle button. A right click that does not move still opens the usual menu.'),
           row('Check for updates', mkToggle(() => s.updateCheck === true, (v) => { s.updateCheck = v; app.saveSettings(); if (v) app.checkForUpdates({ force: true }); }),

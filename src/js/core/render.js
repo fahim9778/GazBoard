@@ -794,6 +794,74 @@ export function drawSelection(ctx, screenBox, opts = {}) {
 }
 
 /** Small padlock at the top-left of a locked object, drawn in screen space. */
+/**
+ * A dashed ring round a group, so grouping is something you can see.
+ *
+ * Without it, a group is invisible until you touch it and four things light up
+ * at once, which is a surprise rather than an explanation. It is drawn only
+ * for a group that is selected or under the cursor - ringing every group on
+ * the board all the time would turn a diagram into a pile of boxes.
+ */
+export function drawGroupHint(ctx, cam, b, active = true, name = '') {
+  const p = cam.toScreen(b.x, b.y);
+  const w = b.w * cam.z, h = b.h * cam.z;
+  ctx.save();
+  // Faint for a group merely sitting there, clearer for the one being touched.
+  // A poster made of six groups should read as a poster, not as six boxes.
+  ctx.strokeStyle = active ? 'rgba(0, 120, 212, 0.55)' : 'rgba(0, 120, 212, 0.22)';
+  ctx.lineWidth = active ? 1.5 : 1;
+  ctx.setLineDash(active ? [7, 5] : [4, 6]);
+  const x = p.x - 7, y = p.y - 7, rw = w + 14, rh = h + 14;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, rw, rh, 9);
+  else ctx.rect(x, y, rw, rh);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  /*
+   * The name sits on the ring itself, top-left, the way a labelled box is
+   * labelled on paper. It is drawn on a slab of the board's own colour so it
+   * stays readable over whatever it crosses, and it is left off entirely when
+   * the group is too small to hold it - a label wider than the thing it names
+   * is worse than no label.
+   */
+  if (name && rw > 54) {
+    ctx.font = '11px ' + FONT;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    let label = name;
+    if (ctx.measureText(label).width > rw - 12) {
+      while (label.length > 1 && ctx.measureText(label + '\u2026').width > rw - 12) label = label.slice(0, -1);
+      label += '\u2026';
+    }
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    ctx.fillRect(x + 6, y - 8, tw + 8, 15);
+    ctx.fillStyle = active ? 'rgba(0, 90, 158, 0.95)' : 'rgba(0, 90, 158, 0.6)';
+    ctx.fillText(label, x + 10, y + 3.5);
+  }
+  ctx.restore();
+}
+
+/**
+ * A dotted ring round something locked.
+ *
+ * The padlock badge says which object is locked once you have found it; this
+ * says where its edges are, which is the part that matters when you are
+ * wondering why a drag is doing nothing. Grey rather than blue, because it is
+ * not a selection and should not look like one.
+ */
+export function drawLockedOutline(ctx, cam, o) {
+  const b = worldBounds(o);
+  const p = cam.toScreen(b.x, b.y);
+  ctx.save();
+  ctx.strokeStyle = 'rgba(96, 94, 92, 0.55)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 4]);
+  ctx.strokeRect(p.x - 3, p.y - 3, b.w * cam.z + 6, b.h * cam.z + 6);
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
 export function drawLockBadge(ctx, cam, o) {
   const b = worldBounds(o);
   const p = cam.toScreen(b.x, b.y);

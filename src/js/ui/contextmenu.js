@@ -49,6 +49,11 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
       menu.appendChild(item('Group', 'group', () => app.command('edit.group'), { key: 'Ctrl+G' }));
     }
     if (grouped) {
+      if (app.selectedGroups().size === 1) {
+        const named = app.selected.find((o) => o.groupName)?.groupName;
+        menu.appendChild(item(named ? `Rename group (${named})` : 'Name this group…', 'text',
+          () => app.command('edit.nameGroup')));
+      }
       menu.appendChild(item('Ungroup', 'ungroup', () => app.command('edit.ungroup'), { key: 'Ctrl+Shift+G' }));
       if (app.surface.selection.size > 1) {
         menu.appendChild(item('Group again', 'group', () => app.command('edit.group'), { key: 'Ctrl+G' }));
@@ -157,6 +162,9 @@ export function updateSelectionBar(app) {
   }
 
   const grouped = app.selectedGroups().size > 0;
+  if (grouped && app.selectedGroups().size === 1) {
+    bar.appendChild(mk('Name this group', 'text', () => app.command('edit.nameGroup')));
+  }
   if (grouped) bar.appendChild(mk('Ungroup (Ctrl+Shift+G)', 'ungroup', () => app.command('edit.ungroup')));
   else if (sel.length > 1) bar.appendChild(mk('Group (Ctrl+G)', 'group', () => app.command('edit.group')));
   bar.appendChild(mk('Duplicate (Ctrl+D)', 'duplicate', () => app.command('edit.duplicate')));

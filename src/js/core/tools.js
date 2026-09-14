@@ -271,6 +271,34 @@ export class Interaction {
     // must be resolved after that or the first stylus touch after typing runs
     // the old tool
     this.app.commitTextEdit();
+
+    /*
+     * Ctrl (or Cmd) and click means "gather this up", whatever tool is chosen.
+     *
+     * It has to sit ABOVE the tool switch, because which tool is active decides
+     * which of several paths a press takes, and only two of them ever looked at
+     * the modifier. Hold Ctrl with the pen tool chosen and the press went off
+     * to start a stroke; do it with a stylus and it drew a dot; do it while a
+     * Wacom was connected and the mouse pointer path moved the object instead.
+     * Three different wrong answers to the same gesture, which is why picking
+     * several things out felt like it skipped some of them.
+     *
+     * Ctrl on its own means nothing to any drawing tool here, so claiming it
+     * takes nothing away. Shift is deliberately NOT claimed: it constrains a
+     * shape to square and a line to an angle, and those are worth keeping.
+     * Shift still extends a selection wherever it already did.
+     */
+    if ((e.ctrlKey || e.metaKey) && !this.spaceDown && e.button === 0 && !handleSelection) {
+      const target = pick(this.store, wp, 8 / this.surface.cam.z);
+      if (target) {
+        this.app.chooseObject(target.id, true);
+        this.action = null;
+        this.actionId = null;
+        this.cancelHold();
+        this.surface.invalidate();
+        return;
+      }
+    }
     const tool = this.effectiveTool(e);
 
     // ruler interaction takes priority when it is showing
@@ -337,14 +365,45 @@ export class Interaction {
             + 'Drawing with a mouse instead? Settings › <b>Draw with the mouse › Always</b>.');
         }
         const hit = pick(this.store, wp, 8 / this.surface.cam.z);
+        /*
+         * Holding Ctrl, Cmd or Shift means "gather these up", whatever tool
+         * happens to be chosen.
+         *
+         * This branch is where a mouse click lands once a stylus has been seen
+         * - the pen draws, the mouse points - and it used to ignore modifiers
+         * entirely. Ctrl-clicking a second object therefore behaved like a
+         * plain click and simply moved the selection to it, which is not what
+         * Ctrl means anywhere else and made picking several things out look
+         * broken. Selecting is a pointer's job, so it belongs here too.
+         */
+        const gathering = e.shiftKey || e.ctrlKey || e.metaKey || this.app.multiSelect;
+        if (hit && gathering) {
+          this.app.chooseObject(hit.id, true);
+          break;
+        }
         if (hit && !hit.locked) {
-          const objs = withAttached(this.store, [hit.id])
+          /*
+           * Everything this object is tied to comes along: notes stuck to a
+           * locked page, AND the rest of its group.
+           *
+           * This path is a drag that never touched the selection - the mouse
+           * acting as a pointer while the pen draws - so it gathers its own
+           * objects, and it only knew about attachment. A grouped house
+           * therefore held together while it was being selected and came apart
+           * the moment it was dragged, which reads as grouping being broken
+           * rather than as one path having been missed.
+           */
+          const objs = withAttached(this.store, withGroups(this.store, [hit.id], this.app.openGroup))
             .map((id) => this.store.get(id)).filter(Boolean).filter((o) => !o.locked);
           this.action = {
             type: 'move', start: wp, objs, transient: true,
             snap: this.store.snapshot(objs.map((o) => o.id)),
             origin: new Map(objs.map((o) => [o.id, { ...boundsOf(o) }]))
           };
+        } else if (gathering) {
+          // A modifier held over bare board is the start of a box selection
+          // that adds to what is already chosen, not an order to drop it.
+          this.action = { type: 'marquee', start: wp, cur: wp, additive: true };
         } else {
           // empty canvas: let go of whatever was selected, then pan
           if (this.surface.selection.size) this.app.setSelection([]);
@@ -739,7 +798,17 @@ export class Interaction {
       }
       case 'move': {
         const moved = Math.hypot(wp.x - a.start.x, wp.y - a.start.y) * this.surface.cam.z;
-        if (!a.transient && moved < TAP_SLOP && a.tapId) this.app.setSelection([a.tapId], false);
+        /*
+         * A click that did not travel means "just this one", and collapses a
+         * multi-selection down to whatever was under the cursor. That is right
+         * for a plain click and completely wrong for a Ctrl-click: gathering
+         * four things up and watching the selection snap back to the last one
+         * on mouse-up is exactly what made Ctrl-click look broken. A click
+         * that was adding says so, and is left alone.
+         */
+        if (!a.transient && !a.additive && moved < TAP_SLOP && a.tapId) {
+          this.app.setSelection([a.tapId], false);
+        }
         this.store.commitSnapshot('move', a.snap);
         break;
       }
@@ -856,6 +925,44 @@ export class Interaction {
     }, e.pointerType === 'pen' ? PEN_HOLD_MS : HOLD_MS);
   }
 
+  /**
+   * Abandon whatever is being drawn right now, leaving nothing behind.
+   *
+   * A shape or a text box being dragged out has not been added to the board
+   * yet - it lives in `action` and is painted as a preview - so dropping the
+   * action is genuinely all it takes, with no undo entry because nothing was
+   * ever committed. A stroke is different: the ink already exists as a wet
+   * path, so that is thrown away too.
+   *
+   * Returns true when there was something to abandon.
+   */
+  cancelGesture() {
+    if (!this.action) return false;
+    /*
+     * Only a gesture that is actually happening can be abandoned.
+     *
+     * An action left behind by a pointer that never reported lifting - a pen
+     * lifted as the window lost focus, a cancel routed elsewhere - would
+     * otherwise sit there and eat the next Escape, so pressing it did nothing
+     * visible and the selection stayed put. onDown already clears such stragglers
+     * when the next press arrives; this refuses to act on one in the meantime.
+     */
+    if (!this.pointers.size) return false;
+    const kind = this.action.type;
+    if (kind === 'move' || kind === 'resize' || kind === 'rotate') {
+      // These have already moved things on screen; put them back.
+      if (this.action.snap) this.store.restoreSnapshot(this.action.snap);
+    }
+    this.surface.wet = null;
+    this.surface.wetPieces = null;
+    this.action = null;
+    this.actionId = null;
+    this.cancelHold();
+    this.app.syncUI();
+    this.surface.invalidate();
+    return ['shapeDraw', 'textDraw', 'draw', 'lasso', 'marquee', 'move', 'resize', 'rotate'].includes(kind);
+  }
+
   /** Whatever this was, it is not a press-and-hold. */
   cancelHold() {
     if (this._hold) { clearTimeout(this._hold); this._hold = null; }
@@ -892,6 +999,7 @@ export class Interaction {
       return;
     }
     if (hit) {
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey || this.app.multiSelect;
       if (e.shiftKey || e.ctrlKey || e.metaKey) {
         /*
          * Add this to the selection, or take it back out.
@@ -918,7 +1026,7 @@ export class Interaction {
         .map((id) => this.store.get(id)).filter(Boolean).filter((o) => !o.locked);
       if (!objs.length) return;
       this.action = {
-        type: 'move', start: wp, objs,
+        type: 'move', start: wp, objs, additive,
         snap: this.store.snapshot(objs.map((o) => o.id)),
         origin: new Map(objs.map((o) => [o.id, { ...boundsOf(o) }])),
         tapId: hit.id
@@ -1706,11 +1814,15 @@ export class Interaction {
       return;
     }
 
+    const hoverWas = this.surface.hoverId;
     if (t === 'select' || t === 'lasso') {
       const hit = pick(this.store, wp, 8 / this.surface.cam.z);
       this.surface.hoverId = hit ? hit.id : null;
       if (t === 'select') cursor = hit ? (hit.locked ? 'not-allowed' : 'move') : 'default';
     } else this.surface.hoverId = null;
+    // Moving onto or off a grouped object changes what the chrome should show,
+    // and nothing else on a plain hover would ask for a repaint.
+    if (this.surface.hoverId !== hoverWas) this.surface.invalidate();
 
     if (this.ruler.visible) {
       const zone = this.rulerZone(sp);
