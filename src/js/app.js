@@ -9,7 +9,7 @@ import { pick } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
 import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP } from './core/pages.js';
 import { isNewer } from './core/version.js';
-import { emojiAspect } from './core/render.js';
+import { emojiAspect, forgetEmojiMetrics } from './core/render.js';
 import { TextEditor } from './ui/textedit.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { createPanels } from './ui/panels.js';
@@ -140,6 +140,7 @@ class App {
     this.interaction = new Interaction(this);
 
     initToolbar(this);
+    this.loadEmojiFont();
     this.wireGlobalEvents();
     this.initDismissal();
     this.wireStore();
@@ -2381,6 +2382,30 @@ class App {
   }
 
   /* ---------------- global events ---------------- */
+  /**
+   * Fetch the bundled emoji artwork, then redraw anything already on the board.
+   *
+   * A font named only in CSS is loaded when some text needs it, and canvas
+   * drawing does not count as needing it - so without this call the board
+   * quietly keeps using the machine's own emoji forever. Asking for it here
+   * starts the fetch; when it lands the cached measurements are wrong (they
+   * describe the old artwork) so they go, and the board repaints.
+   *
+   * Every step is optional. An old engine with no document.fonts, a missing
+   * file, a browser that refuses - all of them end with the board drawing
+   * emoji exactly as it did before, which is a worse picture and not a broken
+   * one.
+   */
+  loadEmojiFont() {
+    try {
+      if (!document.fonts?.load) return;
+      document.fonts.load('100px "GazBoard Emoji"', '\u2705').then(() => {
+        forgetEmojiMetrics();
+        this.surface.repaintAll();
+      }).catch(() => {});
+    } catch { /* no font loading here; the system emoji still draw */ }
+  }
+
   wireGlobalEvents() {
     const titleEl = document.getElementById('boardTitle');
     titleEl.addEventListener('change', () => this.store.rename(titleEl.value.trim() || 'Untitled board'));

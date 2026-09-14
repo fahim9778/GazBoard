@@ -69,6 +69,19 @@ export class Surface {
 
   invalidate() { this.dirty = true; this._band = null; this._bandOnly = false; this._fullAsked = true; }
 
+  /**
+   * Repaint from scratch, frozen copy and all.
+   *
+   * invalidate() asks for a new frame, but a frame is allowed to reuse the
+   * frozen copy of the board when nothing in the document has moved. That is
+   * the wrong answer when the change is in HOW things are drawn rather than
+   * what they are - a late-arriving font, a picture that finished loading -
+   * because the document revision never moves and the copy stays convincingly
+   * stale. Throwing the copy away first means the next frame really is drawn
+   * again.
+   */
+  repaintAll() { this._ink = null; this.invalidate(); }
+
   /*
    * Repaint only this world-space box on the next frame.
    *

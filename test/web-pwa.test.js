@@ -295,6 +295,74 @@ async function runTests() {
     check('manifest validation failed', false, e.message);
   }
 
+  /* ---------------- 1b. The bundled emoji font ---------------- */
+  try {
+    const fontRel = 'assets/fonts/gazboard-emoji.woff2';
+    const fontPath = path.join(SRC, fontRel);
+    const exists = fs.existsSync(fontPath);
+    check('bundled emoji font is shipped', exists, exists ? '' : `expected a file at src/${fontRel}`);
+
+    if (exists) {
+      const buf = await fsp.readFile(fontPath);
+      const magic = buf.subarray(0, 4).toString('latin1');
+      check('emoji font is a woff2 file', magic === 'wOF2',
+        `first four bytes were "${magic}" (${[...buf.subarray(0, 4)].join(' ')}), wanted "wOF2"`);
+
+      // Half a megabyte is the trimmed font; the untrimmed one is about eleven
+      // times that. A jump like that means somebody dropped the whole font in.
+      const kb = Math.round(buf.length / 1024);
+      check('emoji font is the trimmed copy, not the whole thing', buf.length < 1024 * 1024,
+        `file is ${kb} KB; the trimmed font is around 450 KB and the full one is over 5000 KB`);
+    }
+
+    // Every character the picker offers has to be in the font that was built.
+    // Adding one to the catalogue without rebuilding leaves that single emoji
+    // falling back to the system - invisible in a diff, obvious on a phone.
+    const manifestPath = path.join(ROOT, 'scripts', 'emoji-font-chars.json');
+    const built = JSON.parse(await fsp.readFile(manifestPath, 'utf8'));
+    const { EMOJI_GROUPS } = await import('../src/js/core/emoji.js');
+    const catalogue = [];
+    const seen = new Set();
+    for (const g of EMOJI_GROUPS) for (const e of g.items) if (!seen.has(e.ch)) { seen.add(e.ch); catalogue.push(e.ch); }
+    const inFont = new Set(built);
+    const missing = catalogue.filter((c) => !inFont.has(c));
+    const stale = built.filter((c) => !seen.has(c));
+    check('every emoji in the picker is in the bundled font', missing.length === 0,
+      `${catalogue.length} in the picker, ${built.length} in the font; missing from the font: ` +
+      `${missing.length ? missing.join(' ') : 'none'} — rebuild with: node scripts/emoji-font.mjs --how`);
+    check('the bundled font carries nothing the picker dropped', stale.length === 0,
+      `left over in the font: ${stale.length ? stale.join(' ') : 'none'}`);
+
+    // The file being present is not the same as the app using it. Three small
+    // wires, each of which has been forgotten by somebody at some point.
+    const css = await fsp.readFile(path.join(SRC, 'css', 'app.css'), 'utf8');
+    const declared = css.includes("font-family: 'GazBoard Emoji'") && css.includes(fontRel.split('/').pop());
+    check('app.css declares the bundled emoji face', declared,
+      `@font-face for 'GazBoard Emoji': ${css.includes("font-family: 'GazBoard Emoji'")}, ` +
+      `points at ${fontRel.split('/').pop()}: ${css.includes(fontRel.split('/').pop())}`);
+
+    const render = await fsp.readFile(path.join(SRC, 'js', 'core', 'render.js'), 'utf8');
+    const stack = (render.match(/const EMOJI_FONT = '([^']+)'/) || [])[1] || '';
+    check('the board prefers the bundled font over the system one',
+      stack.startsWith('"GazBoard Emoji"'),
+      `EMOJI_FONT starts with: ${stack.slice(0, 60) || '(not found)'}`);
+    check('the system emoji fonts are still behind it as a fallback',
+      stack.includes('Segoe UI Emoji') && stack.includes('Noto Color Emoji') && stack.includes('Apple Color Emoji'),
+      `EMOJI_FONT = ${stack || '(not found)'}`);
+
+    const sw = await fsp.readFile(path.join(SRC, 'sw.js'), 'utf8');
+    check('the service worker precaches the emoji font', sw.includes(fontRel),
+      `sw.js ${sw.includes(fontRel) ? 'lists' : 'does NOT list'} ./${fontRel} in PRECACHE_ASSETS`);
+
+    const appjs = await fsp.readFile(path.join(SRC, 'js', 'app.js'), 'utf8');
+    check('start-up asks for the emoji font and repaints when it lands',
+      appjs.includes('loadEmojiFont') && appjs.includes('forgetEmojiMetrics') && appjs.includes('repaintAll'),
+      `loadEmojiFont: ${appjs.includes('loadEmojiFont')}, forgetEmojiMetrics: ${appjs.includes('forgetEmojiMetrics')}, ` +
+      `repaintAll: ${appjs.includes('repaintAll')} — a font named only in CSS is never fetched for canvas drawing`);
+  } catch (e) {
+    check('emoji font audit failed', false, e.message);
+  }
+
   /* ---------------- 2. Service Worker & Atomic Precaching Verification ---------------- */
   try {
     const swPath = path.join(SRC, 'sw.js');

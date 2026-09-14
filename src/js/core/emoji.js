@@ -12,11 +12,12 @@
  * "next" both find the right arrow. Searching is on names AND keywords, so a
  * word that appears in neither simply finds nothing rather than guessing.
  *
- * Drawn with whatever emoji font the machine already has - Segoe UI Emoji on
- * Windows, Noto on Android, Apple's on a Mac. Nothing is bundled and nothing
- * is fetched, so this works on a plane like the rest of the app. The trade is
- * that the same character looks slightly different on each platform, which is
- * true of every app that does it this way, including the one this replaces.
+ * Drawn from artwork shipped with the app rather than whatever the machine
+ * happens to own - see the note above EMOJI_FONT in render.js for why. Only
+ * the characters listed below are in that font, which is what keeps it small,
+ * so adding an entry here without adding it to the font gets the system's
+ * version of that character instead. Nothing is fetched from the network, so
+ * this still works on a plane like the rest of the app.
  */
 
 /** [character, name, extra search words] */

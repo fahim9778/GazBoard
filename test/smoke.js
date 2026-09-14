@@ -4967,6 +4967,83 @@ async function run(win, app) {
   check('a second stamp lands without a trip to the picker', emo.secondStamped);
   check('one undo removes a stamped emoji', emo.undone);
 
+  /* ---- the bundled emoji font ----------------------------------------- *
+   * The reason it is bundled: the system emoji on Android are one small
+   * picture per character, so a big stamp is that picture stretched. Ours are
+   * outlines. All of which is worth nothing if the file never actually loads,
+   * which is the easy way for this to break silently - the board would simply
+   * go on drawing the system's emoji and look fine on a Windows desktop.
+   */
+  const font = await js(`
+    const r = {};
+    const { EMOJI } = await import('./js/core/emoji.js');
+    // Ask for every character, not just one: a font that loaded but is missing
+    // half the catalogue would pass a single-character check.
+    const chars = EMOJI.map((e) => e.ch).join('');
+    await document.fonts.load('100px "GazBoard Emoji"', chars);
+    await document.fonts.ready;
+    const faces = [...document.fonts].filter((f) => f.family === 'GazBoard Emoji');
+    r.faces = faces.length;
+    r.loaded = faces.filter((f) => f.status === 'loaded').length;
+    r.checkSaysYes = document.fonts.check('100px "GazBoard Emoji"');
+
+    // Drawing proof rather than bookkeeping: the same character measured
+    // through our font and through a family that does not exist. Different
+    // numbers mean the glyph really came from the file we shipped.
+    const g = document.createElement('canvas').getContext('2d');
+    const widthIn = (family, ch) => { g.font = '100px ' + family; return g.measureText(ch).width; };
+    const sample = ['\u2705', '\u{1F680}', '\u{1F4A1}'];
+    r.differs = sample.map((ch) => ({
+      ch, ours: Math.round(widthIn('"GazBoard Emoji"', ch) * 100) / 100,
+      system: Math.round(widthIn('NoSuchFamilyXYZ', ch) * 100) / 100
+    }));
+
+    /*
+     * Every character in the picker, drawn twice: once through our font and
+     * once through a family that does not exist, which forces the machine's
+     * own emoji. Ink alone proves nothing - a character missing from our file
+     * falls back and still draws. Two IDENTICAL pictures are the giveaway.
+     */
+    const probe = document.createElement('canvas');
+    probe.width = probe.height = 48;
+    const x = probe.getContext('2d', { willReadFrequently: true });
+    const signature = (ch, family) => {
+      x.clearRect(0, 0, 48, 48);
+      x.font = '38px ' + family;
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillText(ch, 24, 24);
+      const d = x.getImageData(0, 0, 48, 48).data;
+      let ink = 0, hash = 2166136261;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] > 8) ink++;
+        hash = Math.imul(hash ^ d[i] ^ d[i + 1] ^ d[i + 2] ^ d[i + 3], 16777619) >>> 0;
+      }
+      return { ink, hash };
+    };
+    r.blank = [];
+    r.fellBack = [];
+    for (const e of EMOJI) {
+      const ours = signature(e.ch, '"GazBoard Emoji"');
+      const system = signature(e.ch, 'NoSuchFamilyXYZ');
+      if (ours.ink === 0) r.blank.push(e.ch);
+      else if (ours.hash === system.hash) r.fellBack.push(e.ch);
+    }
+    r.total = EMOJI.length;
+    return r;
+  `);
+  check('the bundled emoji font loads in the running app',
+    font.faces > 0 && font.loaded === font.faces && font.checkSaysYes,
+    `${font.loaded} of ${font.faces} faces loaded, document.fonts.check=${font.checkSaysYes}`);
+  check('emoji are measured through the bundled font, not the machine\'s own',
+    font.differs.every((d) => d.ours !== d.system),
+    font.differs.map((d) => `${d.ch} ours ${d.ours} vs system ${d.system}`).join(' | '));
+  check('every emoji in the picker draws something', font.blank.length === 0,
+    `${font.total - font.blank.length} of ${font.total} drew ink; blank: ${font.blank.length ? font.blank.join(' ') : 'none'}`);
+  check('and every one of them comes from the bundled font, not a fallback',
+    font.fellBack.length === 0,
+    `${font.total - font.fellBack.length} of ${font.total} differ from the system rendering; ` +
+    `identical to the system (so missing from our file): ${font.fellBack.length ? font.fellBack.join(' ') : 'none'}`);
+
   await js(`window.app.setSelection([window.app.store.doc.order[0]]);`);
   await sleep(250);
   check('selection bar shows', await js(`return document.getElementById('ctxbar').classList.contains('show');`));

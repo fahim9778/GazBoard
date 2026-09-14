@@ -10,6 +10,7 @@ const PRECACHE_ASSETS = [
   './index.html',
   './manifest.webmanifest',
   './css/app.css',
+  './assets/fonts/gazboard-emoji.woff2',
   './js/errors.js',
   './js/app.js',
   './js/export.js',

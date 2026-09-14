@@ -1,3 +1,13 @@
+/* Emoji artwork we ship ourselves, so a board looks the same on a laptop and a
+   phone and stays sharp however big a stamp gets. Outlines, not pictures - see
+   the note above EMOJI_FONT in render.js. Nothing is fetched from the network;
+   the file sits next to the app and works on a plane like the rest of it. */
+@font-face {
+  font-family: 'GazBoard Emoji';
+  src: url('../assets/fonts/gazboard-emoji.woff2') format('woff2');
+  font-display: block;
+}
+
 :root {
   --bg: #f3f2f1;
   --surface: #ffffff;
@@ -202,7 +212,10 @@ input, textarea { font: inherit; }
 .emoji-sections .emoji-grid { max-height: none; overflow: visible; }
 .emoji-sections h4 { margin: 10px 0 4px; }
 .emoji-sections h4:first-child { margin-top: 0; }
+/* The picker draws from the same font as the board, so the one you choose is
+   the one you get rather than a near-enough cousin from the system. */
 .emoji-cell {
+  font-family: 'GazBoard Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
   aspect-ratio: 1; width: 100%; border: 0; border-radius: 8px; background: none;
   font-size: 21px; line-height: 1; cursor: pointer; padding: 0;
   display: grid; place-items: center;

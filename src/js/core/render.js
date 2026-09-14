@@ -534,7 +534,21 @@ export function drawText(ctx, o, hideText = false) {
  * font has this, and the alternative is shipping a ten-megabyte font to make
  * a smiley look identical everywhere, which is not a trade worth making.
  */
-const EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla","EmojiOne Color",sans-serif';
+/*
+ * Emoji are drawn from a font we ship, not the one the machine happens to own.
+ *
+ * The system fonts are not equal. Windows draws emoji from outlines, so they
+ * stay sharp however big you make them. Android's are photographs - one
+ * picture per emoji, about a hundred pixels across, and nothing larger to fall
+ * back on - so a big one on a dense phone screen is a small picture stretched,
+ * and it looks it. Bundling outlines fixes that, and has a second effect worth
+ * as much: a board now shows the same artwork to everyone who opens it,
+ * instead of a different rocket on each machine.
+ *
+ * The system fonts stay in the list behind ours, so a character the bundle
+ * does not carry still draws rather than turning into an empty box.
+ */
+const EMOJI_FONT = '"GazBoard Emoji","Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji","Twemoji Mozilla","EmojiOne Color",sans-serif';
 const EMOJI_BASE = 100;
 const emojiInk = new Map();
 let emojiRuler = null;
@@ -573,6 +587,20 @@ export function emojiInkSize(ch) {
   } catch { /* no canvas, no measurement, square it is */ }
   emojiInk.set(key, out);
   return out;
+}
+
+/**
+ * Throw the measurements away.
+ *
+ * Sizes are measured once and kept, which is right while the font stays put.
+ * The bundled emoji font arrives a moment after start-up, though, and anything
+ * measured before it landed describes the machine's own artwork instead of
+ * ours - a slightly different width, so a slightly wrong box. Called once the
+ * font is in, so the next measurement is the real one.
+ */
+export function forgetEmojiMetrics() {
+  emojiInk.clear();
+  emojiRuler = null;
 }
 
 /** The shape of a character: wider than tall is above 1. */
