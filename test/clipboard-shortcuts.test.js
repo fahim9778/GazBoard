@@ -45,12 +45,12 @@ const preloadPath = path.resolve(__dirname, '..', 'preload.js');
 delete require.cache[preloadPath];
 require(preloadPath);
 
-Module._load = originalLoad;
-global.window = originalWindow;
-
 assert(exposed, 'preload must expose window.board');
 const commands = [];
 exposed.onMenu((id) => commands.push(id));
+
+Module._load = originalLoad;
+global.window = originalWindow;
 
 const keydown = domHandlers.get('keydown');
 assert(keydown, 'preload must install the clipboard shortcut guard');
