@@ -4,6 +4,8 @@ import { generatePdfFromHtml } from './web-pdf.js';
 
 const FILE_ROOT = 'https://appassets.androidplatform.net/files/';
 const CHUNK_BYTES = 96 * 1024;
+const BLANK_HOLD_MS = 450;
+const BLANK_HOLD_SLOP = 11;
 
 export function createAndroidAdapter(native = window.GazBoardNative) {
   let sequence = 0;
@@ -31,6 +33,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     const tag = String(target.tagName || '').toUpperCase();
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!target.isContentEditable;
   };
+  const hasBoardClipboard = () => Array.isArray(window.app?.clipboard) && window.app.clipboard.length > 0;
   const wireClipboardShortcuts = () => {
     window.addEventListener('keydown', (e) => {
       if (editableTarget(e.target)) return;
@@ -50,7 +53,10 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
         return;
       }
 
-      if (key === 'v' && internalClipboardNewest) {
+      // A touch-screen Copy goes straight through App rather than this adapter,
+      // so the actual board clipboard is also authoritative here. A native
+      // clipboard change clears it below, preserving "last copy wins".
+      if (key === 'v' && (internalClipboardNewest || hasBoardClipboard())) {
         e.preventDefault();
         e.stopImmediatePropagation();
         void emit('menu', 'edit.paste');
@@ -58,6 +64,57 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       // Otherwise leave Ctrl/Cmd+V alone: WebView will deliver its ordinary
       // paste event and App will import the current OS text/image clipboard.
     }, true);
+  };
+  const wireBlankPasteHold = () => {
+    let timer = null;
+    let pointerId = null;
+    let origin = null;
+    let anchor = null;
+    const clear = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      pointerId = null;
+      origin = null;
+      anchor = null;
+    };
+
+    window.addEventListener('pointerdown', (e) => {
+      clear();
+      const app = window.app;
+      if (e.pointerType !== 'touch' || e.button !== 0 || !app?.surface || !hasBoardClipboard()) return;
+      if (e.target !== app.surface.canvas) return;
+
+      // This gesture belongs to genuinely blank board space. Holding an object
+      // keeps the existing Android select/move gesture and its More menu.
+      let wp;
+      try { wp = app.surface.toWorld(e); } catch { return; }
+      if (app.pickAt?.(wp)) return;
+
+      pointerId = e.pointerId;
+      origin = { x: e.clientX, y: e.clientY };
+      anchor = { clientX: e.clientX, clientY: e.clientY };
+      timer = setTimeout(() => {
+        timer = null;
+        const live = window.app;
+        if (pointerId !== e.pointerId || !live?.surface || !hasBoardClipboard()) { clear(); return; }
+
+        // Do not leave a dot of ink (or a half-started pan) underneath the menu.
+        // Interaction owns the gesture, so let it roll the preview back cleanly.
+        live.interaction?.cancelGesture?.();
+        live.setSelection?.([]);
+        live.showContextMenu?.({ ...anchor, pointerType: 'touch' });
+        pointerId = null;
+        origin = null;
+        anchor = null;
+      }, BLANK_HOLD_MS);
+    }, true);
+
+    window.addEventListener('pointermove', (e) => {
+      if (e.pointerId !== pointerId || !origin) return;
+      if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) > BLANK_HOLD_SLOP) clear();
+    }, true);
+    window.addEventListener('pointerup', (e) => { if (e.pointerId === pointerId) clear(); }, true);
+    window.addEventListener('pointercancel', (e) => { if (e.pointerId === pointerId) clear(); }, true);
   };
   const file = async (token, asJson = false) => {
     if (!/^[a-f0-9]{32}$/.test(token)) throw new Error('Invalid native file reference');
@@ -198,11 +255,15 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     convertReady: (msg) => call('convert:ready', msg),
     convertError: (msg) => call('convert:error', msg)
   };
-  // A native clipboard change means something outside GazBoard is newer. This
-  // does not read or overwrite the clipboard, so Android WebView clipboard
-  // permission quirks cannot make object paste silently fall back to stale data.
-  on('clipboardChanged', () => { internalClipboardNewest = false; });
+  // A native clipboard change means something outside the board-object copy is
+  // newer. Drop both the keyboard priority flag and the in-memory object copy;
+  // this also makes touch Copy obey the same "last copy wins" rule.
+  on('clipboardChanged', () => {
+    internalClipboardNewest = false;
+    if (Array.isArray(window.app?.clipboard)) window.app.clipboard = [];
+  });
   wireClipboardShortcuts();
+  wireBlankPasteHold();
   on('file', async (p) => {
     // Native share/open intents use the same document and image import paths
     // as the toolbar. Wait for App's initialization before dispatching them.
