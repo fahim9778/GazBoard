@@ -6,7 +6,7 @@ async function setup(handler) {
   const windowHandlers = new Map();
   const documentHandlers = new Map();
   global.window = {
-    app: { selected: [] },
+    app: { selected: [], clipboard: [] },
     addEventListener(type, fn) { windowHandlers.set(type, fn); },
     dispatchEvent() {}
   };
@@ -115,17 +115,54 @@ test('Android keyboard paste keeps GazBoard objects until the system clipboard c
   assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
   assert.ok(e.prevented && e.stopped);
 
-  await native.onmessage({ data: JSON.stringify({ event: 'clipboardChanged', result: null }) });
+  // Touch/menu Copy reaches App directly rather than the key handler. A real
+  // board clipboard must still make a later hardware-keyboard paste work.
+  window.app.clipboard = [{ id: 'touch-copy' }];
   e = key('v');
-  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste', 'edit.paste']);
+  assert.ok(e.prevented && e.stopped);
+
+  await native.onmessage({ data: JSON.stringify({ event: 'clipboardChanged', result: null }) });
+  assert.deepEqual(window.app.clipboard, [], 'newer Android clipboard clears the stale object copy');
+  e = key('v');
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste', 'edit.paste']);
   assert.ok(!e.prevented && !e.stopped, 'newer system clipboard must fall through to WebView paste');
 
   e = key('c', { tagName: 'TEXTAREA', isContentEditable: false });
-  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste', 'edit.paste']);
   assert.ok(!e.prevented && !e.stopped, 'text editing keeps native clipboard behavior');
 
   window.app.selected = [];
   e = key('c');
-  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste', 'edit.paste']);
   assert.ok(!e.prevented && !e.stopped, 'copy with no GazBoard selection must not steal the system clipboard');
+});
+
+test('Holding blank Android board space opens the Paste context menu without leaving a gesture behind', async () => {
+  const { windowHandlers } = await setup(() => true);
+  const canvas = { id: 'c' };
+  let cancelled = 0;
+  let selectionCleared = 0;
+  let menuAt = null;
+  window.app = {
+    selected: [],
+    clipboard: [{ id: 'note-copy' }],
+    surface: {
+      canvas,
+      toWorld: ({ clientX, clientY }) => ({ x: clientX, y: clientY })
+    },
+    pickAt: () => null,
+    interaction: { cancelGesture() { cancelled++; return true; } },
+    setSelection(ids) { assert.deepEqual(ids, []); selectionCleared++; },
+    showContextMenu(e) { menuAt = { x: e.clientX, y: e.clientY }; }
+  };
+
+  const down = windowHandlers.get('pointerdown');
+  assert.equal(typeof down, 'function');
+  down({ pointerType: 'touch', button: 0, pointerId: 7, clientX: 120, clientY: 240, target: canvas });
+  await new Promise((resolve) => setTimeout(resolve, 480));
+
+  assert.equal(cancelled, 1);
+  assert.equal(selectionCleared, 1);
+  assert.deepEqual(menuAt, { x: 120, y: 240 });
 });
