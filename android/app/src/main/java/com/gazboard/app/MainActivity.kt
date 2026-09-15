@@ -282,7 +282,7 @@ class MainActivity : ComponentActivity() {
    * to paste" is an ordinary answer and not a fault.
    */
   fun readClipboard(): JsonObject = onMain {
-    val nothing = json("text" to "", "image" to "", "signature" to "")
+    val nothing = json("text" to "", "image" to "", "kind" to "", "signature" to "")
     try {
       val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
       val clip = manager.primaryClip
@@ -292,22 +292,39 @@ class MainActivity : ComponentActivity() {
         .mapNotNull { description?.getMimeType(it) }.sorted().joinToString("|")
       val items = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it) }
 
-      val text = if (description?.hasMimeType("text/*") != true) "" else items
+      // text/plain and text/html only - NOT text/*, which also covers
+      // text/uri-list. A copied photo is often described that way, and taking
+      // it as words put a content:// address on the board instead of a picture.
+      val saysWords = description?.hasMimeType("text/plain") == true
+        || description?.hasMimeType("text/html") == true
+      val text = if (!saysWords) "" else items
         .mapNotNull { it.text?.toString() ?: it.coerceToText(this)?.toString() }
         .joinToString("\n").trim()
 
       // A picture comes across as a handle to a file, so it is read here and
       // handed over as the picture itself. Anything beyond the cap is left
       // alone rather than dragged through the bridge and onto the board.
+      /*
+       * Ask the file what it is, rather than trusting the clip's own label.
+       *
+       * A photo copied from a gallery arrives as a handle, and the clip
+       * describes itself as anything from image/jpeg to text/uri-list
+       * depending on which app did the copying. Believing the label meant a
+       * screenshot looked like nothing at all, and paste quietly handed back
+       * whatever the board had copied earlier. The handle is the reliable part:
+       * resolve it, and if what comes back is a picture, it is a picture.
+       */
       var image = ""
-      if (description?.hasMimeType("image/*") == true) {
-        val uri = items.firstNotNullOfOrNull { it.uri }
-        if (uri != null) {
-          runCatching {
+      var kind = ""
+      val uri = items.firstNotNullOfOrNull { it.uri }
+      if (uri != null) {
+        runCatching {
+          val resolved = contentResolver.getType(uri) ?: ""
+          if (resolved.startsWith("image/")) {
             val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
             if (bytes != null && bytes.isNotEmpty() && bytes.size <= CLIPBOARD_IMAGE_CAP) {
-              val kind = contentResolver.getType(uri) ?: "image/png"
-              image = "data:" + kind + ";base64," +
+              kind = resolved
+              image = "data:" + resolved + ";base64," +
                 java.util.Base64.getEncoder().encodeToString(bytes)
             }
           }
@@ -318,7 +335,7 @@ class MainActivity : ComponentActivity() {
       // was too big to carry, or copying one would look like copying nothing
       // and the board's own older copy would wrongly stay in front.
       val handles = items.mapNotNull { it.uri?.toString() }.joinToString("|")
-      json("text" to text, "image" to image,
+      json("text" to text, "image" to image, "kind" to kind,
         "signature" to "$kinds\u0000$text\u0000$handles")
     } catch (e: Exception) {
       nothing

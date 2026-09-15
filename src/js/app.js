@@ -21,7 +21,7 @@ import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportab
 import { boardThumb } from './ui/thumb.js';
 import {
   pickAndInsertDocument, pickAndInsertImage, insertDocument,
-  insertImagesFromPaths, insertImageFiles, dropOrigin, isImagePath, isDocPath
+  insertImagesFromPaths, insertImageFiles, clipboardFileName, dropOrigin, isImagePath, isDocPath
 } from './insert.js';
 
 export const DEFAULT_SETTINGS = {
@@ -1527,7 +1527,7 @@ class App {
       if (now.image) {
         try {
           const blob = await (await fetch(now.image)).blob();
-          await insertImageFiles(this, [new File([blob], 'clipboard.png', { type: blob.type || 'image/png' })], point);
+          await insertImageFiles(this, [new File([blob], clipboardFileName(blob.type || now.kind), { type: blob.type || now.kind || 'image/png' })], point);
           return;
         } catch { /* fall through to whatever else is there */ }
       }

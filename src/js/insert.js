@@ -56,6 +56,25 @@ function looksLikeImage(buf, ext) {
 /** Exposed so the suite can check the sniffer without touching the filesystem. */
 export const looksLikeImageForTest = looksLikeImage;
 
+/**
+ * A name for a picture that came off the clipboard rather than out of a file.
+ *
+ * Imports are checked against their own extension: a file calling itself .png
+ * had better start with the bytes a PNG starts with, or it is turned away as
+ * not the image it claims to be. That check is worth keeping - but a picture
+ * from the clipboard has no name of its own, and calling every one of them
+ * clipboard.png meant a JPEG screenshot was rejected by our own honesty test.
+ *
+ * So the name follows the actual type. Anything unrecognised gets no extension
+ * at all, which skips the check rather than failing it - there is no claim to
+ * verify, and the type already says it is a picture.
+ */
+export function clipboardFileName(type) {
+  const sub = String(type || '').split('/')[1]?.split(';')[0]?.toLowerCase() || '';
+  const ext = sub === 'jpeg' ? 'jpg' : sub === 'svg+xml' ? 'svg' : sub;
+  return IMAGE_EXT.includes(ext) ? `clipboard.${ext}` : 'clipboard';
+}
+
 /** Name every file that was turned away, so a skipped import is never silent. */
 function reportRejected(app, rejected) {
   if (!rejected.length) return;

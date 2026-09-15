@@ -7841,9 +7841,9 @@ module.exports.run = async (win, app) => {
       settled.push(false);
       return false;
     };
-    const putImage = async (blob) => {
+    const putImage = async (blob, type = 'image/png') => {
       const was = a.clipboardStamp();
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
       for (let i = 0; i < 150; i++) {
         if (a.clipboardStamp() !== was) { settled.push(true); return true; }
         await sleep(20);
@@ -8061,6 +8061,49 @@ module.exports.run = async (win, app) => {
       && Math.abs((off[0].x + off[0].w / 2) - (view2.x + view2.w / 2)) < 2;
     sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
 
+    /*
+     * --- a JPEG off the clipboard is a JPEG, not a mislabelled PNG ---
+     *
+     * Imports are checked against their own extension, which is worth keeping.
+     * But a picture from the clipboard has no name of its own, and calling
+     * every one clipboard.png meant a JPEG screenshot was turned away by our
+     * own honesty check: "clipboard.png is not the image it claims to be".
+     */
+    const { clipboardFileName } = await import('app://board/js/insert.js');
+    r.names = ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/heic', '']
+      .map((t) => t + '->' + clipboardFileName(t)).join(' ');
+    r.jpegNamedJpg = clipboardFileName('image/jpeg') === 'clipboard.jpg';
+    r.pngNamedPng = clipboardFileName('image/png') === 'clipboard.png';
+    r.oddTypeSkipsTheCheck = clipboardFileName('image/heic') === 'clipboard'
+      && clipboardFileName('') === 'clipboard';
+
+    /*
+     * And a real JPEG lands rather than being skipped.
+     *
+     * Not through the machine's clipboard: Chromium refuses to write anything
+     * but a PNG to it, while Android hands a JPEG across the native bridge
+     * quite happily. So the file is built exactly as paste builds it and put
+     * through the same import - which is where the rejection happened.
+     */
+    a.newBoard(true); a.textEditor.cancel();
+    const { insertImageFiles } = await import('app://board/js/insert.js');
+    const jpegBlob = await new Promise(res => shot.toBlob(res, 'image/jpeg', 0.8));
+    const asPaste = new File([jpegBlob], clipboardFileName(jpegBlob.type), { type: jpegBlob.type });
+    r.jpegNamed = asPaste.name;
+    const beforeJpeg = a.store.objects.length;
+    await insertImageFiles(a, [asPaste], { x: 3000, y: 2000 });
+    for (let i = 0; i < 200 && a.store.objects.length === beforeJpeg; i++) await sleep(10);
+    const jpeg = a.store.objects.slice(beforeJpeg);
+    r.jpegLanded = jpeg.length === 1 && jpeg[0].type === 'image';
+    r.jpegGot = jpeg.map(o => o.type).join(',') || '(nothing)';
+
+    // the old naming, to prove the check being satisfied is not a coincidence
+    const asBefore = new File([jpegBlob], 'clipboard.png', { type: jpegBlob.type });
+    const beforeWrong = a.store.objects.length;
+    await insertImageFiles(a, [asBefore], { x: 3400, y: 2000 });
+    await sleep(80);
+    r.wrongNameRejected = a.store.objects.length === beforeWrong;
+
     // --- cut takes them away and still lets them come back ---
     a.newBoard(true); a.textEditor.cancel();
     a.store.add(mk('c1', 'gone', 100));
@@ -8180,6 +8223,17 @@ module.exports.run = async (win, app) => {
   check('with the pointer long gone, it uses the middle of the view',
     pasted.offScreenFallsBackToMiddle === true,
     `fell back to the middle after the board was panned away: ${pasted.offScreenFallsBackToMiddle}`);
+  check('a clipboard picture is named after what it actually is',
+    pasted.jpegNamedJpg === true && pasted.pngNamedPng === true && pasted.oddTypeSkipsTheCheck === true,
+    `names: ${pasted.names} — calling a JPEG clipboard.png makes our own sniffer reject it`);
+  check('so a JPEG off the clipboard actually lands on the board',
+    pasted.jpegLanded === true,
+    `named ${pasted.jpegNamed}, pasting gave ${pasted.jpegGot}, wanted image — "(nothing)" means ` +
+    `it was skipped as not the image it claims to be`);
+  check('and the same JPEG called clipboard.png is still turned away',
+    pasted.wrongNameRejected === true,
+    `the old naming was rejected: ${pasted.wrongNameRejected} — if this passes something other ` +
+    `than the name fixed it, and the sniffer has stopped doing its job`);
   check('losing priority does not throw the copied objects away',
     pasted.stillHolding === 1 && pasted.oursStillAvailable === true,
     `still holding ${pasted.stillHolding} object(s); the board menu still pasted it: ${pasted.oursStillAvailable} ` +
