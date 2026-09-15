@@ -6360,6 +6360,18 @@ async function run(win, app) {
     const sf = a.surface, inter = a.interaction, cam = sf.cam;
     a.goToPage(4);
     await new Promise(res => requestAnimationFrame(() => requestAnimationFrame(res)));
+    // Jumping to page 4 moved the board, so the frozen copy is out of date and
+    // a rebuild is queued for the next quiet moment. Let it finish before the
+    // counting starts: this test is about what a STROKE costs, and the rebuild
+    // in the gap before it has a test of its own further down.
+    const settle = async (cap = 4000) => {
+      const t0 = performance.now();
+      while (sf._warming != null && performance.now() - t0 < cap) {
+        await new Promise((res) => setTimeout(res, 16));
+      }
+      await new Promise((res) => requestAnimationFrame(res));
+    };
+    await settle();
     const rm = rects[4];
     const scr = (w) => ({ x: w.x * cam.z + cam.x, y: w.y * cam.z + cam.y });
 
@@ -6367,7 +6379,8 @@ async function run(win, app) {
     const real = sf._freezeScene.bind(sf);
     sf._freezeScene = function (k) { froze++; return real(k); };
 
-    // one stroke of 50 moves must freeze the scene once, not fifty times
+    // one stroke of 50 moves must not freeze the scene at all: the copy was
+    // made ready in the gap before the pen landed, and fifty moves reuse it
     inter.startStroke({ pointerType: 'pen', pressure: .6 }, { x: rm.x + 60, y: rm.y + 300 }, 'pen');
     for (let i = 1; i <= 50; i++) {
       inter.applyMotion(scr({ x: rm.x + 60 + i * 10, y: rm.y + 300 }), {}, null);
@@ -6380,13 +6393,13 @@ async function run(win, app) {
     // would appear to stick while auto-pan scrolled it
     cam.panBy(-40, 0);
     sf.draw();
-    r.refrozeAfterPan = froze === 2;
+    r.refrozeAfterPan = froze === 1;
 
     // and when the document changes beneath it
     a.store.add({ id: 'newthing', type: 'shape', kind: 'rect', x: rm.x + 100, y: rm.y + 100,
                   w: 80, h: 80, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'x');
     sf.draw();
-    r.refrozeAfterEdit = froze === 3;
+    r.refrozeAfterEdit = froze === 2;
 
     if (inter.action) { inter.finishStroke(inter.action); inter.action = null; }
     sf.draw();
@@ -6418,8 +6431,8 @@ async function run(win, app) {
     ctxFlags.desynchronized === false && ctxFlags.setting === false && ctxFlags.alpha === false,
     JSON.stringify(ctxFlags));
 
-  check('a stroke freezes the board once, however many times the pen moves',
-    inkCache.freezesForOneStroke === 1 && inkCache.cachedMidStroke === true, JSON.stringify(inkCache));
+  check('fifty pen moves reuse one frozen board rather than repainting per move',
+    inkCache.freezesForOneStroke === 0 && inkCache.cachedMidStroke === true, JSON.stringify(inkCache));
   check('the frozen board is redrawn when the camera moves under the pen', inkCache.refrozeAfterPan === true);
   check('and when the document changes beneath it', inkCache.refrozeAfterEdit === true);
   check('the finished stroke joins the frozen copy instead of voiding it',
@@ -6427,6 +6440,168 @@ async function run(win, app) {
   check('so writing a second word does not repaint the whole board again',
     inkCache.repaintsForSecondStroke === 0,
     `${inkCache.repaintsForSecondStroke} full board repaints for the second stroke`);
+
+  /* ---- the frozen copy is rebuilt in the gap, not under the pen ---- */
+  /*
+   * The first stroke after a pan used to hitch, because the copy the pen draws
+   * on top of was built at the moment the pen landed. On a heavy board that is
+   * real work - measured at roughly 16us per visible stroke - and it happened
+   * during the one frame that must not be slow.
+   *
+   * There is always a gap between the board settling and the pen landing:
+   * reaction time, deciding where to write. warmFreeze() spends that gap
+   * building the copy, so the pen finds it waiting.
+   *
+   * Nothing here is timed. The assertions are about STATE after a settle, and
+   * about how many full repaints a stroke costs - both of which are the same
+   * on a build box with a software rasteriser as on a real GPU.
+   */
+  const warmFreeze = await js(`
+    const a = window.app;
+    const r = {};
+    a.newBoard(true); a.store.clear();
+    a.settings.autosave = false;
+
+    // a board heavy enough that a full repaint is genuine work
+    const bulk = [];
+    for (let i = 0; i < 900; i++) {
+      const bx = (i % 30) * 120, by = Math.floor(i / 30) * 70;
+      const pts = [];
+      for (let k = 0; k < 40; k++) pts.push({ x: bx + k * 3, y: by + Math.sin(k / 3) * 9, p: 0.55 });
+      bulk.push({ id: 'warm' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4,
+        effect: 'none', opacity: 1, rotation: 0, points: pts,
+        bbox: { x: bx, y: by - 9, w: 120, h: 18 } });
+    }
+    a.store.addMany ? a.store.addMany(bulk) : bulk.forEach((o) => a.store.add(o, 'x'));
+
+    const sf = a.surface, it = a.interaction, cam = sf.cam;
+    cam.z = 0.4; cam.x = 0; cam.y = 0;          // a lot of it on screen at once
+    sf.invalidate(); sf.draw();
+
+    let froze = 0;
+    const realFreeze = sf._freezeScene.bind(sf);
+    sf._freezeScene = function (k) { froze++; return realFreeze(k); };
+
+    // Waits for the queued rebuild to have RUN, however long the browser takes
+    // to find an idle moment. The assertion is on the state it leaves behind,
+    // never on how long it took.
+    const settle = async (cap = 4000) => {
+      const t0 = performance.now();
+      while (sf._warming != null && performance.now() - t0 < cap) {
+        await new Promise((res) => setTimeout(res, 16));
+      }
+      await new Promise((res) => requestAnimationFrame(res));
+      return sf._warming == null;
+    };
+
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons) => ({ pointerId: 77, pointerType: 'pen', button: 0,
+      buttons, pressure: 0.6, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false });
+    const oneStroke = (x0, y0) => {
+      it.action = null; it.pointers.clear();
+      const before = froze;
+      it.onDown(mk(x0, y0, 1));
+      sf.draw();                                  // the frame the pen lands on
+      for (let i = 1; i <= 5; i++) { it.onMove(mk(x0 + i * 4, y0 - i * 5, 1)); sf.draw(); }
+      it.onUp(mk(x0 + 20, y0 - 25, 0));
+      sf.draw();
+      it.action = null; it.pointers.clear();
+      return froze - before;
+    };
+    a.setTool('pen'); a.notePenSeen();
+
+    // --- 1. the pan leaves the held copy out of date ----------------------
+    // Without this the rest of the test proves nothing: if the copy were still
+    // valid after a pan, "valid after a settle" would be true for free.
+    cam.panBy(-260, -140);
+    sf.draw();
+    r.keyAfterPan = sf._ink ? sf._ink.key : '(no copy held)';
+    r.keyWanted = sf.freezeKey();
+    r.staleRightAfterPan = !sf._ink || sf._ink.key !== r.keyWanted;
+    r.rebuildWasQueued = sf._warming != null;
+
+    // --- 2. and the gap is spent making it current ------------------------
+    r.settled = await settle();
+    r.keyAfterSettle = sf._ink ? sf._ink.key : '(no copy held)';
+    r.wantedAfterSettle = sf.freezeKey();
+    r.warmAfterSettle = !!sf._ink && sf._ink.key === r.wantedAfterSettle;
+
+    // --- 3. so the stroke that follows pays nothing -----------------------
+    r.freezesForWarmStroke = oneStroke(320, 300);
+
+    // --- 4. control: the same stroke with no gap to prepare in ------------
+    // Same board, same stroke, only the settle removed. If this is also 0 the
+    // test above is measuring something other than the warm copy.
+    cam.panBy(-90, -60);
+    sf.draw();                                    // queues a rebuild, not run yet
+    r.coldCopyStale = !sf._ink || sf._ink.key !== sf.freezeKey();
+    r.freezesForColdStroke = oneStroke(340, 320);
+    await settle();
+
+    // --- 5. a rebuild never runs under a moving pen -----------------------
+    // The live stroke owns the copy while it is down. A rebuild stepping in
+    // there would repaint the board underneath the ink.
+    it.action = null; it.pointers.clear();
+    it.onDown(mk(400, 340, 1));
+    it.onMove(mk(412, 330, 1));
+    sf.draw();
+    r.penIsDown = !!sf.wet;
+    const duringPen = froze;
+    sf.warmFreeze();                              // asked for at the worst moment
+    const ranWhileWet = await settle();
+    r.frozenWhilePenDown = froze - duringPen;
+    r.warmingClearedWhileWet = ranWhileWet;
+    it.onUp(mk(420, 322, 0));
+    sf.draw();
+    it.action = null; it.pointers.clear();
+
+    // --- 6. two pans in a row leave ONE copy, of where the board ended up --
+    // The key is read when the rebuild runs, not when it was queued, so a
+    // second pan mid-wait cannot leave a picture of somewhere the board
+    // already left.
+    await settle();
+    const beforePans = froze;
+    cam.panBy(-70, 0); sf.draw();
+    cam.panBy(-70, 0); sf.draw();
+    cam.panBy(0, -70); sf.draw();
+    await settle();
+    r.rebuildsForThreePans = froze - beforePans;
+    r.currentAfterPans = !!sf._ink && sf._ink.key === sf.freezeKey();
+
+    sf._freezeScene = realFreeze;
+    a.store.clear(); a.newBoard(true);
+    a.settings.autosave = true;
+    a.penSeenThisSession = false; a.setTool('select');
+    cam.z = 1; cam.x = 0; cam.y = 0;
+    it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('a pan leaves the frozen board copy out of date',
+    warmFreeze.staleRightAfterPan === true && warmFreeze.rebuildWasQueued === true,
+    `held ${warmFreeze.keyAfterPan}, view now wants ${warmFreeze.keyWanted}, ` +
+    `rebuild queued: ${warmFreeze.rebuildWasQueued}`);
+  check('and the quiet moment that follows is spent bringing it up to date',
+    warmFreeze.settled === true && warmFreeze.warmAfterSettle === true,
+    `after settle held ${warmFreeze.keyAfterSettle}, view wants ${warmFreeze.wantedAfterSettle}, ` +
+    `rebuild finished: ${warmFreeze.settled}`);
+  check('so the stroke that lands next repaints the board not at all',
+    warmFreeze.freezesForWarmStroke === 0,
+    `${warmFreeze.freezesForWarmStroke} full board repaints during the stroke ` +
+    `(cold, with no gap to prepare in: ${warmFreeze.freezesForColdStroke})`);
+  check('which is the warm copy doing it, not the board being cheap to draw',
+    warmFreeze.coldCopyStale === true && warmFreeze.freezesForColdStroke === 1,
+    `copy stale before the cold stroke: ${warmFreeze.coldCopyStale}, ` +
+    `repaints it paid: ${warmFreeze.freezesForColdStroke} (warm stroke paid ${warmFreeze.freezesForWarmStroke})`);
+  check('a rebuild asked for under a moving pen stands aside',
+    warmFreeze.penIsDown === true && warmFreeze.frozenWhilePenDown === 0 &&
+    warmFreeze.warmingClearedWhileWet === true,
+    `pen down: ${warmFreeze.penIsDown}, repaints while it was: ${warmFreeze.frozenWhilePenDown}, ` +
+    `request cleared: ${warmFreeze.warmingClearedWhileWet}`);
+  check('three pans in a row cost one rebuild, of where the board ended up',
+    warmFreeze.rebuildsForThreePans === 1 && warmFreeze.currentAfterPans === true,
+    `${warmFreeze.rebuildsForThreePans} rebuilds for three pans, ` +
+    `copy matches the final view: ${warmFreeze.currentAfterPans}`);
 
   /* ---- a pad exports as a real multi-page PDF ---- */
   const padPdfPath = path.join(OUT, 'pad-3-pages.pdf');
@@ -7515,6 +7690,17 @@ module.exports.run = async (win, app) => {
 
     hover(200, 300);
     await frame(); await frame();          // let any pending paint settle
+    // 300 strokes just landed on the board, so the frozen copy is out of date
+    // and a rebuild is waiting for a quiet moment. That rebuild is a full scene
+    // redraw and it is meant to be - it just is not the hover path, which is
+    // what is being counted here. Let it happen first.
+    {
+      const t0 = performance.now();
+      while (sf._warming != null && performance.now() - t0 < 4000) {
+        await new Promise((res) => setTimeout(res, 16));
+      }
+      await frame();
+    }
     scenes = 0;
 
     for (let i = 0; i < 60; i++) { hover(200 + i * 3, 300 + (i % 5)); }

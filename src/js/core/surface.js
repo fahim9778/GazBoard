@@ -39,6 +39,7 @@ export class Surface {
     this.selection = new Set();
     this.hoverId = null;
     this._raf = null;
+    this._warming = null;      // handle of a queued idle rebuild, see warmFreeze()
     this._onFrame = this._onFrame.bind(this);
 
     const ro = new ResizeObserver(() => this.resize());
@@ -359,6 +360,48 @@ export class Surface {
     return { canvas: c, key };
   }
 
+  /**
+   * Take the photograph before it is needed.
+   *
+   * The board keeps a frozen copy of itself and blits that instead of drawing
+   * every object again - which is what makes a crowded board usable at all.
+   * Pan, zoom or open a board and that copy is a picture of somewhere else, so
+   * it is thrown away. Nothing then takes a new one until something asks, and
+   * the thing that asks is a pen touching down: the first stroke after moving
+   * around paid for repainting the entire board before any ink could appear.
+   * Around 80ms on five thousand strokes, all of it in the worst possible
+   * place.
+   *
+   * The time was already there, unused. Between the hand stopping and the pen
+   * landing there is always a gap - reaction time, deciding where to draw -
+   * and it is far longer than the repaint. So the copy is taken during that
+   * gap instead, and the pen finds it waiting.
+   *
+   * Nothing on the drawing path waits for this. A stroke that starts first
+   * takes the old route and pays what it pays today; the copy is simply not
+   * ready yet, which is exactly the situation before any of this existed. The
+   * key is read when the work RUNS rather than when it is scheduled, so a
+   * second pan mid-wait produces a copy of where the board ended up rather
+   * than a stale one nobody wants.
+   */
+  warmFreeze() {
+    // A timer handle of 0 is a real handle. `!= null` so a queued rebuild is
+    // never mistaken for "nothing queued" and scheduled a second time.
+    if (this._warming != null) return;
+    const run = () => {
+      this._warming = null;
+      // Something is being drawn: the live path owns the copy and builds its
+      // own. Stepping in here would repaint the board underneath a moving pen.
+      if (this.wet || this.laser.length) return;
+      const key = this.freezeKey();
+      if (this._ink && this._ink.key === key) return;
+      this._ink = this._freezeScene(key);
+    };
+    this._warming = (typeof requestIdleCallback === 'function')
+      ? requestIdleCallback(run, { timeout: 300 })
+      : setTimeout(run, 120);
+  }
+
   /** The stroke under the pen, clipped to its own sheet. */
   _drawWet(ctx) {
     const cam = this.cam, pages = this.store.doc.pages;
@@ -465,6 +508,11 @@ export class Surface {
     this._fullAsked = false;
     this._band = null;
     this._bandOnly = false;
+
+    // The board is drawn and nothing is in flight: a good moment to have the
+    // frozen copy ready for whatever comes next. See warmFreeze().
+    if (!this.wet && !this.laser.length
+        && (!this._ink || this._ink.key !== this.freezeKey())) this.warmFreeze();
 
     // ---- screen-space overlays (CSS pixels) ----
     // Never cached: selection handles, hover and lock badges have to track the
