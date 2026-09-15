@@ -138,12 +138,12 @@ test('Android keyboard paste keeps GazBoard objects until the system clipboard c
   assert.ok(!e.prevented && !e.stopped, 'copy with no GazBoard selection must not steal the system clipboard');
 });
 
-test('Holding blank Android board space opens the Paste context menu without leaving a gesture behind', async () => {
+test('Holding blank Android board space opens Paste for both finger and stylus without leaving a gesture behind', async () => {
   const { windowHandlers } = await setup(() => true);
   const canvas = { id: 'c' };
   let cancelled = 0;
   let selectionCleared = 0;
-  let menuAt = null;
+  const menus = [];
   window.app = {
     selected: [],
     clipboard: [{ id: 'note-copy' }],
@@ -154,15 +154,26 @@ test('Holding blank Android board space opens the Paste context menu without lea
     pickAt: () => null,
     interaction: { cancelGesture() { cancelled++; return true; } },
     setSelection(ids) { assert.deepEqual(ids, []); selectionCleared++; },
-    showContextMenu(e) { menuAt = { x: e.clientX, y: e.clientY }; }
+    showContextMenu(e) { menus.push({ x: e.clientX, y: e.clientY, pointerType: e.pointerType }); }
   };
 
   const down = windowHandlers.get('pointerdown');
+  const up = windowHandlers.get('pointerup');
   assert.equal(typeof down, 'function');
+  assert.equal(typeof up, 'function');
+
   down({ pointerType: 'touch', button: 0, pointerId: 7, clientX: 120, clientY: 240, target: canvas });
   await new Promise((resolve) => setTimeout(resolve, 480));
+  up({ pointerId: 7 });
 
-  assert.equal(cancelled, 1);
-  assert.equal(selectionCleared, 1);
-  assert.deepEqual(menuAt, { x: 120, y: 240 });
+  down({ pointerType: 'pen', button: 0, pointerId: 8, clientX: 160, clientY: 280, target: canvas });
+  await new Promise((resolve) => setTimeout(resolve, 730));
+  up({ pointerId: 8 });
+
+  assert.equal(cancelled, 2);
+  assert.equal(selectionCleared, 2);
+  assert.deepEqual(menus, [
+    { x: 120, y: 240, pointerType: 'touch' },
+    { x: 160, y: 280, pointerType: 'pen' }
+  ]);
 });
