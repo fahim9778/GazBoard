@@ -3,8 +3,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 async function setup(handler) {
-  global.window = { addEventListener() {}, dispatchEvent() {} };
-  global.document = { documentElement: { dataset: {} }, addEventListener() {} };
+  const windowHandlers = new Map();
+  const documentHandlers = new Map();
+  global.window = {
+    app: { selected: [] },
+    addEventListener(type, fn) { windowHandlers.set(type, fn); },
+    dispatchEvent() {}
+  };
+  global.document = {
+    documentElement: { dataset: {} },
+    addEventListener(type, fn) { documentHandlers.set(type, fn); }
+  };
   const calls = [];
   const native = {
     postMessage(text) {
@@ -19,7 +28,7 @@ async function setup(handler) {
     }
   };
   const { createAndroidAdapter } = await import('../src/js/platform/android-adapter.js');
-  return { adapter: createAndroidAdapter(native), calls, native };
+  return { adapter: createAndroidAdapter(native), calls, native, windowHandlers, documentHandlers };
 }
 
 test('Pairing and send preserve the preload API and surface native errors', async () => {
@@ -76,4 +85,47 @@ test('Flush acknowledgement follows the completed persistence callback', async (
   adapter.onFlush(async () => { await Promise.resolve(); order.push('saved'); });
   await native.onmessage({ data: JSON.stringify({ event: 'flush', result: { ticket: 'flush1' } }) });
   assert.deepEqual(order, ['saved', 'app:flushed']);
+});
+
+test('Android keyboard paste keeps GazBoard objects until the system clipboard changes', async () => {
+  const { adapter, native, windowHandlers } = await setup(() => true);
+  const commands = [];
+  adapter.onMenu((id) => commands.push(id));
+  window.app.selected = [{ id: 'a' }, { id: 'b' }];
+
+  const keydown = windowHandlers.get('keydown');
+  assert.equal(typeof keydown, 'function');
+  const key = (value, target = { tagName: 'CANVAS', isContentEditable: false }) => {
+    let prevented = false;
+    let stopped = false;
+    const e = {
+      key: value, ctrlKey: true, metaKey: false, altKey: false, target,
+      preventDefault() { prevented = true; },
+      stopImmediatePropagation() { stopped = true; }
+    };
+    keydown(e);
+    return { prevented, stopped };
+  };
+
+  let e = key('c');
+  assert.deepEqual(commands, ['edit.copy']);
+  assert.ok(e.prevented && e.stopped);
+
+  e = key('v');
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.ok(e.prevented && e.stopped);
+
+  await native.onmessage({ data: JSON.stringify({ event: 'clipboardChanged', result: null }) });
+  e = key('v');
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.ok(!e.prevented && !e.stopped, 'newer system clipboard must fall through to WebView paste');
+
+  e = key('c', { tagName: 'TEXTAREA', isContentEditable: false });
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.ok(!e.prevented && !e.stopped, 'text editing keeps native clipboard behavior');
+
+  window.app.selected = [];
+  e = key('c');
+  assert.deepEqual(commands, ['edit.copy', 'edit.paste']);
+  assert.ok(!e.prevented && !e.stopped, 'copy with no GazBoard selection must not steal the system clipboard');
 });
