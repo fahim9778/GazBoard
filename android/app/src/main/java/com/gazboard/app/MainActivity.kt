@@ -3,6 +3,8 @@ package com.gazboard.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -257,6 +259,43 @@ class MainActivity : ComponentActivity() {
    * compared at all. With nothing eligible in the list, the app's own version
    * is returned, which reads as "nothing to do" and is the safe answer.
    */
+  /**
+   * What the phone's clipboard is holding, as far as the board needs to know.
+   *
+   * Two questions are answered at once. The text is what Paste should put on
+   * the board when the clipboard is the newer copy. The signature is only ever
+   * compared with an earlier signature: if it has not moved since objects were
+   * copied on the board, nothing has been copied anywhere since and those
+   * objects are still the most recent thing. Nothing here is stored and
+   * nothing is written - the clipboard is read, described, and let go.
+   *
+   * Android only hands the clipboard to an app that is in front, which is
+   * exactly when this is called - a menu the user just opened. Refused or
+   * empty comes back as an empty description rather than an error, because
+   * "nothing to paste" is an ordinary answer and not a fault.
+   */
+  fun readClipboard(): JsonObject = onMain {
+    try {
+      val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+      val clip = manager.primaryClip
+      if (clip == null || clip.itemCount == 0) return@onMain json("text" to "", "signature" to "")
+      val description = clip.description
+      val kinds = (0 until (description?.mimeTypeCount ?: 0))
+        .mapNotNull { description?.getMimeType(it) }.sorted().joinToString("|")
+      val text = (0 until clip.itemCount)
+        .mapNotNull { clip.getItemAt(it)?.coerceToText(this)?.toString() }
+        .joinToString("\n").trim()
+      // A picture or a file shows up as a uri rather than words; it still has
+      // to change the signature, or copying one would look like copying
+      // nothing and the board's own copy would wrongly stay in front.
+      val handles = (0 until clip.itemCount)
+        .mapNotNull { clip.getItemAt(it)?.uri?.toString() }.joinToString("|")
+      json("text" to text, "signature" to "$kinds\u0000$text\u0000$handles")
+    } catch (e: Exception) {
+      json("text" to "", "signature" to "")
+    }
+  }
+
   fun checkForUpdate(): JsonObject {
     val connection = URL("https://api.github.com/repos/fahim9778/GazBoard/releases?per_page=30").openConnection() as HttpURLConnection
     try {

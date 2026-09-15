@@ -24,7 +24,14 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          # The old default installs the retired SDK package named "tools".
+          # Current sdkmanager no longer publishes it, which made CI fail before
+          # any GazBoard code or tests ran. The runner already has platform-tools;
+          # Gradle installs the exact SDK components the project needs.
+          packages: ''
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'

@@ -84,6 +84,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "shell:openBoards" -> { event("showBoards", JsonNull); true }
       "shell:openExternal" -> activity.openReleases(str())
       "updates:check" -> activity.checkForUpdate()
+      "clipboard:read" -> activity.readClipboard()
       "boards:list" -> s.list()
       "boards:load" -> s.load(str())
       "boards:save" -> s.save(obj())

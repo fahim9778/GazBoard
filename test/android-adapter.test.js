@@ -22,6 +22,32 @@ async function setup(handler) {
   return { adapter: createAndroidAdapter(native), calls, native };
 }
 
+test('The clipboard is read through the native side, not guessed at', async () => {
+  const { adapter, calls } = await setup(async (request) => {
+    if (request.method !== 'clipboard:read') throw new Error('unexpected ' + request.method);
+    return { text: '+880 1700 000000', signature: 'text/plain\u0000+880 1700 000000\u0000' };
+  });
+  const got = await adapter.clipboardRead();
+  assert.equal(calls.filter((c) => c.method === 'clipboard:read').length, 1,
+    `asked the native side once; calls were ${JSON.stringify(calls.map((c) => c.method))}`);
+  assert.deepEqual({ text: got.text, hasSignature: typeof got.signature === 'string' && got.signature.length > 0 },
+    { text: '+880 1700 000000', hasSignature: true },
+    `clipboard came back as ${JSON.stringify(got)} — the text is what Paste puts on the board, ` +
+    `the signature only ever gets compared with an earlier one`);
+});
+
+test('A refused clipboard is an ordinary answer, not a crash', async () => {
+  const { adapter } = await setup(async () => { throw new Error('Clipboard unavailable'); });
+  const got = await adapter.clipboardRead();
+  // Paste reads .signature and .text; neither being there is exactly how it
+  // decides there is nothing on the clipboard worth preferring, so a refusal
+  // must come back as a harmless object rather than as a thrown error.
+  assert.deepEqual(
+    { threw: false, signature: got?.signature ?? null, text: got?.text ?? null, ok: got?.ok },
+    { threw: false, signature: null, text: null, ok: false },
+    `a refusal should look like an empty clipboard to Paste, got ${JSON.stringify(got)}`);
+});
+
 test('Pairing and send preserve the preload API and surface native errors', async () => {
   const { adapter, calls } = await setup(({ method, args }) => {
     if (method === 'sync:pairWith') return { ok: true, device: args.peer };

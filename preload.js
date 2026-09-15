@@ -1,8 +1,65 @@
 'use strict';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, clipboard } = require('electron');
+const crypto = require('node:crypto');
+
+/**
+ * A fingerprint of the machine's clipboard.
+ *
+ * Copying objects on a board cannot be written to the machine's clipboard - an
+ * object is an id, a position and a group, none of which survive being turned
+ * into text - so the board keeps its own copy. Paste then has to answer one
+ * question: which was copied more recently, the objects or whatever is on the
+ * machine's clipboard? Taking a fingerprint when the objects are copied
+ * answers it exactly. Unchanged at paste time means nothing else has been
+ * copied since, so the objects are what was meant.
+ *
+ * The picture is hashed properly rather than described by its size. Two
+ * screenshots of the same window are the same size and different pictures, so
+ * size alone would call the second one "no change" and quietly hand back the
+ * board's older copy instead. The hash runs over the raw bitmap rather than a
+ * PNG: same certainty, none of the compression work, and it only happens when
+ * something is copied or pasted rather than on the way past.
+ */
+function clipboardSignature() {
+  try {
+    const formats = clipboard.availableFormats('clipboard').slice().sort().join('|');
+    const text = clipboard.readText('clipboard');
+    const image = clipboard.readImage('clipboard');
+    let picture = '';
+    if (image && !image.isEmpty()) {
+      const { width, height } = image.getSize();
+      picture = `${width}x${height}:` +
+        crypto.createHash('sha256').update(image.toBitmap()).digest('hex');
+    }
+    return `${formats}\u0000${text}\u0000${picture}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the machine's clipboard is holding, when somebody actually asks to
+ * paste. Turning a picture into bytes is only worth doing at that moment -
+ * never on the way past, which is what made hashing it on every keypress the
+ * wrong shape for the question.
+ */
+function clipboardRead() {
+  try {
+    const image = clipboard.readImage('clipboard');
+    return {
+      text: clipboard.readText('clipboard') || '',
+      image: image && !image.isEmpty() ? image.toDataURL() : null,
+      signature: clipboardSignature()
+    };
+  } catch {
+    return { text: '', image: null, signature: null };
+  }
+}
 
 contextBridge.exposeInMainWorld('board', {
   info: () => ipcRenderer.invoke('app:info'),
+  clipboardSignature,
+  clipboardRead,
 
   readFile: (p) => ipcRenderer.invoke('fs:readFile', p),
   // On the desktop the path names the file already; the web build has to work

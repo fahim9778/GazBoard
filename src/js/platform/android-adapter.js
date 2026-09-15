@@ -108,6 +108,12 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     openBoardsFolder: () => call('shell:openBoards'),
     openReleases: (url) => call('shell:openExternal', url),
     checkForUpdate: () => guarded('updates:check'),
+    // Android hands the clipboard only to the app in front, which is exactly
+    // when this is asked - a menu the user just opened. Pictures arrive as a
+    // handle rather than pixels, so the text is what can be pasted; the
+    // handle still counts towards the signature so copying one is not mistaken
+    // for copying nothing.
+    clipboardRead: () => guarded('clipboard:read'),
     background: () => call('app:background'),
     boards: {
       list: () => call('boards:list'),

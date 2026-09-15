@@ -68,6 +68,17 @@ export function createWebAdapter() {
       return Promise.resolve(true);
     },
     checkForUpdate: () => updater.checkForUpdate(),
+    // A browser will only hand over the clipboard with permission, and may
+    // simply refuse. An empty description is the honest answer to that, and
+    // leaves paste falling back to the board's own copy.
+    clipboardRead: async () => {
+      try {
+        const text = (await navigator.clipboard?.readText?.()) || '';
+        return { text, image: null, signature: text ? `text/plain\u0000${text}` : '' };
+      } catch {
+        return { text: '', image: null, signature: null };
+      }
+    },
 
     boards: {
       list: () => storage.listBoards(),

@@ -441,7 +441,11 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Cut', accelerator: 'CmdOrCtrl+X', click: cmd('edit.cut') },
         { label: 'Copy', accelerator: 'CmdOrCtrl+C', click: cmd('edit.copy') },
-        { label: 'Paste', accelerator: 'CmdOrCtrl+V', click: cmd('edit.paste') },
+        // registerAccelerator: false shows the shortcut in the menu without
+        // claiming the key. The page therefore sees Ctrl+V itself and raises
+        // one ordinary paste event, so there is a single path that decides
+        // what to paste rather than two racing to answer first.
+        { label: 'Paste', accelerator: 'CmdOrCtrl+V', registerAccelerator: false, click: cmd('edit.paste') },
         { label: 'Duplicate', accelerator: 'CmdOrCtrl+D', click: cmd('edit.duplicate') },
         { label: 'Delete', click: cmd('edit.delete') },
         { type: 'separator' },

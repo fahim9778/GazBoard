@@ -213,6 +213,16 @@ jobs:
             echo
             echo "Runs on this device. No account, no sign-in, no cloud."
           } > "$NOTES"
+          # --latest=false leaves the "Latest" badge on the desktop release.
+          # gh marks every new non-prerelease as the latest by default, so
+          # without this an Android build quietly takes the badge off whatever
+          # desktop version is current - and GitHub shows the badged release at
+          # the top of the Releases page, so the page ends up claiming an older
+          # Android build is the newest thing in the repo. The tag stays
+          # android-<version>-v<build>: it must NOT start with "v", or it would
+          # fire the desktop release workflow and put an Android build in front
+          # of desktop users looking for an update.
           gh release create "$TAG" dist/* \
+            --latest=false \
             --title "GazBoard for Android $VERSION (build $BUILD)" \
             --notes-file "$NOTES"
