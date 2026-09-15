@@ -7817,8 +7817,39 @@ module.exports.run = async (win, app) => {
     a.newBoard(true); a.textEditor.cancel(); a.setTool('select');
     const mk = (id, text, x) => ({ id, type: 'note', x, y: 200, w: 160, h: 160,
       color: '#ffd94a', text, rotation: 0 });
+    /*
+     * Putting something on the machine's clipboard and then reading it back is
+     * not instant on every platform. writeText() resolving means Chromium has
+     * handed it over, not that Windows has finished taking it - so waiting for
+     * the fingerprint to actually move is the difference between testing the
+     * rule and testing a race. Whether each write landed is recorded, so a
+     * failure says "the clipboard never took it" instead of blaming the board.
+     */
+    const settled = [];
+    const putText = async (value) => {
+      const was = a.clipboardStamp();
+      await navigator.clipboard.writeText(value);
+      for (let i = 0; i < 150; i++) {
+        const now = a.clipboardStamp();
+        if (now !== was && (now || '').includes(value)) { settled.push(true); return true; }
+        await sleep(20);
+      }
+      settled.push(false);
+      return false;
+    };
+    const putImage = async (blob) => {
+      const was = a.clipboardStamp();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      for (let i = 0; i < 150; i++) {
+        if (a.clipboardStamp() !== was) { settled.push(true); return true; }
+        await sleep(20);
+      }
+      settled.push(false);
+      return false;
+    };
+
     const EARLIER = 'something copied earlier, in another app';
-    await navigator.clipboard.writeText(EARLIER);
+    await putText(EARLIER);
     r.stampReadable = typeof a.clipboardStamp() === 'string';
 
     a.store.add(mk('n1', 'alpha', 100));
@@ -7864,7 +7895,7 @@ module.exports.run = async (win, app) => {
     r.holdingAfterCopy = a.clipboard.length;
 
     const LATER = 'https://example.com/from-the-browser';
-    await navigator.clipboard.writeText(LATER);
+    await putText(LATER);
     r.newestAfterSomeoneElse = a.boardCopyIsNewest();
     const beforeOutside = a.store.objects.length;
     firePaste(dt => dt.setData('text/plain', LATER));
@@ -7901,7 +7932,7 @@ module.exports.run = async (win, app) => {
     a.setSelection(['m1']);
     a.command('edit.copy');
     const NUMBER = '+880 1700 000000';
-    await navigator.clipboard.writeText(NUMBER);
+    await putText(NUMBER);
     const beforeNum = a.store.objects.length;
     await a.pasteAt({ x: 2500, y: 1800 });
     const num = a.store.objects.slice(beforeNum);
@@ -7919,7 +7950,7 @@ module.exports.run = async (win, app) => {
      */
     a.newBoard(true); a.textEditor.cancel();
     const asBlob = await new Promise(res => shot.toBlob(res, 'image/png'));
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': asBlob })]);
+    await putImage(asBlob);
     a.store.add(mk('i1', 'newer', 100));
     a.store.add(mk('i2', 'still newer', 400));
     a.setSelection(['i1', 'i2']);
@@ -7943,7 +7974,7 @@ module.exports.run = async (win, app) => {
     a.setSelection(['i1']);
     a.command('edit.copy');
     const sameSizeBefore = a.clipboardStamp();
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': otherBlob })]);
+    await putImage(otherBlob);
     r.sameSizeDifferentPicture = a.clipboardStamp() !== sameSizeBefore;
     r.beatenBySameSizePicture = a.boardCopyIsNewest() === false;
 
@@ -7955,7 +7986,7 @@ module.exports.run = async (win, app) => {
     a.setSelection(['e1']);
     a.command('edit.copy');
     const MENU_LINE = 'typed into another window';
-    await navigator.clipboard.writeText(MENU_LINE);
+    await putText(MENU_LINE);
     const beforeMenu = a.store.objects.length;
     await a.command('edit.paste');
     const menuGot = a.store.objects.slice(beforeMenu);
@@ -7974,6 +8005,8 @@ module.exports.run = async (win, app) => {
     await sleep(60);
     const back = a.store.objects.slice(afterCut);
     r.cutPastesBack = back.length === 1 && back[0].type === 'note' && back[0].text === 'gone';
+    r.everyClipboardWriteLanded = settled.every(Boolean);
+    r.clipboardWrites = settled.filter(Boolean).length + '/' + settled.length;
 
     /*
      * --- pasting at a point, which is what a right-click or a held finger means ---
@@ -8015,6 +8048,10 @@ module.exports.run = async (win, app) => {
     pasted.textPasteWorks);
   check('pasting into a note being typed goes to the note, not the board',
     pasted.editorOpen && pasted.leftTheEditorAlone);
+  check('the machine clipboard took every value this test put on it',
+    pasted.everyClipboardWriteLanded === true,
+    `${pasted.clipboardWrites} writes landed within three seconds — anything less means the ` +
+    `checks below were racing the operating system rather than testing the board`);
   check('copying objects leaves the machine clipboard alone',
     pasted.copiedCount === 2 && pasted.clipboardUndisturbed === true,
     `${pasted.copiedCount} objects held; text already on the clipboard survived: ${pasted.clipboardUndisturbed}`);
