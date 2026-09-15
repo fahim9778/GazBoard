@@ -103,6 +103,19 @@ e = keyEvent('v', { ctrlKey: false, metaKey: true });
 assert.strictEqual(commands.at(-1), 'edit.paste');
 assert(e.prevented && e.stopped);
 
+// Image identity is based on the PNG bytes, not just dimensions/format. Two
+// screenshots can be the same size while containing completely different data;
+// the newer external image must still beat an older GazBoard object copy.
+clipboardState = { formats: ['image/png'], text: '', image: Buffer.from([1, 2, 3, 4]) };
+e = keyEvent('c');
+assert.strictEqual(commands.at(-1), 'edit.copy');
+assert(e.prevented && e.stopped);
+const beforeChangedImagePaste = commands.length;
+clipboardState = { formats: ['image/png'], text: '', image: Buffer.from([4, 3, 2, 1]) };
+e = keyEvent('v');
+assert.strictEqual(commands.length, beforeChangedImagePaste);
+assert(!e.prevented && !e.stopped, 'different same-size image data must be left to native paste');
+
 // Native text editing must retain the operating system's copy/paste behavior.
 const beforeEditable = commands.length;
 e = keyEvent('c', { target: { tagName: 'TEXTAREA', isContentEditable: false } });
