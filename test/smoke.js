@@ -7760,11 +7760,15 @@ module.exports.run = async (win, app) => {
     // can actually draw on rather than filling the whole canvas
     r.scaledDown = !!img && Math.round(img.w) === 640 && Math.round(img.h) === 360;
 
-    // and it lands where you are looking, not off at the origin
-    const view = sf.cam.viewport(sf.width, sf.height);
+    // and it lands where the pointer is - or, with no pointer on the board yet,
+    // in the middle of what you are looking at. Same rule as everything else
+    // that arrives by paste; a picture is not a special case.
+    const want = a.pastePoint();
     r.centredInView = !!img
-      && Math.abs((img.x + img.w / 2) - (view.x + view.w / 2)) < 1
-      && Math.abs((img.y + img.h / 2) - (view.y + view.h / 2)) < 1;
+      && Math.abs((img.x + img.w / 2) - want.x) < 1
+      && Math.abs((img.y + img.h / 2) - want.y) < 1;
+    r.imageLandedAt = img ? Math.round(img.x + img.w / 2) + ',' + Math.round(img.y + img.h / 2) : 'none';
+    r.imageWanted = Math.round(want.x) + ',' + Math.round(want.y);
 
     // selected on arrival, so it can be moved or resized straight away
     r.selectedOnArrival = !!img && sf.selection.has(img.id);
@@ -7994,6 +7998,69 @@ module.exports.run = async (win, app) => {
       && menuGot[0].text === MENU_LINE;
     r.menuPasteGot = menuGot.map(o => o.type).join(',') || '(nothing)';
 
+    /*
+     * --- Ctrl+V lands where the pointer is, not where the originals were ---
+     *
+     * Dropping the copies a nudge from their originals is duplicate, not
+     * paste. On a SECOND board it is worse: the copies keep the coordinates
+     * they had on the first, so something copied from a far corner arrives in
+     * the far corner of the new board, nowhere near what you are looking at.
+     */
+    a.newBoard(true); a.textEditor.cancel(); a.setTool('select');
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const far = sf.cam.toWorld(0, 0);
+    a.store.add({ id: 'f1', type: 'note', x: far.x + 9000, y: far.y + 6000, w: 160, h: 160,
+      color: '#ffd94a', text: 'far away', rotation: 0 });
+    a.setSelection(['f1']);
+    a.command('edit.copy');
+
+    // the pointer is put somewhere on screen, as a real one would be
+    // through screenPoint, exactly as the app does - the canvas is not at the
+    // window's top left, so client coordinates are not screen coordinates
+    const atClient = (x, y) => { const sp = sf.screenPoint({ clientX: x, clientY: y });
+      return sf.cam.toWorld(sp.x, sp.y); };
+    const seen = atClient(420, 260);
+    it.onMove({ pointerId: 5, pointerType: 'mouse', button: 0, buttons: 0, pressure: 0,
+      clientX: 420, clientY: 260, preventDefault(){}, stopPropagation(){},
+      target: { setPointerCapture(){}, releasePointerCapture(){} } });
+    r.pointerRemembered = !!a.boardPoint
+      && Math.abs(a.boardPoint.x - seen.x) < 2 && Math.abs(a.boardPoint.y - seen.y) < 2;
+    r.pointerSeen = a.boardPoint ? Math.round(a.boardPoint.x) + ',' + Math.round(a.boardPoint.y) : 'none';
+    r.pointerWanted = Math.round(seen.x) + ',' + Math.round(seen.y);
+
+    const beforeHere = a.store.objects.length;
+    await a.pasteAt(null);
+    const here = a.store.objects.slice(beforeHere);
+    r.pastedAtPointer = here.length === 1
+      && Math.abs((here[0].x + here[0].w / 2) - seen.x) < 2
+      && Math.abs((here[0].y + here[0].h / 2) - seen.y) < 2;
+    r.pastedAwayFromOriginal = here.length === 1 && Math.abs(here[0].x - (far.x + 9000)) > 1000;
+
+    // --- and on a different board it still lands under the pointer ---
+    a.newBoard(true); a.textEditor.cancel();
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const elsewhereWp = atClient(700, 400);
+    it.onMove({ pointerId: 5, pointerType: 'mouse', button: 0, buttons: 0, pressure: 0,
+      clientX: 700, clientY: 400, preventDefault(){}, stopPropagation(){},
+      target: { setPointerCapture(){}, releasePointerCapture(){} } });
+    const beforeOther = a.store.objects.length;
+    await a.pasteAt(null);
+    const onOther = a.store.objects.slice(beforeOther);
+    r.crossBoardAtPointer = onOther.length === 1
+      && Math.abs((onOther[0].x + onOther[0].w / 2) - elsewhereWp.x) < 2
+      && Math.abs((onOther[0].y + onOther[0].h / 2) - elsewhereWp.y) < 2;
+    r.crossBoardGotX = onOther.length === 1 ? Math.round(onOther[0].x) : null;
+
+    // --- pointer left long ago and the board has moved on: use the middle ---
+    sf.cam.x = -40000; sf.cam.y = -40000;
+    const view2 = sf.cam.viewport(sf.width, sf.height);
+    const beforeOff = a.store.objects.length;
+    await a.pasteAt(null);
+    const off = a.store.objects.slice(beforeOff);
+    r.offScreenFallsBackToMiddle = off.length === 1
+      && Math.abs((off[0].x + off[0].w / 2) - (view2.x + view2.w / 2)) < 2;
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+
     // --- cut takes them away and still lets them come back ---
     a.newBoard(true); a.textEditor.cancel();
     a.store.add(mk('c1', 'gone', 100));
@@ -8040,8 +8107,10 @@ module.exports.run = async (win, app) => {
     pasted.landed && pasted.carriesThePixels);
   check('and arrives at a workable size rather than filling the canvas',
     pasted.scaledDown);
-  check('it lands where you are looking, already selected',
-    pasted.centredInView && pasted.selectedOnArrival);
+  check('it lands where the pointer is, already selected',
+    pasted.centredInView && pasted.selectedOnArrival,
+    `centred at ${pasted.imageLandedAt}, wanted ${pasted.imageWanted}; selected on arrival: ` +
+    `${pasted.selectedOnArrival}`);
   check('ink goes on top of the pasted picture, not under it',
     pasted.inkedOnIt && pasted.inkSitsAbove);
   check('text on the clipboard still pastes as text',
@@ -8097,6 +8166,20 @@ module.exports.run = async (win, app) => {
     pasted.menuPasteFollowsRule === true,
     `edit.paste gave ${pasted.menuPasteGot}, wanted text — the menu used to reach straight ` +
     `for the board's own copy and ignore anything newer`);
+  check('the board remembers where the pointer last was',
+    pasted.pointerRemembered === true,
+    `boardPoint holds ${pasted.pointerSeen}, the pointer was at ${pasted.pointerWanted}`);
+  check('Ctrl+V lands under the pointer, not beside the original',
+    pasted.pastedAtPointer === true && pasted.pastedAwayFromOriginal === true,
+    `centred on the pointer: ${pasted.pastedAtPointer}, and moved well away from the original: ` +
+    `${pasted.pastedAwayFromOriginal} — false means paste is behaving like duplicate`);
+  check('and on a different board it still lands under the pointer',
+    pasted.crossBoardAtPointer === true,
+    `landed at x=${pasted.crossBoardGotX}; keeping the old board's coordinates would put it ` +
+    `thousands of units away, off whatever you are looking at`);
+  check('with the pointer long gone, it uses the middle of the view',
+    pasted.offScreenFallsBackToMiddle === true,
+    `fell back to the middle after the board was panned away: ${pasted.offScreenFallsBackToMiddle}`);
   check('losing priority does not throw the copied objects away',
     pasted.stillHolding === 1 && pasted.oursStillAvailable === true,
     `still holding ${pasted.stillHolding} object(s); the board menu still pasted it: ${pasted.oursStillAvailable} ` +

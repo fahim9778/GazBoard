@@ -252,6 +252,9 @@ export class Interaction {
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (e.pointerType === 'pen') this.app.notePenSeen();
     this.pointers.set(e.pointerId, { sp, wp, type: e.pointerType });
+    // Where the board was last touched, for anything later that needs a place
+    // and was not given one - Ctrl+V, most of all.
+    this.app.boardPoint = { x: wp.x, y: wp.y, at: performance.now() };
 
     if (this.pointers.size === 2) {
       // Two fingers pinch. A mouse (or a second pen) arriving while a stroke
@@ -507,6 +510,7 @@ export class Interaction {
     if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = sp; this._mouseSp = null; }
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { sp, wp, type: e.pointerType });
+    this.app.boardPoint = { x: wp.x, y: wp.y, at: performance.now() };
 
     if (this.pinch && this.pointers.size >= 2) { this.updatePinch(); return; }
 

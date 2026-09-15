@@ -135,6 +135,7 @@ class App {
     this.tool = 'pen';
     this.clipboard = [];
     this.clipStamp = null;
+    this.boardPoint = null;
     this.ruler = { visible: false, x: 0, y: 0, angle: 0, length: 900, thickness: 78, snap: true };
     this.textEditor = new TextEditor(this);
     this.panels = createPanels(this);
@@ -1490,15 +1491,39 @@ class App {
    * a board copy that loses to something newer is still sitting there for
    * afterwards.
    */
+  /**
+   * Where a paste should land when nobody said where.
+   *
+   * Ctrl+V has no point of its own, so it used to drop the copies a nudge away
+   * from where they came from - which is duplicate, not paste, and on a second
+   * board it is worse than that: the copies keep the coordinates they had on
+   * the first one, so something copied from the far corner of one board lands
+   * in the far corner of the next, miles from anything you are looking at.
+   *
+   * The pointer knows better. Wherever the mouse, stylus or finger last
+   * touched the board is where a paste belongs, as long as that place is still
+   * on screen - pan away and the old spot is meaningless, so the middle of
+   * what you ARE looking at takes over.
+   */
+  pastePoint() {
+    const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
+    const middle = { x: view.x + view.w / 2, y: view.y + view.h / 2 };
+    const p = this.boardPoint;
+    if (!p) return middle;
+    const onScreen = p.x >= view.x && p.x <= view.x + view.w
+      && p.y >= view.y && p.y <= view.y + view.h;
+    return onScreen ? { x: p.x, y: p.y } : middle;
+  }
+
   async pasteAt(wp) {
+    if (!wp) wp = this.pastePoint();
     const held = this.clipboard.length;
     const now = await this.clipboardNow();
     const moved = !!now && now.signature != null && this.clipStamp != null
       && now.signature !== this.clipStamp;
 
     if (now && (moved || !held)) {
-      const at = wp || this.surface.cam.viewport(this.surface.width, this.surface.height);
-      const point = wp || { x: at.x + at.w / 2, y: at.y + at.h / 2 };
+      const point = wp;
       if (now.image) {
         try {
           const blob = await (await fetch(now.image)).blob();
@@ -1510,7 +1535,6 @@ class App {
     }
 
     if (!held) { this.toast('Nothing copied yet', 'help'); return; }
-    if (!wp) { this.paste(); return; }
     const box = this.clipboard.reduce((b, o) => unionBox(b, boundsOf(o)), null);
     if (!box) { this.paste(); return; }
     const copies = this.regroup(this.clipboard.map(
@@ -2659,7 +2683,9 @@ class App {
        */
       if (this.boardCopyIsNewest()) {
         e.preventDefault();
-        this.paste();
+        // Where the pointer is, not where the originals were. preventDefault
+        // has already happened, so there is nothing left to race.
+        this.pasteAt(this.pastePoint());
         return;
       }
       const items = [...(e.clipboardData?.items || [])];
@@ -2667,18 +2693,16 @@ class App {
       if (imageItem) {
         e.preventDefault();
         const file = imageItem.getAsFile();
-        const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
-        await insertImageFiles(this, [file], { x: view.x + view.w / 2, y: view.y + view.h / 2 });
+        await insertImageFiles(this, [file], this.pastePoint());
         return;
       }
       const text = e.clipboardData?.getData('text/plain');
       if (text && text.trim()) {
         e.preventDefault();
-        const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
-        this.addPastedText(text, { x: view.x + view.w / 2, y: view.y + view.h / 2 });
+        this.addPastedText(text, this.pastePoint());
         return;
       }
-      if (this.clipboard.length) { e.preventDefault(); this.paste(); }
+      if (this.clipboard.length) { e.preventDefault(); this.pasteAt(this.pastePoint()); }
     });
 
     // drag & drop files
