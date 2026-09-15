@@ -36,6 +36,21 @@ test('The clipboard is read through the native side, not guessed at', async () =
     `the signature only ever gets compared with an earlier one`);
 });
 
+test('A picture on the clipboard arrives as a picture, never as text', async () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
+  const { adapter } = await setup(async (request) => {
+    if (request.method !== 'clipboard:read') throw new Error('unexpected ' + request.method);
+    // what the native side sends for an image clip: no words, a picture, and a
+    // signature built from the handle
+    return { text: '', image: PIXEL, signature: 'image/png\u0000\u0000content://media/42' };
+  });
+  const got = await adapter.clipboardRead();
+  assert.deepEqual({ text: got.text, isDataUrl: String(got.image || '').startsWith('data:image/') },
+    { text: '', isDataUrl: true },
+    `an image clip must carry no text at all - reading its bytes as characters is what put ` +
+    `megabytes of rubbish in a text box on the board. Got ${JSON.stringify({ text: got.text, image: String(got.image).slice(0, 24) })}`);
+});
+
 test('A refused clipboard is an ordinary answer, not a crash', async () => {
   const { adapter } = await setup(async () => { throw new Error('Clipboard unavailable'); });
   const got = await adapter.clipboardRead();

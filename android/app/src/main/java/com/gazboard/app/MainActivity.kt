@@ -32,6 +32,8 @@ import kotlinx.serialization.json.*
 class MainActivity : ComponentActivity() {
   companion object {
     const val ORIGIN = "https://appassets.androidplatform.net"
+    /** Beyond this a pasted picture is left on the clipboard rather than carried. */
+    const val CLIPBOARD_IMAGE_CAP = 12 * 1024 * 1024
     const val ENTRY = "$ORIGIN/assets/board/index.html"
   }
   private val app get() = application as GazBoardApplication
@@ -262,37 +264,64 @@ class MainActivity : ComponentActivity() {
   /**
    * What the phone's clipboard is holding, as far as the board needs to know.
    *
-   * Two questions are answered at once. The text is what Paste should put on
-   * the board when the clipboard is the newer copy. The signature is only ever
-   * compared with an earlier signature: if it has not moved since objects were
-   * copied on the board, nothing has been copied anywhere since and those
-   * objects are still the most recent thing. Nothing here is stored and
-   * nothing is written - the clipboard is read, described, and let go.
+   * Three answers at once. The words, when there are words. The picture, when
+   * there is a picture. And a signature that is only ever compared with an
+   * earlier one: unchanged since objects were copied on the board means nothing
+   * has been copied anywhere since, so those objects are still the newest.
+   *
+   * The words are taken ONLY from a clip that says it holds words.
+   * coerceToText looks like the obliging way to ask - it is not. Handed a
+   * picture, it opens the file behind the clip and reads the bytes as
+   * characters, so pasting a copied photo produced a text box full of rubbish
+   * several megabytes long, and a board too heavy to draw on. It is not a
+   * converter; it is a reader that never says no.
    *
    * Android only hands the clipboard to an app that is in front, which is
-   * exactly when this is called - a menu the user just opened. Refused or
-   * empty comes back as an empty description rather than an error, because
-   * "nothing to paste" is an ordinary answer and not a fault.
+   * exactly when this is called - a menu the user just opened. Refused or empty
+   * comes back as an empty description rather than an error, because "nothing
+   * to paste" is an ordinary answer and not a fault.
    */
   fun readClipboard(): JsonObject = onMain {
+    val nothing = json("text" to "", "image" to "", "signature" to "")
     try {
       val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
       val clip = manager.primaryClip
-      if (clip == null || clip.itemCount == 0) return@onMain json("text" to "", "signature" to "")
+      if (clip == null || clip.itemCount == 0) return@onMain nothing
       val description = clip.description
       val kinds = (0 until (description?.mimeTypeCount ?: 0))
         .mapNotNull { description?.getMimeType(it) }.sorted().joinToString("|")
-      val text = (0 until clip.itemCount)
-        .mapNotNull { clip.getItemAt(it)?.coerceToText(this)?.toString() }
+      val items = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it) }
+
+      val text = if (description?.hasMimeType("text/*") != true) "" else items
+        .mapNotNull { it.text?.toString() ?: it.coerceToText(this)?.toString() }
         .joinToString("\n").trim()
-      // A picture or a file shows up as a uri rather than words; it still has
-      // to change the signature, or copying one would look like copying
-      // nothing and the board's own copy would wrongly stay in front.
-      val handles = (0 until clip.itemCount)
-        .mapNotNull { clip.getItemAt(it)?.uri?.toString() }.joinToString("|")
-      json("text" to text, "signature" to "$kinds\u0000$text\u0000$handles")
+
+      // A picture comes across as a handle to a file, so it is read here and
+      // handed over as the picture itself. Anything beyond the cap is left
+      // alone rather than dragged through the bridge and onto the board.
+      var image = ""
+      if (description?.hasMimeType("image/*") == true) {
+        val uri = items.firstNotNullOfOrNull { it.uri }
+        if (uri != null) {
+          runCatching {
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes != null && bytes.isNotEmpty() && bytes.size <= CLIPBOARD_IMAGE_CAP) {
+              val kind = contentResolver.getType(uri) ?: "image/png"
+              image = "data:" + kind + ";base64," +
+                java.util.Base64.getEncoder().encodeToString(bytes)
+            }
+          }
+        }
+      }
+
+      // The handles count towards the signature even when the picture itself
+      // was too big to carry, or copying one would look like copying nothing
+      // and the board's own older copy would wrongly stay in front.
+      val handles = items.mapNotNull { it.uri?.toString() }.joinToString("|")
+      json("text" to text, "image" to image,
+        "signature" to "$kinds\u0000$text\u0000$handles")
     } catch (e: Exception) {
-      json("text" to "", "signature" to "")
+      nothing
     }
   }
 
