@@ -1,5 +1,7 @@
 package com.gazboard.app
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.net.Uri
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
@@ -14,6 +16,10 @@ import kotlinx.serialization.json.*
 class NativeBridge(private val activity: MainActivity, private val web: WebView,
   private val converter: DocumentConverter? = null) {
   private val app = activity.application as GazBoardApplication
+  private val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+  private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener {
+    if (converter == null) event("clipboardChanged", JsonNull)
+  }
   @Volatile private var reply: JavaScriptReplyProxy? = null
   @Volatile private var disposed = false
   private val allowedConversion = setOf("fs:readFile", "blob:release", "convert:ready", "convert:error")
@@ -42,8 +48,13 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
         }
       }
     }
+    if (converter == null) clipboard.addPrimaryClipChangedListener(clipboardListener)
   }
-  fun dispose() { disposed = true; reply = null }
+  fun dispose() {
+    if (converter == null) runCatching { clipboard.removePrimaryClipChangedListener(clipboardListener) }
+    disposed = true
+    reply = null
+  }
   fun event(name: String, result: JsonElement) {
     app.io.execute { runCatching { respond(json("event" to name), result) } }
   }
