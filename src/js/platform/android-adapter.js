@@ -10,6 +10,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
   const pending = new Map();
   const listeners = new Map();
   const openQueue = [];
+  let internalClipboardNewest = false;
   const emit = async (name, payload) => {
     const callbacks = listeners.get(name);
     if (!callbacks?.size) {
@@ -24,6 +25,39 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     if (!listeners.has(name)) listeners.set(name, new Set());
     listeners.get(name).add(cb);
     if (name === 'open') for (const data of openQueue.splice(0)) emit(name, data);
+  };
+  const editableTarget = (target) => {
+    if (!target) return false;
+    const tag = String(target.tagName || '').toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!target.isContentEditable;
+  };
+  const wireClipboardShortcuts = () => {
+    window.addEventListener('keydown', (e) => {
+      if (editableTarget(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod || e.altKey) return;
+      const key = String(e.key || '').toLowerCase();
+
+      if (key === 'c' || key === 'x') {
+        // Do not steal a system copy when GazBoard has nothing selected. When
+        // objects are selected, stop WebView's native copy path and make the
+        // board clipboard the newest thing instead.
+        if (!window.app?.selected?.length) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        internalClipboardNewest = true;
+        void emit('menu', key === 'c' ? 'edit.copy' : 'edit.cut');
+        return;
+      }
+
+      if (key === 'v' && internalClipboardNewest) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        void emit('menu', 'edit.paste');
+      }
+      // Otherwise leave Ctrl/Cmd+V alone: WebView will deliver its ordinary
+      // paste event and App will import the current OS text/image clipboard.
+    }, true);
   };
   const file = async (token, asJson = false) => {
     if (!/^[a-f0-9]{32}$/.test(token)) throw new Error('Invalid native file reference');
@@ -164,6 +198,11 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     convertReady: (msg) => call('convert:ready', msg),
     convertError: (msg) => call('convert:error', msg)
   };
+  // A native clipboard change means something outside GazBoard is newer. This
+  // does not read or overwrite the clipboard, so Android WebView clipboard
+  // permission quirks cannot make object paste silently fall back to stale data.
+  on('clipboardChanged', () => { internalClipboardNewest = false; });
+  wireClipboardShortcuts();
   on('file', async (p) => {
     // Native share/open intents use the same document and image import paths
     // as the toolbar. Wait for App's initialization before dispatching them.
