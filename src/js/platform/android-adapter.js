@@ -5,6 +5,7 @@ import { generatePdfFromHtml } from './web-pdf.js';
 const FILE_ROOT = 'https://appassets.androidplatform.net/files/';
 const CHUNK_BYTES = 96 * 1024;
 const BLANK_HOLD_MS = 450;
+const BLANK_PEN_HOLD_MS = 700;
 const BLANK_HOLD_SLOP = 11;
 
 export function createAndroidAdapter(native = window.GazBoardNative) {
@@ -70,18 +71,21 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     let pointerId = null;
     let origin = null;
     let anchor = null;
+    let pointerType = null;
     const clear = () => {
       if (timer) clearTimeout(timer);
       timer = null;
       pointerId = null;
       origin = null;
       anchor = null;
+      pointerType = null;
     };
 
     window.addEventListener('pointerdown', (e) => {
       clear();
       const app = window.app;
-      if (e.pointerType !== 'touch' || e.button !== 0 || !app?.surface || !hasBoardClipboard()) return;
+      if ((e.pointerType !== 'touch' && e.pointerType !== 'pen') || e.button !== 0
+          || !app?.surface || !hasBoardClipboard()) return;
       if (e.target !== app.surface.canvas) return;
 
       // This gesture belongs to genuinely blank board space. Holding an object
@@ -91,6 +95,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       if (app.pickAt?.(wp)) return;
 
       pointerId = e.pointerId;
+      pointerType = e.pointerType;
       origin = { x: e.clientX, y: e.clientY };
       anchor = { clientX: e.clientX, clientY: e.clientY };
       timer = setTimeout(() => {
@@ -102,11 +107,12 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
         // Interaction owns the gesture, so let it roll the preview back cleanly.
         live.interaction?.cancelGesture?.();
         live.setSelection?.([]);
-        live.showContextMenu?.({ ...anchor, pointerType: 'touch' });
+        live.showContextMenu?.({ ...anchor, pointerType });
         pointerId = null;
         origin = null;
         anchor = null;
-      }, BLANK_HOLD_MS);
+        pointerType = null;
+      }, e.pointerType === 'pen' ? BLANK_PEN_HOLD_MS : BLANK_HOLD_MS);
     }, true);
 
     window.addEventListener('pointermove', (e) => {
