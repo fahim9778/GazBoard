@@ -143,7 +143,7 @@ function installPenMemory(app) {
 }
 
 function centerFinitePages(surface) {
-  const pages = surface.store?.doc?.pages;
+  const pages = surface?.store?.doc?.pages;
   if (!pages?.length || !surface.width || !surface.cam) return false;
   const b = stripBounds(pages);
   if (!b || b.w * surface.cam.z > surface.width) return false;
@@ -155,6 +155,8 @@ function centerFinitePages(surface) {
 
 function installFinitePagePanGuard(app) {
   const surface = app.surface;
+  if (!surface || typeof surface.clampCamera !== 'function') return false;
+
   const originalClamp = surface.clampCamera.bind(surface);
   surface.clampCamera = () => {
     originalClamp();
@@ -177,23 +179,55 @@ function installFinitePagePanGuard(app) {
 
   surface.clampCamera();
   surface.invalidate();
+  return true;
+}
+
+function appReady(app) {
+  return !!(app
+    && app.surface
+    && typeof app.surface.clampCamera === 'function'
+    && app.store && typeof app.store.subscribe === 'function'
+    && app.settings
+    && typeof app.syncUI === 'function');
 }
 
 function install() {
   const app = window.app;
-  if (!app || app.__feedbackFixesInstalled) return;
-  app.__feedbackFixesInstalled = true;
-  installFinitePagePanGuard(app);
+  if (app?.__feedbackFixesInstalled) return true;
+  if (!appReady(app)) return false;
+
+  // Mark it only after all prerequisites exist. In fast smoke/test launches the
+  // companion module can observe window.app before every App field is ready;
+  // setting the flag earlier would turn a harmless startup race into a permanent
+  // half-install for the rest of the session.
+  if (!installFinitePagePanGuard(app)) return false;
   installPenMemory(app);
+  app.__feedbackFixesInstalled = true;
   app.syncUI();
+  return true;
 }
 
-// app.js registers its DOMContentLoaded listener before this module is loaded,
-// so App exists by the time this listener runs. The readyState branch keeps the
-// module safe if it is imported manually by a test or a dev console later.
+function installWhenReady() {
+  if (install()) return;
+  let attempts = 0;
+  const again = () => {
+    if (install()) return;
+    // Two seconds is far beyond normal App construction, but bounded retries
+    // keep a deliberately partial test/dev window.app from spinning forever.
+    if (++attempts >= 120) return;
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(again);
+    else setTimeout(again, 16);
+  };
+  again();
+}
+
+// app.js and this small companion module are loaded independently. Usually App
+// is complete before this runs, but tests and very fast launches can expose the
+// window.app reference before Surface is available. Install only once the full
+// editor contract exists rather than assuming DOMContentLoaded ordering.
 if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', install);
-  else install();
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', installWhenReady);
+  else installWhenReady();
 }
 
 export { centerFinitePages };
