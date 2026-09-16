@@ -16,7 +16,7 @@ import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
 import { closePopover, popoverOpen, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
-import { PENS } from './ui/palettes.js';
+import { PENS, penById, rememberPen, heldPenId } from './ui/palettes.js';
 import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportable } from './export.js';
 import { boardThumb } from './ui/thumb.js';
 import {
@@ -25,7 +25,13 @@ import {
 } from './insert.js';
 
 export const DEFAULT_SETTINGS = {
-  penColor: '#201f1e', penWidth: 4, penEffect: 'none',
+  penColor: '#201f1e', penWidth: 4, penEffect: 'none', activePen: 'black',
+  // Deliberately absent: `pens`, the map of pens the user has recoloured.
+  // DEFAULT_SETTINGS is spread shallowly, so an object literal here would be
+  // THE SAME object in every settings copy - and the first recolouring would
+  // write into the defaults themselves, where Reset could never clear it.
+  // rememberPen() creates the map on first use; leaving it out is also what
+  // makes Reset to defaults put every pen back to the colour it shipped with.
   highlighterColor: '#fff100', highlighterWidth: 20,
   eraserSize: 30, eraserMode: 'partial',
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,
@@ -1034,7 +1040,14 @@ class App {
     const setting = map[`${type}:${key}`];
     if (!setting) return;
     this.settings[setting] = value;
-    if (setting === 'penColor') this.settings.penEffect = 'none';
+    if (setting === 'penColor') {
+      this.settings.penEffect = 'none';
+      // recolouring a stroke sets the default ink, and the default ink belongs
+      // to whichever pen is in the hand - otherwise picking that pen up again
+      // would hand back the colour it shipped with and quietly undo the change
+      const held = heldPenId(this.settings);
+      if (held) rememberPen(this.settings, held, { color: value, effect: 'none' });
+    }
     this.saveSettings();
   }
 
@@ -2827,9 +2840,11 @@ class App {
     // is the commonest thing anyone does while teaching, and doing it by number
     // beats travelling to the toolbar with the mouse.
     if (e.key >= '1' && e.key <= '9') {
-      const pen = PENS[Number(e.key) - 1];
+      const slot = PENS[Number(e.key) - 1];
+      const pen = slot && penById(this.settings, slot.id);
       if (pen) {
         e.preventDefault();
+        this.settings.activePen = pen.id;
         this.settings.penColor = pen.color;
         this.settings.penEffect = pen.effect;
         this.saveSettings();

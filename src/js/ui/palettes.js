@@ -52,6 +52,65 @@ export const PENS = [
 ];
 
 /**
+ * The tray as it actually is, with any recolouring the user has done.
+ *
+ * PENS above is how the tray SHIPS. It is a constant, so reading a pen's colour
+ * from it always gave the factory answer - which is why recolouring the black
+ * pen, picking up another, and coming back to black handed you black again.
+ * The choice was never stored anywhere; only `penColor`, the one colour in the
+ * hand right now, was, and picking any pen overwrote it.
+ *
+ * What a person changed is kept in settings.pens, keyed by pen id, holding only
+ * the pens they actually touched. Everything else falls through to the shipped
+ * value, so the tray needs no migration and a settings file written by an older
+ * build opens with its pens exactly as they were.
+ */
+export function penList(settings) {
+  const mine = (settings && settings.pens) || {};
+  return PENS.map((p) => {
+    const m = mine[p.id];
+    if (!m) return p;
+    return { ...p, color: m.color || p.color, effect: m.effect || p.effect };
+  });
+}
+
+/** One pen from that tray, by id. */
+export function penById(settings, id) {
+  return penList(settings).find((p) => p.id === id) || null;
+}
+
+/**
+ * Remember what a pen was changed to.
+ *
+ * A pen recoloured to what it shipped as is forgotten rather than stored, so
+ * "put it back to black" leaves no trace behind to be carried forever.
+ */
+export function rememberPen(settings, id, { color, effect } = {}) {
+  const base = PENS.find((p) => p.id === id);
+  if (!base) return;
+  const next = { color: color || base.color, effect: effect || base.effect };
+  const mine = settings.pens || (settings.pens = {});
+  if (next.color === base.color && next.effect === base.effect) delete mine[id];
+  else mine[id] = next;
+}
+
+/**
+ * Which pen is in the hand.
+ *
+ * Settings written before pens could be recoloured have no `activePen`, so the
+ * colour in hand is matched against the tray instead - the way the toolbar used
+ * to decide this. That fallback is only for the first run after upgrading: the
+ * moment a pen is picked up, its id is recorded and the guessing stops. It is
+ * also why the id is what gets stored, not the colour: two pens set to the same
+ * colour would otherwise both light up, and neither would be wrong.
+ */
+export function heldPenId(settings) {
+  if (settings.activePen && PENS.some((p) => p.id === settings.activePen)) return settings.activePen;
+  const match = penList(settings).find((p) => p.color === settings.penColor && p.effect === settings.penEffect);
+  return match ? match.id : null;
+}
+
+/**
  * A pen drawn as a pen: barrel in its own colour, pale nib, so the row reads as
  * a tray of pens rather than a row of identical buttons.
  */

@@ -5574,6 +5574,186 @@ async function run(win, app) {
     return r;
   `);
   check('you cannot pan away from the paper until it is off screen', padCam.paperStillOnScreen === true);
+
+  /* ---- a sheet of paper does not slide out of the window sideways ---- */
+  /*
+   * A pad has a fixed width and an unlimited height. Down is the direction it
+   * travels in; sideways reaches nothing but desk, and people kept shoving A4
+   * half out of the window by accident and having to drag it back.
+   */
+  const sideways = await js(`
+    const a = window.app, sf = a.surface;
+    const r = {};
+    a.newBoard(true); a.store.clear();
+    await a.setPageSize('a4', 'portrait');
+    const { stripBounds } = await import('app://board/js/core/pages.js');
+    const paper = () => {
+      const b = stripBounds(a.pages), c = sf.cam;
+      return { left: b.x * c.z + c.x, width: b.w * c.z, view: sf.width, z: c.z };
+    };
+
+    // --- zoomed out, the page fits: it is pinned in the middle ------------
+    sf.cam.z = 0.35; sf.clampCamera();
+    const fitted = paper();
+    r.fitsInWindow = fitted.width <= fitted.view;
+    r.centredGap = Math.round(fitted.left - (fitted.view - fitted.width) / 2);
+    const xBefore = sf.cam.x;
+    sf.cam.panBy(-900, 0); sf.clampCamera();
+    r.driftAfterHardShove = Math.round(sf.cam.x - xBefore);
+    const shoved = paper();
+    r.stillCentred = Math.abs(shoved.left - (shoved.view - shoved.width) / 2) < 0.5;
+
+    // --- and a gentle nudge is refused just the same ----------------------
+    sf.cam.panBy(-12, 0); sf.clampCamera();
+    r.driftAfterNudge = Math.round(sf.cam.x - xBefore);
+
+    // --- zoomed in past the window: it pans, but never shows desk ---------
+    sf.cam.z = 3; sf.clampCamera();
+    const big = paper();
+    r.widerThanWindow = big.width > big.view;
+    sf.cam.panBy(-4000, 0); sf.clampCamera();
+    const hardLeft = paper();
+    // the right-hand edge of the paper may not come inside the window
+    r.rightEdgeHeld = Math.round(hardLeft.left + hardLeft.width - hardLeft.view);
+    sf.cam.panBy(9000, 0); sf.clampCamera();
+    const hardRight = paper();
+    r.leftEdgeHeld = Math.round(hardRight.left);
+    // it really did move between those two ends, so this is a limit, not a pin
+    r.travelled = Math.round(Math.abs(hardRight.left - hardLeft.left)) > 100;
+
+    // --- up and down is untouched: that IS how you read a pad -------------
+    sf.cam.z = 1; sf.clampCamera();
+    a.addPage(); a.addPage();
+    const yBefore = sf.cam.y;
+    sf.cam.panBy(0, -600); sf.clampCamera();
+    r.scrolledDown = Math.round(Math.abs(sf.cam.y - yBefore)) > 100;
+
+    // --- an infinite canvas is still free in both directions -------------
+    await a.setPageSize('infinite');
+    const free = sf.cam.x;
+    sf.cam.panBy(-4000, 0); sf.clampCamera();
+    r.infiniteStillFree = Math.abs(sf.cam.x - (free - 4000)) < 0.01;
+
+    a.newBoard(true); a.store.clear();
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    return r;
+  `);
+  check('a page that fits the window sits in the middle of it',
+    sideways.fitsInWindow === true && sideways.centredGap === 0,
+    `paper is ${sideways.fitsInWindow ? 'narrower' : 'WIDER'} than the window, ` +
+    `and sits ${sideways.centredGap}px off centre (wanted 0)`);
+  check('and cannot be shoved sideways out of it, hard or gently',
+    sideways.driftAfterHardShove === 0 && sideways.driftAfterNudge === 0 && sideways.stillCentred === true,
+    `a 900px shove moved it ${sideways.driftAfterHardShove}px and a 12px nudge ${sideways.driftAfterNudge}px ` +
+    `(wanted 0 and 0); still centred afterwards: ${sideways.stillCentred}`);
+  check('zoomed in past the window it pans, but never shows desk beside the paper',
+    sideways.widerThanWindow === true && sideways.travelled === true &&
+    sideways.rightEdgeHeld === 0 && sideways.leftEdgeHeld === 0,
+    `wider than the window: ${sideways.widerThanWindow}, actually moved between the ends: ${sideways.travelled}; ` +
+    `at the far left the paper's right edge sat ${sideways.rightEdgeHeld}px inside the window and at the far right ` +
+    `its left edge sat ${sideways.leftEdgeHeld}px inside (both wanted 0 — a positive number is desk on show)`);
+  check('while up and down still scrolls the pad, which is what a pad is for',
+    sideways.scrolledDown === true, `vertical pan moved the view: ${sideways.scrolledDown}`);
+  check('and an infinite canvas is free to roam in both directions',
+    sideways.infiniteStillFree === true, `infinite board panned freely: ${sideways.infiniteStillFree}`);
+
+  /* ---- a pen keeps the colour you gave it ---- */
+  /*
+   * PENS is how the tray SHIPS. Reading a pen's colour from it always gave the
+   * factory answer, so recolouring pen 1, picking up pen 2, and coming back to
+   * pen 1 handed you the original black again - the choice was never stored.
+   */
+  const penMemory = await js(`
+    const a = window.app;
+    const { PENS, penById, heldPenId } = await import('app://board/js/ui/palettes.js');
+    const { choosePen } = await import('app://board/js/ui/toolbar.js');
+    const r = {};
+    const s = a.settings;
+    const shipped = { black: PENS[0].color, red: PENS[1].color };
+    r.shipped = shipped;
+
+    delete s.pens; s.activePen = 'black';
+    choosePen(a, 'black');
+    r.blackStartsShipped = s.penColor === shipped.black;
+
+    // recolour the black pen to orange, the way the popover does
+    const ORANGE = '#ff8c00';
+    a.rememberColor('stroke', 'color', ORANGE);
+    r.heldAfterRecolour = heldPenId(s);
+    r.inHandIsOrange = s.penColor === ORANGE;
+
+    // go to the red pen, then come back
+    choosePen(a, 'red');
+    r.redIsShipped = s.penColor === shipped.red;
+    choosePen(a, 'black');
+    r.blackCameBackAs = s.penColor;
+    r.remembered = s.penColor === ORANGE;
+
+    // the tray must LOOK recoloured too, not just write in the new colour
+    a.syncUI();
+    const swatch = document.querySelector('#toolbar .pen[data-pen="black"]');
+    r.trayPaint = swatch ? swatch.dataset.paint : '(no button)';
+    r.trayShowsOrange = !!swatch && swatch.dataset.paint.startsWith(ORANGE);
+    r.trayLitTheRightPen = !!swatch && swatch.classList.contains('active');
+    const redBtn = document.querySelector('#toolbar .pen[data-pen="red"]');
+    r.onlyOneLit = !!redBtn && !redBtn.classList.contains('active');
+
+    // two pens set to the same colour must still be told apart
+    choosePen(a, 'red');
+    a.rememberColor('stroke', 'color', ORANGE);
+    r.bothOrange = penById(s, 'black').color === ORANGE && penById(s, 'red').color === ORANGE;
+    r.heldIsRedNotBlack = heldPenId(s) === 'red';
+    const blackBtn = document.querySelector('#toolbar .pen[data-pen="black"]');
+    a.syncUI();
+    r.sameColourStillOneLit = !!blackBtn && !blackBtn.classList.contains('active')
+      && !!document.querySelector('#toolbar .pen[data-pen="red"]').classList.contains('active');
+
+    // it survives a reload of the settings file
+    const saved = JSON.parse(localStorage.getItem('gazboard.settings') || '{}');
+    r.savedToDisk = !!(saved.pens && saved.pens.black && saved.pens.black.color === ORANGE);
+    r.savedActivePen = saved.activePen || null;
+
+    // the number keys reach the recoloured pen, not the shipped one
+    choosePen(a, 'red');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: '1', bubbles: true }));
+    r.digitGave = s.penColor;
+    r.digitGaveTheRecoloured = s.penColor === ORANGE;
+
+    // putting a pen back to what it shipped as leaves nothing stored
+    choosePen(a, 'black');
+    a.rememberColor('stroke', 'color', shipped.black);
+    r.forgottenWhenPutBack = !s.pens || !s.pens.black;
+
+    delete s.pens; s.activePen = 'black';
+    a.rememberColor('stroke', 'color', shipped.black);
+    a.saveSettings(); a.syncUI();
+    return r;
+  `);
+  check('a pen recoloured while it is in your hand remembers that colour',
+    penMemory.inHandIsOrange === true && penMemory.heldAfterRecolour === 'black',
+    `after recolouring, the hand held ${penMemory.heldAfterRecolour} writing in ${penMemory.inHandIsOrange ? '#ff8c00' : 'something else'}`);
+  check('so picking up another pen and coming back finds it still there',
+    penMemory.redIsShipped === true && penMemory.remembered === true,
+    `black came back as ${penMemory.blackCameBackAs}, wanted #ff8c00 (it shipped as ${penMemory.shipped?.black}) — ` +
+    `the shipped colour here means the choice was never stored`);
+  check('and the tray shows the colour it will write in, not the one it shipped with',
+    penMemory.trayShowsOrange === true, `the black pen's button is painted ${penMemory.trayPaint}, wanted #ff8c00`);
+  check('the pen in your hand is the only one lit, even when two share a colour',
+    penMemory.trayLitTheRightPen === true && penMemory.onlyOneLit === true &&
+    penMemory.bothOrange === true && penMemory.heldIsRedNotBlack === true &&
+    penMemory.sameColourStillOneLit === true,
+    `both set to orange: ${penMemory.bothOrange}, hand holds ${penMemory.heldIsRedNotBlack ? 'red' : 'the wrong pen'}, ` +
+    `only one lit: ${penMemory.sameColourStillOneLit} — matching by colour used to light both`);
+  check('the choice is written to the settings file, so it outlives the session',
+    penMemory.savedToDisk === true && penMemory.savedActivePen != null,
+    `saved pens hold the recolour: ${penMemory.savedToDisk}, saved pen in hand: ${penMemory.savedActivePen}`);
+  check('and the number keys reach the recoloured pen, not the shipped one',
+    penMemory.digitGaveTheRecoloured === true,
+    `pressing 1 gave ${penMemory.digitGave}, wanted #ff8c00`);
+  check('putting a pen back to its shipped colour stores nothing to carry forever',
+    penMemory.forgottenWhenPutBack === true,
+    `nothing left behind for the black pen: ${penMemory.forgottenWhenPutBack}`);
   check('an infinite board is still free to roam', padCam.infiniteStillFree === true);
 
   /* ---- the bottom controls never sit on top of each other ---- *

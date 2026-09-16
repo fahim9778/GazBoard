@@ -5,7 +5,7 @@ import { openPopover, closePopover, h, isOpen } from './popover.js';
 import {
   PEN_COLORS, PEN_EFFECTS, HIGHLIGHTER_COLORS, NOTE_COLORS, TEXT_COLORS,
   SHAPE_STROKES, SHAPE_FILLS, SHAPES, SHAPE_LABELS, shapeIcon,
-  PENS, penIcon, FONTS
+  PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS
 } from './palettes.js';
 import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
 
@@ -80,18 +80,11 @@ export function initToolbar(app) {
     if (pen.id === 'black') b.dataset.tool = 'pen';       // the canonical pen button
     // every pen wears its own number: 1-6 reach them directly, which is the
     // whole point of putting the keys on the buttons
-    b.innerHTML = penIcon(pen.color, pen.effect) + '<span class="size-dot"></span>'
+    const now = penById(app.settings, pen.id) || pen;
+    b.innerHTML = penIcon(now.color, now.effect) + '<span class="size-dot"></span>'
       + `<span class="kbd">${PENS.indexOf(pen) + 1}</span>`;
-    b.addEventListener('click', () => {
-      const s = app.settings;
-      const held = app.tool === 'pen' && s.penColor === pen.color && s.penEffect === pen.effect;
-      s.penColor = pen.color;
-      s.penEffect = pen.effect;
-      app.saveSettings();
-      app.setTool('pen');
-      app.syncUI();
-      if (held) openToolPopover(app, b, 'pen'); else closePopover();
-    });
+    b.dataset.paint = now.color + '|' + now.effect;
+    b.addEventListener('click', () => choosePen(app, pen.id, b));
     bar.appendChild(b);
   }
 
@@ -175,26 +168,19 @@ function initPhoneToolbar(app, bar) {
   };
   const sep = () => bar.appendChild(h('div', { class: 'sep' }));
 
-  const choosePen = (pen, b) => {
-    const s = app.settings;
-    const held = app.tool === 'pen' && s.penColor === pen.color && s.penEffect === pen.effect;
-    s.penColor = pen.color;
-    s.penEffect = pen.effect;
-    app.saveSettings();
-    app.setTool('pen');
-    app.syncUI();
-    if (held && b) openToolPopover(app, b, 'pen'); else closePopover();
-  };
+  const pickPen = (pen, b) => choosePen(app, pen.id, b);
 
   /* ---- the three everyday pens ---- */
   for (const id of PHONE_PENS) {
     const pen = PENS.find((p) => p.id === id);
     if (!pen) continue;
+    const now = penById(app.settings, pen.id) || pen;
     const b = btn('pen', `${pen.label} — tap again for thickness`,
-      penIcon(pen.color, pen.effect) + '<span class="size-dot"></span>');
+      penIcon(now.color, now.effect) + '<span class="size-dot"></span>');
     b.dataset.pen = pen.id;
+    b.dataset.paint = now.color + '|' + now.effect;
     if (pen.id === 'black') b.dataset.tool = 'pen';
-    b.addEventListener('click', () => choosePen(pen, b));
+    b.addEventListener('click', () => pickPen(pen, b));
   }
 
   /* ---- everything else that makes a mark, one tap deeper ---- */
@@ -204,10 +190,11 @@ function initPhoneToolbar(app, bar) {
     const body = h('div', { class: 'menu' });
     for (const pen of PENS) {
       if (PHONE_PENS.includes(pen.id)) continue;
+      const now = penById(app.settings, pen.id) || pen;
       const row = h('button', { class: 'menu-item' },
-        h('span', { html: penIcon(pen.color, pen.effect), style: 'display:flex;width:17px' }),
+        h('span', { html: penIcon(now.color, now.effect), style: 'display:flex;width:17px' }),
         h('span', {}, pen.label));
-      row.addEventListener('click', () => { closePopover(); choosePen(pen, null); });
+      row.addEventListener('click', () => { closePopover(); pickPen(pen, null); });
       body.appendChild(row);
     }
     body.appendChild(h('div', { class: 'menu-sep' }));
@@ -525,6 +512,8 @@ export function openToolPopover(app, anchor, tool) {
         b.addEventListener('click', () => {
           markActive(effects, b, 'primary');
           s.penEffect = e.id;
+          const held = heldPenId(s);
+          if (held) rememberPen(s, held, { color: s.penColor, effect: e.id });
           app.saveSettings();
           app.syncUI();
         });
@@ -534,7 +523,11 @@ export function openToolPopover(app, anchor, tool) {
     body = h('div', {},
       h('h4', {}, 'Ink colour'),
       swatchRow(PEN_COLORS, s.penEffect === 'none' ? s.penColor : null, (c) => {
-        s.penColor = c; s.penEffect = 'none'; app.saveSettings(); app.syncUI(); closePopover();
+        s.penColor = c; s.penEffect = 'none';
+        // the pen in the hand keeps this, so coming back to it later finds it
+        const held = heldPenId(s);
+        if (held) rememberPen(s, held, { color: c, effect: 'none' });
+        app.saveSettings(); app.syncUI(); closePopover();
       }),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('label', {}, 'Effect')),
       effects,
@@ -697,6 +690,29 @@ export function openExportPopover(app, anchor) {
 }
 
 /** Refresh active states, the raised pen, and the little colour dots. */
+/**
+ * Pick up a pen - by id, not by colour.
+ *
+ * The tray used to decide "is this pen already in my hand?" by comparing the
+ * colour in hand against the pen's own. That answers wrongly the moment two
+ * pens are set to the same colour: both light up, and clicking either one is
+ * read as a second click on the one already held, which opens the thickness
+ * popover instead of switching pens. The id says which pen without ambiguity.
+ */
+export function choosePen(app, id, anchor) {
+  const s = app.settings;
+  const pen = penById(s, id);
+  if (!pen) return;
+  const held = app.tool === 'pen' && heldPenId(s) === id;
+  s.activePen = id;
+  s.penColor = pen.color;
+  s.penEffect = pen.effect;
+  app.saveSettings();
+  app.setTool('pen');
+  app.syncUI();
+  if (held && anchor) openToolPopover(app, anchor, 'pen'); else closePopover();
+}
+
 export function syncToolbar(app) {
   const bar = document.getElementById('toolbar');
   const s = app.settings;
@@ -704,10 +720,22 @@ export function syncToolbar(app) {
   syncPagebar(app);
   bar.classList.toggle('hide-keys', s.showToolKeys === false);
 
+  const held = heldPenId(s);
   for (const b of bar.querySelectorAll('.pen[data-pen]')) {
-    const pen = PENS.find((p) => p.id === b.dataset.pen);
-    b.classList.toggle('active',
-      app.tool === 'pen' && s.penColor === pen.color && s.penEffect === pen.effect);
+    const pen = penById(s, b.dataset.pen);
+    if (!pen) continue;
+    b.classList.toggle('active', app.tool === 'pen' && held === pen.id);
+    // a recoloured pen has to LOOK recoloured, or the tray still shows the
+    // colour it shipped with while writing in the one you chose
+    const paint = pen.color + '|' + pen.effect;
+    if (b.dataset.paint !== paint) {
+      const kbd = b.querySelector('.kbd');
+      const dot = b.querySelector('.size-dot');
+      b.innerHTML = penIcon(pen.color, pen.effect);
+      if (dot) b.appendChild(dot);
+      if (kbd) b.appendChild(kbd);
+      b.dataset.paint = paint;
+    }
   }
   const hl = bar.querySelector('.pen[data-tool="highlighter"]');
   if (hl) {

@@ -721,10 +721,28 @@ export class Surface {
     if (!b) return;
     const { cam } = this;
     const sw = b.w * cam.z, sh = b.h * cam.z;
-    const keepX = Math.min(160, sw), keepY = Math.min(160, sh);
-    const loX = keepX - b.x * cam.z - sw, hiX = this.width - keepX - b.x * cam.z;
+
+    /*
+     * Sideways, paper is not like a canvas.
+     *
+     * A pad has a fixed width and an unlimited height: page two sits below page
+     * one, so scrolling DOWN is how you read it and a little overshoot at the
+     * ends is welcome. Scrolling SIDEWAYS reaches nothing - there is no more
+     * paper out there, only desk - and every pixel spent on it is a pixel of
+     * the page pushed off the other edge. People kept sliding A4 half out of
+     * the window by accident and had to drag it back.
+     *
+     * So the two directions get different rules. Left and right: the page is
+     * pinned to the middle when it fits, and when it does not - because the
+     * zoom is past what the window holds - it may move only as far as its own
+     * edges, never showing desk beside it. Up and down is left exactly as it
+     * was, because that is the direction a pad is meant to travel in.
+     */
+    if (sw <= this.width) cam.x = (this.width - sw) / 2 - b.x * cam.z;
+    else cam.x = Math.max(this.width - sw - b.x * cam.z, Math.min(cam.x, -b.x * cam.z));
+
+    const keepY = Math.min(160, sh);
     const loY = keepY - b.y * cam.z - sh, hiY = this.height - keepY - b.y * cam.z;
-    if (loX <= hiX) cam.x = Math.max(loX, Math.min(cam.x, hiX));
     if (loY <= hiY) cam.y = Math.max(loY, Math.min(cam.y, hiY));
   }
 
