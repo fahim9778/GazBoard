@@ -46,6 +46,10 @@ class CanvasSizeUiTest {
           w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
         app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
           w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+        // ActivityScenario can restore a panel left open by an earlier device
+        // test. background() toggles an already-open panel closed, so reset the
+        // panel state before opening the Canvas panel this test owns.
+        app.panels.close?.();
         app.panels.background();
         window.androidCanvasButton = (label) =>
           [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
