@@ -51,30 +51,44 @@ class CanvasSizeUiTest {
         app.settings.rememberCanvas = false;
         delete app.settings.canvasDefaults;
         app.saveSettings();
-        // App construction starts restoreLastBoard() without awaiting it. Mark
-        // this test board as explicit so that an in-flight startup restore
-        // cannot replace it after the test has added its objects and opened
-        // the Canvas panel.
+
+        // App construction starts restoreLastBoard() without awaiting it. The
+        // restore may already have passed its boardOpenedExplicitly checks by
+        // the time instrumentation gets here, so merely setting the flag cannot
+        // cancel a loadBoard() that is already in flight. Keep one id for the
+        // board this test owns and, if that one late startup load replaces it,
+        // prepare the test board again. After boardOpenedExplicitly is true no
+        // NEW startup restore can begin, so this retry is bounded and tests the
+        // UI rather than racing application startup.
         app.boardOpenedExplicitly = true;
-        app.newBoard(true);
-        app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
-          w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
-        app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
-          w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
-        // ActivityScenario can restore a panel left open by an earlier device
-        // test. background() toggles an already-open panel closed, so reset the
-        // panel state before opening the Canvas panel this test owns.
-        app.panels.close?.();
-        app.panels.background();
-        window.androidCanvasButton = (label) =>
-          [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
-            .find(b => b.textContent.trim() === label);
-        window.androidCanvasButton('A4').click();
+        window.prepareAndroidCanvasTest = () => {
+          app.newBoard(true);
+          window.__androidCanvasTestBoardId = app.store.doc.id;
+          app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
+            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+          app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
+            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+
+          // ActivityScenario can restore a panel left open by an earlier device
+          // test. background() toggles an already-open panel closed, so reset the
+          // panel state before opening the Canvas panel this test owns.
+          app.panels.close?.();
+          app.panels.background();
+          window.androidCanvasButton = (label) =>
+            [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+              .find(b => b.textContent.trim() === label);
+          const a4 = window.androidCanvasButton('A4');
+          if (!a4) throw new Error('A4 canvas button was not rendered');
+          a4.click();
+        };
+        window.prepareAndroidCanvasTest();
       """.trimIndent())
 
-      until(scenario, "!!app.store.page && " +
+      until(scenario, "app.store.doc.id !== window.__androidCanvasTestBoardId " +
+        "? (window.prepareAndroidCanvasTest(), false) " +
+        ": (!!app.store.page && " +
         "window.androidCanvasButton('A4').classList.contains('primary') && " +
-        "[...document.querySelectorAll('#panelBody button')].some(b => /Fit .* onto the page/.test(b.textContent))")
+        "[...document.querySelectorAll('#panelBody button')].some(b => /Fit .* onto the page/.test(b.textContent)))")
 
       // The permanent in-menu action matters on Android because the temporary
       // toast may be gone before someone opens the Canvas panel.
@@ -114,10 +128,13 @@ class CanvasSizeUiTest {
       assertEquals("true", js(scenario,
         "!app.store.page && app.store.doc.background.color === '#ffffff'"))
 
-      // Do not leak the preference into another instrumentation test.
+      // Do not leak the preference or test helpers into another instrumentation test.
       js(scenario, """
         app.settings.rememberCanvas = false;
         delete app.settings.canvasDefaults;
+        delete window.prepareAndroidCanvasTest;
+        delete window.__androidCanvasTestBoardId;
+        delete window.androidCanvasButton;
         app.saveSettings();
       """.trimIndent())
     }
