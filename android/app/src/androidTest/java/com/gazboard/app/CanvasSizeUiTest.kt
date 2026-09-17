@@ -30,7 +30,17 @@ class CanvasSizeUiTest {
       if (js(scenario, expression) == "true") return
       Thread.sleep(50)
     }
-    fail("Android canvas UI did not satisfy: $expression")
+    val state = js(scenario, """
+      JSON.stringify({
+        page: app?.store?.page || null,
+        objects: app?.store?.objects?.length ?? null,
+        offPage: app?.offPageObjects?.().length ?? null,
+        panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
+        buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+          .map(b => ({ label:b.textContent.trim(), primary:b.classList.contains('primary') }))
+      })
+    """.trimIndent())
+    fail("Android canvas UI did not satisfy: $expression; state=$state")
   }
 
   @Test fun canvasMenuUpdatesFitsAndRemembersOnlyNewBoards() {
@@ -41,6 +51,11 @@ class CanvasSizeUiTest {
         app.settings.rememberCanvas = false;
         delete app.settings.canvasDefaults;
         app.saveSettings();
+        // App construction starts restoreLastBoard() without awaiting it. Mark
+        // this test board as explicit so that an in-flight startup restore
+        // cannot replace it after the test has added its objects and opened
+        // the Canvas panel.
+        app.boardOpenedExplicitly = true;
         app.newBoard(true);
         app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
           w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
