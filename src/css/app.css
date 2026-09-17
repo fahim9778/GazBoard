@@ -397,6 +397,22 @@ input, textarea { font: inherit; }
   background: #323130; color: #fff; padding: 9px 14px; border-radius: 6px; font-size: 13px;
   box-shadow: var(--shadow-2); display: flex; align-items: center; gap: 8px; animation: pop .18s ease;
 }
+/*
+ * A toast that carries something to do about itself. Tall enough to press with
+ * a thumb, because the first place this appears is a phone changing a board to
+ * A4 and finding work off the paper.
+ */
+.toast-action {
+  margin-left: 4px; border: 0; border-radius: 5px; cursor: pointer;
+  /* on a narrow phone the message wraps to three lines; without this the
+     button grows to match it and looks like a slab rather than a button */
+  align-self: center; flex: none; white-space: nowrap;
+  background: rgba(255,255,255,.18); color: #fff;
+  font: inherit; font-weight: 600; padding: 6px 11px; min-height: 32px;
+}
+.toast-action:hover { background: rgba(255,255,255,.3); }
+.toast-action:active { background: rgba(255,255,255,.4); }
+
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
 
 #overlay { position: absolute; inset: 0; z-index: 60; background: rgba(0,0,0,.28); display: none; align-items: center; justify-content: center; }

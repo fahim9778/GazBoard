@@ -5311,6 +5311,110 @@ async function run(win, app) {
     pageTpl.page && pageTpl.page.h > pageTpl.page.w && pageTpl.objectsAdded === 0,
     JSON.stringify(pageTpl));
 
+  /* ---- changing the canvas size says so, on the panel and on the board ---- */
+  /*
+   * An infinite canvas has no outside, so nothing on it is ever "off the page".
+   * Turn it into a pad and work that was spread comfortably across the desk can
+   * be sitting beyond the sheet - still there, still safe, but not on the paper
+   * and not in the export. Worth saying at the moment it happens, rather than
+   * leaving it to be discovered at print time.
+   */
+  const sizeMenu = await js(`
+    const a = window.app;
+    const r = {};
+    a.newBoard(true); a.store.clear();
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+
+    // three things well spread out, the shape of a lesson drawn on open canvas
+    for (const [id, x, y] of [['near', 0, 0], ['far', 2600, 40], ['lower', 120, 2400]]) {
+      a.store.add({ id, type: 'shape', kind: 'rect', x, y, w: 160, h: 120, rotation: 0,
+                    stroke: '#201f1e', fill: 'none', lineWidth: 3 }, 'x');
+    }
+
+    // Canvas size lives in "Format background", not Templates - Templates has a
+    // group of the same name that drops a sized page on the board instead.
+    a.panels.background();
+    await new Promise((res) => setTimeout(res, 120));
+    r.panelOpened = document.getElementById('panel').classList.contains('open');
+    const sizeButtons = () => Array.from(document.getElementById('panelBody').querySelectorAll('.bg-sizes .btn'));
+    // The size row, the orientation row and the fit offer all share the class,
+    // so "which size is lit" has to look at the first row only or Portrait
+    // joins the answer.
+    const sizeRowButtons = () => {
+      const row = document.getElementById('panelBody').querySelector('.bg-sizes');
+      return row ? Array.from(row.querySelectorAll('.btn')) : [];
+    };
+    const litLabels = () => sizeRowButtons().filter((b) => b.classList.contains('primary')).map((b) => b.textContent.trim());
+    const fitButton = () => sizeButtons().find((b) => /Fit .* onto the page/.test(b.textContent));
+
+    r.litWhileInfinite = litLabels().join(',');
+    r.noFitOfferWhileInfinite = !fitButton();
+
+    // switch to A4 by pressing the panel's own button, the way a person does
+    const a4 = sizeButtons().find((b) => b.textContent.trim() === 'A4');
+    r.foundA4Button = !!a4;
+    if (a4) a4.click();
+    await new Promise((res) => setTimeout(res, 200));
+
+    r.litAfterChoosingA4 = litLabels().join(',');
+    r.pageIsNowA4 = !!a.store.page;
+    r.strayCount = a.offPageObjects().length;
+    r.fitOfferAppeared = !!fitButton();
+    r.fitOfferSays = fitButton() ? fitButton().textContent.trim() : '(no offer)';
+
+    // the board itself says so too, with the fix on the note
+    const toasts = Array.from(document.querySelectorAll('#toasts .toast'));
+    const last = toasts[toasts.length - 1];
+    // read the message span itself, not the whole toast - the icon and the
+    // action button are in there too and make a mess of textContent
+    const msgSpan = last ? last.querySelectorAll('span')[1] : null;
+    r.toastSaid = msgSpan ? msgSpan.textContent.trim() : '(no toast)';
+    const act = last ? last.querySelector('.toast-action') : null;
+    r.toastOffersTheFix = !!act;
+
+    // and pressing it actually brings the work onto the paper
+    if (act) act.click();
+    await new Promise((res) => setTimeout(res, 200));
+    r.strayAfterPressing = a.offPageObjects().length;
+    r.everythingKept = a.store.objects.length;
+
+    // the offer stands down once there is nothing left off the paper
+    a.panels.background(); a.panels.background();   // close, then open fresh
+    await new Promise((res) => setTimeout(res, 160));
+    r.offerGoneWhenNothingStray = !fitButton();
+
+    // back to infinite, and the panel says infinite
+    const inf = sizeButtons().find((b) => b.textContent.trim() === 'Infinite');
+    if (inf) inf.click();
+    await new Promise((res) => setTimeout(res, 200));
+    r.litAfterBackToInfinite = litLabels().join(',');
+
+    a.panels.close?.();
+    a.newBoard(true); a.store.clear();
+    return r;
+  `);
+  check('the canvas-size panel lights the size the board is actually on',
+    sizeMenu.panelOpened === true && sizeMenu.foundA4Button === true && sizeMenu.litWhileInfinite === 'Infinite' &&
+    sizeMenu.litAfterChoosingA4 === 'A4' && sizeMenu.pageIsNowA4 === true,
+    `panel open: ${sizeMenu.panelOpened}, found the A4 button: ${sizeMenu.foundA4Button}; ` +
+    `lit while infinite: "${sizeMenu.litWhileInfinite}", after choosing A4: "${sizeMenu.litAfterChoosingA4}" ` +
+    `(wanted "A4" — "Infinite" here means the page changed but the panel never redrew), board is a pad: ${sizeMenu.pageIsNowA4}`);
+  check('and it lights Infinite again when the board goes back to no edges',
+    sizeMenu.litAfterBackToInfinite === 'Infinite',
+    `lit after going back: "${sizeMenu.litAfterBackToInfinite}", wanted "Infinite"`);
+  check('work left off the paper is offered a one-press fix, right when it happens',
+    sizeMenu.noFitOfferWhileInfinite === true && sizeMenu.strayCount > 0 && sizeMenu.fitOfferAppeared === true,
+    `${sizeMenu.strayCount} item(s) off the paper; the panel offered "${sizeMenu.fitOfferSays}" ` +
+    `(no offer while the canvas was infinite: ${sizeMenu.noFitOfferWhileInfinite})`);
+  check('the board says so too, so you need not have the panel open to find out',
+    /off the paper/.test(sizeMenu.toastSaid) && sizeMenu.toastOffersTheFix === true,
+    `the note said "${sizeMenu.toastSaid}" and carried a button: ${sizeMenu.toastOffersTheFix}`);
+  check('and pressing that button brings the work onto the page, losing none of it',
+    sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
+    sizeMenu.offerGoneWhenNothingStray === true,
+    `${sizeMenu.strayAfterPressing} left off the paper (wanted 0), ${sizeMenu.everythingKept} objects still on the board ` +
+    `(wanted 3 — fewer means it deleted something), offer stood down afterwards: ${sizeMenu.offerGoneWhenNothingStray}`);
+
   const pageExport = await js(`
     const a = window.app;
     a.newBoard(true);
@@ -5585,7 +5689,12 @@ async function run(win, app) {
     const a = window.app, sf = a.surface;
     const r = {};
     a.newBoard(true); a.store.clear();
+    // newBoard queues a frame that opens the board and places the camera. Let
+    // it land before this test starts placing the camera itself, or the two
+    // take turns and whichever wins depends on how fast the machine is.
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
     await a.setPageSize('a4', 'portrait');
+    await new Promise((res) => requestAnimationFrame(res));
     const { stripBounds } = await import('app://board/js/core/pages.js');
     const paper = () => {
       const b = stripBounds(a.pages), c = sf.cam;
@@ -5628,6 +5737,24 @@ async function run(win, app) {
     sf.cam.panBy(0, -600); sf.clampCamera();
     r.scrolledDown = Math.round(Math.abs(sf.cam.y - yBefore)) > 100;
 
+    // --- a window that changes shape puts the page back in the middle -----
+    // Nothing else asks for this: without it a page centred a moment ago sits
+    // off to one side until the next pan, which is exactly how it looks when
+    // a side panel opens or a tablet keyboard appears.
+    // Setting cam.x directly is what a changed window LEAVES BEHIND: the camera
+    // still holds the offset that centred the page in the old shape, and it is
+    // wrong for the new one. resize() has to notice. Writing cam.x by hand and
+    // forcing a resize reproduces that without needing to drive a real window,
+    // and it is the only way the check can fail for the right reason - going
+    // through clampCamera() to set up would centre it and prove nothing.
+    sf.cam.z = 0.35; sf.clampCamera();
+    sf.cam.x -= 260;                                  // the stale offset
+    const before = paper();
+    r.offCentreBeforeResize = Math.round(before.left - (before.view - before.width) / 2);
+    sf.resize(true);
+    const after = paper();
+    r.offCentreAfterResize = Math.round(after.left - (after.view - after.width) / 2);
+
     // --- an infinite canvas is still free in both directions -------------
     await a.setPageSize('infinite');
     const free = sf.cam.x;
@@ -5654,6 +5781,10 @@ async function run(win, app) {
     `its left edge sat ${sideways.leftEdgeHeld}px inside (both wanted 0 — a positive number is desk on show)`);
   check('while up and down still scrolls the pad, which is what a pad is for',
     sideways.scrolledDown === true, `vertical pan moved the view: ${sideways.scrolledDown}`);
+  check('a window that changes shape puts the page back in the middle of it',
+    sideways.offCentreBeforeResize === -260 && sideways.offCentreAfterResize === 0,
+    `the stale offset left the page ${sideways.offCentreBeforeResize}px off centre (wanted -260, ` +
+    `so the check is not passing for free) and the resize left it ${sideways.offCentreAfterResize}px off (wanted 0)`);
   check('and an infinite canvas is free to roam in both directions',
     sideways.infiniteStillFree === true, `infinite board panned freely: ${sideways.infiniteStillFree}`);
 
@@ -6655,6 +6786,19 @@ async function run(win, app) {
     a.store.addMany ? a.store.addMany(bulk) : bulk.forEach((o) => a.store.add(o, 'x'));
 
     const sf = a.surface, it = a.interaction, cam = sf.cam;
+
+    /*
+     * newBoard() does not finish with the camera: it queues a frame to open the
+     * board at 100% and centre it. That frame has not run yet. Setting the
+     * camera now and then awaiting anything lets the queued one land in the
+     * middle of the test and move the board out from under the copy being
+     * measured - which is exactly what it did, on a slower machine than the one
+     * this was written on: the copy was true when it was made and stale a
+     * moment later, and the test blamed the rebuild.
+     *
+     * So let the board finish opening first, then take the camera.
+     */
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
     cam.z = 0.4; cam.x = 0; cam.y = 0;          // a lot of it on screen at once
     sf.invalidate(); sf.draw();
 
@@ -6702,7 +6846,10 @@ async function run(win, app) {
     r.rebuildWasQueued = sf._warming != null;
 
     // --- 2. and the gap is spent making it current ------------------------
+    const camNow = () => cam.x + '|' + cam.y + '|' + cam.z;
+    const camBefore = camNow();
     r.settled = await settle();
+    r.camMovedDuringSettle = camNow() !== camBefore ? camBefore + ' -> ' + camNow() : 'no';
     r.keyAfterSettle = sf._ink ? sf._ink.key : '(no copy held)';
     r.wantedAfterSettle = sf.freezeKey();
     r.warmAfterSettle = !!sf._ink && sf._ink.key === r.wantedAfterSettle;
@@ -6764,7 +6911,8 @@ async function run(win, app) {
   check('and the quiet moment that follows is spent bringing it up to date',
     warmFreeze.settled === true && warmFreeze.warmAfterSettle === true,
     `after settle held ${warmFreeze.keyAfterSettle}, view wants ${warmFreeze.wantedAfterSettle}, ` +
-    `rebuild finished: ${warmFreeze.settled}`);
+    `rebuild finished: ${warmFreeze.settled}, camera moved under the test: ${warmFreeze.camMovedDuringSettle} ` +
+    `(anything but "no" means something else moved the board, not that the rebuild was wrong)`);
   check('so the stroke that lands next repaints the board not at all',
     warmFreeze.freezesForWarmStroke === 0,
     `${warmFreeze.freezesForWarmStroke} full board repaints during the stroke ` +
@@ -9745,6 +9893,7 @@ module.exports.run = async (win, app) => {
   const onPhone = [];
   let typingOnPhone = null;
   let phoneBar = null;
+  let phonePageSize = null;
   try {
     win.webContents.debugger.attach('1.3');
     const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
@@ -9821,6 +9970,67 @@ module.exports.run = async (win, app) => {
       };
     `);
 
+    /*
+     * The same two fixes have to be reachable on a phone - which is what the
+     * Android build is. Nothing here is Android-only code: the app inside the
+     * wrapper is this one, so what matters is that the phone layout still leads
+     * to the panel, and that the note's button is big enough for a thumb rather
+     * than a mouse pointer.
+     */
+    phonePageSize = await js(`
+      const a = window.app;
+      const r = {};
+      a.hideMenus();
+      const more = document.querySelector('#toolbar [data-pop="more"]');
+      more?.click();
+      await new Promise((res) => setTimeout(res, 120));
+      const items = [...document.querySelectorAll('.pop .menu > *')].map((n) => (n.textContent || '').trim());
+      r.moreMenu = items.filter(Boolean).join(' | ');
+      const bg = [...document.querySelectorAll('.pop .menu > *')]
+        .find((n) => /Format background/.test(n.textContent || ''));
+      r.foundBackgroundOnPhone = !!bg;
+      if (bg) bg.click();
+      await new Promise((res) => setTimeout(res, 160));
+      r.panelOpenedOnPhone = document.getElementById('panel').classList.contains('open');
+
+      const sizeRow = document.getElementById('panelBody').querySelector('.bg-sizes');
+      const btns = sizeRow ? [...sizeRow.querySelectorAll('.btn')] : [];
+      r.litBefore = btns.filter((b) => b.classList.contains('primary')).map((b) => b.textContent.trim()).join(',');
+
+      // something well off any sheet, so the offer has a reason to appear
+      const had = new Set(a.store.objects.map((o) => o.id));
+      a.store.add({ id: 'phonestray', type: 'shape', kind: 'rect', x: 3000, y: 60, w: 140, h: 100,
+                    rotation: 0, stroke: '#201f1e', fill: 'none', lineWidth: 3 }, 'x');
+
+      const a4 = btns.find((b) => b.textContent.trim() === 'A4');
+      r.foundA4OnPhone = !!a4;
+      if (a4) a4.click();
+      await new Promise((res) => setTimeout(res, 220));
+
+      const rowNow = document.getElementById('panelBody').querySelector('.bg-sizes');
+      r.litAfter = rowNow
+        ? [...rowNow.querySelectorAll('.btn')].filter((b) => b.classList.contains('primary')).map((b) => b.textContent.trim()).join(',')
+        : '(no row)';
+
+      const toast = [...document.querySelectorAll('#toasts .toast')].pop();
+      const act = toast ? toast.querySelector('.toast-action') : null;
+      r.toastHasButtonOnPhone = !!act;
+      r.buttonHeight = act ? Math.round(act.getBoundingClientRect().height) : 0;
+      r.buttonWidth = act ? Math.round(act.getBoundingClientRect().width) : 0;
+      r.buttonOnScreen = !!act && act.getBoundingClientRect().right <= window.innerWidth + 1
+                         && act.getBoundingClientRect().left >= -1;
+
+      if (act) act.click();
+      await new Promise((res) => setTimeout(res, 200));
+      r.strayLeft = a.offPageObjects().length;
+
+      await a.setPageSize('infinite');
+      a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+      a.panels.close?.();
+      a.hideMenus();
+      return r;
+    `);
+
     // The toolbar has to stand down while the keyboard is up, or it sits on
     // the very box being typed into.
     typingOnPhone = await js(`
@@ -9889,6 +10099,24 @@ module.exports.run = async (win, app) => {
   check('the toolbar stands down while you are typing on a phone',
     !!typingOnPhone && typingOnPhone.flagged && typingOnPhone.during === 'none',
     typingOnPhone ? `${typingOnPhone.before} -> ${typingOnPhone.during}` : 'not measured');
+  if (phonePageSize) {
+    check('a phone can reach the canvas size at all, which is what Android is',
+      phonePageSize.foundBackgroundOnPhone === true && phonePageSize.panelOpenedOnPhone === true &&
+      phonePageSize.foundA4OnPhone === true,
+      `the more menu holds: ${phonePageSize.moreMenu}; panel opened: ${phonePageSize.panelOpenedOnPhone}, ` +
+      `A4 button found: ${phonePageSize.foundA4OnPhone}`);
+    check('and the phone panel updates the moment the size changes, same as desktop',
+      phonePageSize.litBefore === 'Infinite' && phonePageSize.litAfter === 'A4',
+      `lit before "${phonePageSize.litBefore}", after "${phonePageSize.litAfter}" (wanted Infinite then A4)`);
+    check('the off-the-paper note carries a button a thumb can actually hit',
+      phonePageSize.toastHasButtonOnPhone === true && phonePageSize.buttonHeight >= 32 &&
+      phonePageSize.buttonOnScreen === true,
+      `button ${phonePageSize.buttonWidth}x${phonePageSize.buttonHeight}px (wanted at least 32 tall), ` +
+      `fully on a ${'phone-width'} screen: ${phonePageSize.buttonOnScreen}`);
+    check('and pressing it on a phone brings the work onto the page too',
+      phonePageSize.strayLeft === 0, `${phonePageSize.strayLeft} item(s) still off the paper, wanted 0`);
+  }
+
   check('and comes straight back when you stop',
     !!typingOnPhone && typingOnPhone.cleared && typingOnPhone.after === typingOnPhone.before,
     typingOnPhone ? `back to ${typingOnPhone.after}` : 'not measured');

@@ -126,7 +126,11 @@ export function createPanels(app) {
       const sizeRow = h('div', { class: 'bg-sizes' });
       const sizeBtn = (id, label, active) => {
         const b = h('button', { class: 'btn' + (active ? ' primary' : '') }, label);
-        b.addEventListener('click', async () => { await app.setPageSize(id, orientation); refresh(); });
+        // rerender(), not just refresh(): refresh() repaints the CANVAS, which
+        // is why the page changed but this panel went on showing the old size
+        // as the chosen one - and went on hiding the "fit it onto the page"
+        // offer at the exact moment it became worth offering.
+        b.addEventListener('click', async () => { await app.setPageSize(id, orientation); rerender(); refresh(); });
         return b;
       };
       sizeRow.appendChild(sizeBtn('infinite', 'Infinite', !page));
@@ -141,6 +145,7 @@ export function createPanels(app) {
         b.addEventListener('click', async () => {
           const paper = current ? current.paper : (app.settings.pagePaper || 'a4');
           await app.setPageSize(paper, o.id);
+          rerender();
           refresh();
         });
         orientRow.appendChild(b);
@@ -152,7 +157,7 @@ export function createPanels(app) {
       if (page && off.length) {
         const b = h('button', { class: 'btn primary', style: 'width:100%' },
           off.length === 1 ? 'Fit 1 item onto the page' : `Fit ${off.length} items onto the page`);
-        b.addEventListener('click', () => { app.fitContentToPage(); refresh(); });
+        b.addEventListener('click', () => { app.fitContentToPage(); rerender(); refresh(); });
         fitRow.appendChild(b);
         fitRow.appendChild(h('p', { style: 'margin:2px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
           'Exports cover the sheet, so anything outside it is left out.'));

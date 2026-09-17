@@ -177,6 +177,11 @@ export class Surface {
     const bw = Math.max(1, Math.round(w * dpr)), bh = Math.max(1, Math.round(h * dpr));
     if (this.canvas.width !== bw) this.canvas.width = bw;
     if (this.canvas.height !== bh) this.canvas.height = bh;
+    // A window that just changed shape changes where the paper belongs in it:
+    // a page centred a moment ago is off to one side now, and nothing else
+    // asks for it until the next pan. Cheap, and a no-op on a board with no
+    // pages at all.
+    this.clampCamera();
     this.invalidate();
     this.onResize?.(w, h);
     return true;

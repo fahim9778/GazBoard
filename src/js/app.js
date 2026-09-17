@@ -1871,11 +1871,32 @@ class App {
     }
   }
 
-  toast(message, iconName = 'check', ms = 2600) {
+  /**
+   * A passing note, optionally with something to do about it.
+   *
+   * `action` turns the note into an offer: {label, onClick}. It is for the case
+   * where the app has just done exactly what was asked and the result still
+   * needs a decision - telling someone their work is now off the paper is only
+   * half a message if the fix is three menus away. The button does the thing
+   * and the note goes.
+   */
+  toast(message, iconName = 'check', ms = 2600, action = null) {
     const host = document.getElementById('toasts');
     const el = h('div', { class: 'toast' }, h('span', { html: icon(iconName, 16), style: 'display:flex' }), h('span', {}, message));
+    let gone = false;
+    const dismiss = () => {
+      if (gone) return;
+      gone = true;
+      el.style.opacity = '0'; el.style.transition = 'opacity .25s';
+      setTimeout(() => el.remove(), 260);
+    };
+    if (action && action.label) {
+      const b = h('button', { class: 'toast-action' }, action.label);
+      b.addEventListener('click', () => { dismiss(); action.onClick?.(); });
+      el.appendChild(b);
+    }
     host.appendChild(el);
-    setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .25s'; setTimeout(() => el.remove(), 260); }, ms);
+    setTimeout(dismiss, ms);
   }
 
   /* ================================================================= *
@@ -1933,7 +1954,25 @@ class App {
     this.saveSettings();
     this.store.commit('page size', ops);
     this.fitToPage(Math.min(this.currentPageIndex(), count - 1));
-    this.toast(`${paperById(paperId).label} ${orientation}${count > 1 ? ` — ${count} pages` : ''}`);
+
+    /*
+     * An infinite canvas has no outside, so nothing on it was ever "off the
+     * page". The moment it becomes a pad, work that was spread comfortably
+     * across the desk can be sitting beyond the sheet - still there, still
+     * safe, but not on the paper and not in the export. That is a surprise
+     * worth naming at the moment it happens rather than leaving to be
+     * discovered at print time, and the fix already exists, so the note
+     * carries it: one press brings everything onto the page.
+     */
+    const stray = this.offPageObjects();
+    const label = `${paperById(paperId).label} ${orientation}${count > 1 ? ` — ${count} pages` : ''}`;
+    if (stray.length) {
+      this.toast(
+        `${label} — ${stray.length === 1 ? '1 item sits' : `${stray.length} items sit`} off the paper`,
+        'template', 7000,
+        { label: 'Fit onto the page', onClick: () => this.fitContentToPage() }
+      );
+    } else this.toast(label);
     this.surface.invalidate();
     this.syncUI();
   }
