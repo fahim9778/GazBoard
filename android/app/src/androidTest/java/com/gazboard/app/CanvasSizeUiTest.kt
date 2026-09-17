@@ -54,12 +54,18 @@ class CanvasSizeUiTest {
         window.androidCanvasButton = (label) =>
           [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
             .find(b => b.textContent.trim() === label);
-        window.androidCanvasButton('A4').click();
+        const pressedA4 = window.androidCanvasButton('A4');
+        pressedA4.click();
+        // Keep the answer from this exact JavaScript turn. A second call races
+        // the shared async handler, which is allowed to replace the whole panel
+        // with its authoritative rerender as soon as setPageSize() completes.
+        window.androidA4AcknowledgedImmediately =
+          pressedA4.classList.contains('primary');
       """.trimIndent())
 
       // The Android helper acknowledges the tap before setPageSize finishes.
       assertEquals("true", js(scenario,
-        "window.androidCanvasButton('A4').classList.contains('primary')"))
+        "window.androidA4AcknowledgedImmediately === true"))
 
       until(scenario, "!!app.store.page && " +
         "window.androidCanvasButton('A4').classList.contains('primary') && " +
