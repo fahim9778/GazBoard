@@ -93,13 +93,18 @@ export function createPanels(app) {
 
   /* ---------------- background ---------------- */
   function background() {
-    open('background', 'Format background', () => {
+    open('background', 'Canvas', () => {
       const bg = app.store.doc.background;
       const colors = h('div', { class: 'bg-grid' });
       for (const c of BOARD_COLORS) {
         const b = h('button', { class: 'bg-sw' + (bg.color === c ? ' active' : ''), title: c });
         b.style.background = c;
-        b.addEventListener('click', () => { app.store.setBackground({ color: c, patternColor: c === '#2b2b2b' ? '#5a5a5a' : '#c8c6c4' }); rerender(); refresh(); });
+        b.addEventListener('click', () => {
+          const patch = { color: c, patternColor: c === '#2b2b2b' ? '#5a5a5a' : '#c8c6c4' };
+          app.store.setBackground(patch);
+          app.rememberCanvas(patch);
+          rerender(); refresh();
+        });
         colors.appendChild(b);
       }
 
@@ -109,12 +114,18 @@ export function createPanels(app) {
         b.appendChild(h('span', {}, p.label));
         b.style.backgroundImage = patternPreview(p.id, bg.patternColor);
         b.style.backgroundColor = bg.color;
-        b.addEventListener('click', () => { app.store.setBackground({ pattern: p.id }); rerender(); refresh(); });
+        b.addEventListener('click', () => {
+          app.store.setBackground({ pattern: p.id });
+          app.rememberCanvas({ pattern: p.id });
+          rerender(); refresh();
+        });
         pats.appendChild(b);
       }
 
       const custom = h('input', { type: 'color', value: bg.color });
       custom.addEventListener('input', () => app.store.setBackground({ color: custom.value }));
+      // one write when the picker is let go, not one per drag of the slider
+      custom.addEventListener('change', () => app.rememberCanvas({ color: custom.value }));
 
       // Canvas size. Infinite is the default and always will be. Choosing a
       // paper size turns the board into a pad: ink is clipped to the sheet and
@@ -168,11 +179,43 @@ export function createPanels(app) {
           ? 'Anything you draw outside the sheet stays where it is — it just sits off the page, and exports use the sheet.'
           : 'The canvas has no edges. Pick a size to work on a fixed sheet instead.');
 
+      const remembering = app.settings.rememberCanvas === true;
+      const box = h('input', { type: 'checkbox' });
+      box.checked = remembering;
+      const setRemember = (v) => {
+        app.settings.rememberCanvas = v;
+        // Turning it ON adopts what is on screen right now, so the switch means
+        // what it says immediately rather than from the next change onwards.
+        if (v) {
+          const bg = app.store.doc.background || {};
+          const cur = app.store.page ? paperForPage(app.store.page) : null;
+          app.settings.canvasDefaults = {
+            color: bg.color, pattern: bg.pattern, patternColor: bg.patternColor,
+            paper: cur ? cur.paper : 'infinite', orientation: cur ? cur.orientation : orientation
+          };
+        }
+        app.saveSettings();
+        rerender();
+      };
+      box.addEventListener('change', () => setRemember(box.checked));
+      const words = h('span', { style: 'cursor:pointer' }, 'Use this canvas for new boards');
+      words.addEventListener('click', () => { box.checked = !box.checked; setRemember(box.checked); });
+
+      const rememberRow = h('div', {},
+        h('div', { style: 'display:flex;align-items:center;gap:10px' },
+          h('label', { class: 'toggle' }, box), words),
+        h('p', { style: 'margin:6px 0 0;font-size:12px;color:var(--text-2);line-height:1.6' },
+          remembering
+            ? 'The size, colour and pattern you choose here are used for every NEW board. Boards you already have are left exactly as they are.'
+            : 'Every new board starts on the plain infinite canvas.')
+      );
+
       return h('div', {},
         h('div', { class: 'section' }, h('h5', {}, 'Canvas size'), sizeRow, orientRow, fitRow, sizeNote),
         h('div', { class: 'section' }, h('h5', {}, 'Colour'), colors),
         h('div', { class: 'section' }, h('h5', {}, 'Custom colour'), custom),
-        h('div', { class: 'section' }, h('h5', {}, 'Pattern'), pats)
+        h('div', { class: 'section' }, h('h5', {}, 'Pattern'), pats),
+        h('div', { class: 'section' }, h('h5', {}, 'New boards'), rememberRow)
       );
     });
   }

@@ -26,6 +26,17 @@ import {
 
 export const DEFAULT_SETTINGS = {
   penColor: '#201f1e', penWidth: 4, penEffect: 'none', activePen: 'black',
+  // Whether the look of the canvas - paper size, colour, pattern - is carried
+  // to the NEXT new board. Boards already made are never touched by it.
+  // `canvasDefaults` itself is deliberately absent, for the same reason `pens`
+  // is: DEFAULT_SETTINGS is spread shallowly, so an object literal here would
+  // be shared by every settings copy and the first change would write into the
+  // defaults themselves, where Reset could never clear it.
+  // OFF by default, deliberately. Turning it on changes what "New board" means,
+  // and doing that to someone who once tried A4 months ago - handing them A4
+  // for the rest of time without being asked - is not a favour. The switch sits
+  // in the Canvas panel and adopts whatever is on screen the moment it is used.
+  rememberCanvas: false,
   // Deliberately absent: `pens`, the map of pens the user has recoloured.
   // DEFAULT_SETTINGS is spread shallowly, so an object literal here would be
   // THE SAME object in every settings copy - and the first recolouring would
@@ -516,9 +527,44 @@ class App {
    * appears in the Boards list immediately, instead of materialising later when
    * the first mark happens to be made.
    */
+  /**
+   * Carry the look of this canvas to the next new board.
+   *
+   * Only what the person actually changed is kept, and only the LOOK of it:
+   * paper size, colour, pattern. Nothing anyone has drawn travels, and no board
+   * that already exists is touched - reaching back to change boards made last
+   * week because of a choice made today would be the opposite of helpful.
+   */
+  rememberCanvas(patch) {
+    if (!this.settings.rememberCanvas) return;
+    const mine = this.settings.canvasDefaults || (this.settings.canvasDefaults = {});
+    Object.assign(mine, patch);
+    this.saveSettings();
+  }
+
+  /** Put the remembered look on a board that has just been made. */
+  applyCanvasDefaults() {
+    const want = this.settings.rememberCanvas ? this.settings.canvasDefaults : null;
+    if (!want) return;
+    const bg = {};
+    for (const k of ['color', 'pattern', 'patternColor']) if (want[k] != null) bg[k] = want[k];
+    if (Object.keys(bg).length) {
+      // straight onto the fresh document rather than through commit(): a board
+      // one second old should not open with something already on its undo stack
+      Object.assign(this.store.doc.background, bg);
+      this.store.rev++;
+    }
+    if (want.paper && want.paper !== 'infinite') {
+      // async, and it commits - which is right here: the sheet is a real change
+      // to an empty board, and it is the last thing to happen to it
+      this.setPageSize(want.paper, want.orientation || 'portrait');
+    }
+  }
+
   newBoard(silent = false) {
     this.store.reset();
     this.surface.selection.clear();
+    this.applyCanvasDefaults();
     this.openAtActualSize();
     document.getElementById('boardTitle').value = this.store.doc.name;
     this.syncUI();
@@ -1933,6 +1979,7 @@ class App {
     const { pageWorldSize, paperById } = await import('./ui/pdfdialog.js');
 
     if (paperId === 'infinite' || !paperId) {
+      this.rememberCanvas({ paper: 'infinite' });
       this.store.setPages([], 'infinite canvas');
       this.toast('Infinite canvas');
       this.surface.invalidate();
@@ -1952,6 +1999,7 @@ class App {
     this.settings.pageOrientation = orientation;
     this.settings.pagePaper = paperId;
     this.saveSettings();
+    this.rememberCanvas({ paper: paperId, orientation });
     this.store.commit('page size', ops);
     this.fitToPage(Math.min(this.currentPageIndex(), count - 1));
 

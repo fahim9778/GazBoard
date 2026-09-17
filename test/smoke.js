@@ -5372,6 +5372,24 @@ async function run(win, app) {
     const act = last ? last.querySelector('.toast-action') : null;
     r.toastOffersTheFix = !!act;
 
+    /*
+     * elementFromPoint, not .click().
+     *
+     * A synthetic .click() ignores pointer-events entirely, so it presses a
+     * button a real finger cannot reach. The toast layer is click-through by
+     * design - passing notes must not block the board - and this button was
+     * inside it, visible and styled and completely dead, while the test that
+     * was supposed to cover it sailed through. Asking what is actually at the
+     * button's centre is the question a finger asks.
+     */
+    const hit = act ? (() => {
+      const b = act.getBoundingClientRect();
+      const el = document.elementFromPoint(Math.round(b.left + b.width / 2), Math.round(b.top + b.height / 2));
+      return el && (el === act || act.contains(el)) ? act : el;
+    })() : null;
+    r.buttonIsReachable = hit === act;
+    r.whatIsAtTheButton = hit ? (hit === act ? 'the button' : (hit.className || hit.tagName)) : '(nothing)';
+
     // and pressing it actually brings the work onto the paper
     if (act) act.click();
     await new Promise((res) => setTimeout(res, 200));
@@ -5409,6 +5427,109 @@ async function run(win, app) {
   check('the board says so too, so you need not have the panel open to find out',
     /off the paper/.test(sizeMenu.toastSaid) && sizeMenu.toastOffersTheFix === true,
     `the note said "${sizeMenu.toastSaid}" and carried a button: ${sizeMenu.toastOffersTheFix}`);
+  check('and that button can actually be pressed, not just drawn',
+    sizeMenu.buttonIsReachable === true,
+    `what sits at the middle of the button: ${sizeMenu.whatIsAtTheButton} — anything but "the button" means ` +
+    `the click passes straight through it, which is what the toast layer does by default`);
+  /* ---- the canvas you set up can be the one every new board starts on ---- */
+  const canvasMemory = await js(`
+    const a = window.app;
+    const r = {};
+    const s = a.settings;
+    delete s.canvasDefaults; s.rememberCanvas = false; a.saveSettings();
+
+    a.newBoard(true);
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+
+    // --- off by default: setting up a canvas changes THIS board only --------
+    r.offByDefault = s.rememberCanvas === false;
+    await a.setPageSize('a4', 'portrait');
+    a.store.setBackground({ color: '#2b2b2b', pattern: 'grid' });
+    r.thisBoardTookIt = !!a.store.page && a.store.doc.background.color === '#2b2b2b';
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 200));
+    r.nextBoardStayedPlain = !a.store.page && a.store.doc.background.color !== '#2b2b2b';
+
+    // --- turning it on adopts what is on screen, there and then -------------
+    await a.setPageSize('a5', 'landscape');
+    a.store.setBackground({ color: '#2b2b2b', pattern: 'dots' });
+    a.panels.background();
+    await new Promise((res) => setTimeout(res, 140));
+    const words = [...document.querySelectorAll('#panelBody span')]
+      .find((n) => /Use this canvas for new boards/.test(n.textContent || ''));
+    r.foundTheSwitch = !!words;
+    if (words) words.click();
+    await new Promise((res) => setTimeout(res, 160));
+    r.switchedOn = s.rememberCanvas === true;
+    r.adoptedOnTheSpot = !!s.canvasDefaults && s.canvasDefaults.paper === 'a5'
+      && s.canvasDefaults.color === '#2b2b2b' && s.canvasDefaults.pattern === 'dots';
+    r.adopted = JSON.stringify(s.canvasDefaults || null);
+
+    // --- so the next new board opens on it ---------------------------------
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 300));
+    const { paperForPage } = await import('app://board/js/ui/pdfdialog.js');
+    const got = a.store.page ? paperForPage(a.store.page) : null;
+    r.newBoardPaper = got ? got.paper + ' ' + got.orientation : '(infinite)';
+    r.newBoardColour = a.store.doc.background.color;
+    r.newBoardPattern = a.store.doc.background.pattern;
+    r.newBoardInherited = !!got && got.paper === 'a5' && got.orientation === 'landscape'
+      && a.store.doc.background.color === '#2b2b2b' && a.store.doc.background.pattern === 'dots';
+
+    // --- and a board made BEFORE any of this is left exactly as it was ------
+    // saved while the setting was off, on the plain canvas: opening it must not
+    // repaint somebody's old work in this week's colours
+    const oldBoard = { id: 'older-board', name: 'Made last week', schema: 2,
+      background: { color: '#ffffff', pattern: 'none' }, pages: [], objects: [], order: [] };
+    a.store.load(oldBoard);
+    await new Promise((res) => setTimeout(res, 150));
+    r.oldBoardColour = a.store.doc.background.color;
+    r.oldBoardPaper = a.store.page ? 'has a sheet' : 'still infinite';
+    r.oldBoardUntouched = a.store.doc.background.color === '#ffffff' && !a.store.page;
+
+    // --- the look does not arrive as something to undo ----------------------
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 300));
+    r.undoDepth = a.store.undoStack.length;
+    r.colourIsNotAnUndo = a.store.doc.background.color === '#2b2b2b' && a.store.undoStack.length <= 1;
+
+    // --- switching it back off leaves new boards plain again ---------------
+    s.rememberCanvas = false; a.saveSettings();
+    a.newBoard(true);
+    await new Promise((res) => setTimeout(res, 250));
+    r.plainAgain = !a.store.page && a.store.doc.background.color !== '#2b2b2b';
+
+    delete s.canvasDefaults; s.rememberCanvas = false; a.saveSettings();
+    a.panels.close?.();
+    a.newBoard(true); a.store.clear();
+    return r;
+  `);
+  check('out of the box, setting up a canvas changes that board and nothing else',
+    canvasMemory.offByDefault === true && canvasMemory.thisBoardTookIt === true &&
+    canvasMemory.nextBoardStayedPlain === true,
+    `switch starts off: ${canvasMemory.offByDefault}; this board took the A4 and the dark colour: ` +
+    `${canvasMemory.thisBoardTookIt}; the next new board stayed plain: ${canvasMemory.nextBoardStayedPlain} ` +
+    `(false here means it was changed for everyone without being asked)`);
+  check('the Canvas panel offers to use this canvas for new boards',
+    canvasMemory.foundTheSwitch === true && canvasMemory.switchedOn === true &&
+    canvasMemory.adoptedOnTheSpot === true,
+    `found the switch: ${canvasMemory.foundTheSwitch}, it went on: ${canvasMemory.switchedOn}, ` +
+    `and it adopted what was on screen: ${canvasMemory.adopted}`);
+  check('and every new board then opens on that canvas',
+    canvasMemory.newBoardInherited === true,
+    `the new board came up ${canvasMemory.newBoardPaper}, ${canvasMemory.newBoardColour}, ` +
+    `pattern ${canvasMemory.newBoardPattern} — wanted a5 landscape, #2b2b2b, dots`);
+  check('while a board made before any of it is left exactly as it was',
+    canvasMemory.oldBoardUntouched === true,
+    `the older board opened ${canvasMemory.oldBoardColour} and ${canvasMemory.oldBoardPaper} — ` +
+    `wanted #ffffff and still infinite; anything else means old work is being repainted`);
+  check('the look arrives as how the board IS, not as something to undo',
+    canvasMemory.colourIsNotAnUndo === true,
+    `${canvasMemory.undoDepth} thing(s) on the undo stack of a board one second old (wanted at most 1, ` +
+    `for the sheet itself)`);
+  check('and turning it off gives plain new boards back',
+    canvasMemory.plainAgain === true, `next board was plain again: ${canvasMemory.plainAgain}`);
+
   check('and pressing that button brings the work onto the page, losing none of it',
     sizeMenu.strayAfterPressing === 0 && sizeMenu.everythingKept === 3 &&
     sizeMenu.offerGoneWhenNothingStray === true,
@@ -8344,9 +8465,45 @@ module.exports.run = async (win, app) => {
      * failure says "the clipboard never took it" instead of blaming the board.
      */
     const settled = [];
+
+    /*
+     * Chromium refuses to write the clipboard from a window that is not the one
+     * in front: "Document is not focused". This suite opens a real window and
+     * runs for minutes, so anything that takes the foreground while it does -
+     * alt-tab, a notification, somebody picking their own machine back up to do
+     * something else - threw here and took every check in this probe down with
+     * it: thirty-one failures all reading "undefined", not one of them naming
+     * the cause.
+     *
+     * The window is asked back to the front and the write retried. If focus
+     * still cannot be had, that is recorded rather than thrown, so the result
+     * says the window was in the background instead of blaming the board.
+     */
+    let lostFocus = false;
+    const focused = async () => {
+      for (let i = 0; i < 40; i++) {
+        if (document.hasFocus()) return true;
+        window.focus();
+        await sleep(50);
+      }
+      lostFocus = true;
+      return false;
+    };
+    const writeClipboard = async (fn) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!(await focused())) return false;
+        try { await fn(); return true; } catch (e) {
+          if (!/not focused|NotAllowed/i.test(String(e && e.message || e))) throw e;
+          await sleep(200);
+        }
+      }
+      lostFocus = true;
+      return false;
+    };
+
     const putText = async (value) => {
       const was = a.clipboardStamp();
-      await navigator.clipboard.writeText(value);
+      if (!(await writeClipboard(() => navigator.clipboard.writeText(value)))) { settled.push(false); return false; }
       for (let i = 0; i < 150; i++) {
         const now = a.clipboardStamp();
         if (now !== was && (now || '').includes(value)) { settled.push(true); return true; }
@@ -8357,7 +8514,8 @@ module.exports.run = async (win, app) => {
     };
     const putImage = async (blob, type = 'image/png') => {
       const was = a.clipboardStamp();
-      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+      const wrote = await writeClipboard(() => navigator.clipboard.write([new ClipboardItem({ [type]: blob })]));
+      if (!wrote) { settled.push(false); return false; }
       for (let i = 0; i < 150; i++) {
         if (a.clipboardStamp() !== was) { settled.push(true); return true; }
         await sleep(20);
@@ -8631,6 +8789,7 @@ module.exports.run = async (win, app) => {
     r.cutPastesBack = back.length === 1 && back[0].type === 'note' && back[0].text === 'gone';
     r.everyClipboardWriteLanded = settled.every(Boolean);
     r.clipboardWrites = settled.filter(Boolean).length + '/' + settled.length;
+    r.windowLostFocus = lostFocus;
 
     /*
      * --- pasting at a point, which is what a right-click or a held finger means ---
@@ -8676,8 +8835,12 @@ module.exports.run = async (win, app) => {
     pasted.editorOpen && pasted.leftTheEditorAlone);
   check('the machine clipboard took every value this test put on it',
     pasted.everyClipboardWriteLanded === true,
-    `${pasted.clipboardWrites} writes landed within three seconds — anything less means the ` +
-    `checks below were racing the operating system rather than testing the board`);
+    `${pasted.clipboardWrites} writes landed within three seconds` +
+    (pasted.windowLostFocus
+      ? ` — THE WINDOW WAS IN THE BACKGROUND. Something else held the foreground while the suite ran, so ` +
+        `Chromium refused the clipboard outright. Nothing about the board is being measured here; run it ` +
+        `again and leave the machine alone while it works.`
+      : ` — anything less means the checks below were racing the operating system rather than testing the board`));
   check('copying objects leaves the machine clipboard alone',
     pasted.copiedCount === 2 && pasted.clipboardUndisturbed === true,
     `${pasted.copiedCount} objects held; text already on the clipboard survived: ${pasted.clipboardUndisturbed}`);
@@ -9987,7 +10150,7 @@ module.exports.run = async (win, app) => {
       const items = [...document.querySelectorAll('.pop .menu > *')].map((n) => (n.textContent || '').trim());
       r.moreMenu = items.filter(Boolean).join(' | ');
       const bg = [...document.querySelectorAll('.pop .menu > *')]
-        .find((n) => /Format background/.test(n.textContent || ''));
+        .find((n) => /^Canvas/.test((n.textContent || '').trim()));
       r.foundBackgroundOnPhone = !!bg;
       if (bg) bg.click();
       await new Promise((res) => setTimeout(res, 160));
@@ -10019,6 +10182,10 @@ module.exports.run = async (win, app) => {
       r.buttonWidth = act ? Math.round(act.getBoundingClientRect().width) : 0;
       r.buttonOnScreen = !!act && act.getBoundingClientRect().right <= window.innerWidth + 1
                          && act.getBoundingClientRect().left >= -1;
+      const bb = act ? act.getBoundingClientRect() : null;
+      const at = bb ? document.elementFromPoint(Math.round(bb.left + bb.width / 2), Math.round(bb.top + bb.height / 2)) : null;
+      r.buttonReachableOnPhone = !!act && !!at && (at === act || act.contains(at));
+      r.whatIsAtTheButtonOnPhone = at ? (at === act ? 'the button' : (at.className || at.tagName)) : '(nothing)';
 
       if (act) act.click();
       await new Promise((res) => setTimeout(res, 200));
@@ -10110,9 +10277,10 @@ module.exports.run = async (win, app) => {
       `lit before "${phonePageSize.litBefore}", after "${phonePageSize.litAfter}" (wanted Infinite then A4)`);
     check('the off-the-paper note carries a button a thumb can actually hit',
       phonePageSize.toastHasButtonOnPhone === true && phonePageSize.buttonHeight >= 32 &&
-      phonePageSize.buttonOnScreen === true,
+      phonePageSize.buttonOnScreen === true && phonePageSize.buttonReachableOnPhone === true,
       `button ${phonePageSize.buttonWidth}x${phonePageSize.buttonHeight}px (wanted at least 32 tall), ` +
-      `fully on a ${'phone-width'} screen: ${phonePageSize.buttonOnScreen}`);
+      `fully on a phone-width screen: ${phonePageSize.buttonOnScreen}, and what a thumb actually lands on: ` +
+      `${phonePageSize.whatIsAtTheButtonOnPhone}`);
     check('and pressing it on a phone brings the work onto the page too',
       phonePageSize.strayLeft === 0, `${phonePageSize.strayLeft} item(s) still off the paper, wanted 0`);
   }

@@ -407,6 +407,9 @@ input, textarea { font: inherit; }
   /* on a narrow phone the message wraps to three lines; without this the
      button grows to match it and looks like a slab rather than a button */
   align-self: center; flex: none; white-space: nowrap;
+  /* The toast layer is click-through so passing notes never block the board.
+     This button is the exception: it exists to be pressed. */
+  pointer-events: auto;
   background: rgba(255,255,255,.18); color: #fff;
   font: inherit; font-weight: 600; padding: 6px 11px; min-height: 32px;
 }

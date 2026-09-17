@@ -272,7 +272,7 @@ function initPhoneToolbar(app, bar) {
       h('div', { class: 'menu-sep' }),
       menuItem('Boards…', 'board', () => app.panels.boards()),
       menuItem('Templates…', 'template', () => app.panels.templates()),
-      menuItem('Format background…', 'palette', () => app.panels.background()),
+      menuItem('Canvas…', 'palette', () => app.panels.background()),
       menuItem('Select all', 'select', () => app.command('edit.selectAll')),
       h('div', { class: 'menu-sep' }),
       menuItem('Export as PNG…', 'export', () => app.command('export.png')),
@@ -299,7 +299,7 @@ function wireTopBar(app) {
     ['btnSettings', 'settings', () => app.panels.settings()],
     ['btnHelp', 'help', () => app.showShortcuts()]
   ];
-  const labels = { btnBoards: 'Boards', btnTemplates: 'Templates', btnBackground: 'Background', btnExport: 'Export' };
+  const labels = { btnBoards: 'Boards', btnTemplates: 'Templates', btnBackground: 'Canvas', btnExport: 'Export' };
   for (const [id, ic, fn] of top) {
     const el = document.getElementById(id);
     // A build without sharing has no such button in the page, and asking for
@@ -656,7 +656,7 @@ export function openInsertPopover(app, anchor) {
 export function openMorePopover(app, anchor) {
   const body = h('div', { class: 'menu' },
     menuItem('Templates…', 'template', () => app.panels.templates()),
-    menuItem('Format background…', 'palette', () => app.panels.background()),
+    menuItem('Canvas…', 'palette', () => app.panels.background()),
     menuItem(app.ruler.visible ? 'Hide ruler' : 'Show ruler', 'ruler', () => app.command('ruler'), { key: 'Ctrl+R' }),
     h('div', { class: 'menu-sep' }),
     menuItem('Select all', 'select', () => app.command('edit.selectAll'), { key: 'Ctrl+A' }),

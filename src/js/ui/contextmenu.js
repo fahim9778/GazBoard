@@ -80,7 +80,7 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item('Insert document…', 'doc', () => app.command('insert.document')));
     menu.appendChild(h('div', { class: 'menu-sep' }));
     menu.appendChild(item('Templates…', 'template', () => app.panels.templates()));
-    menu.appendChild(item('Format background…', 'palette', () => app.panels.background()));
+    menu.appendChild(item('Canvas…', 'palette', () => app.panels.background()));
     menu.appendChild(item('Clear canvas', 'trash', () => app.command('edit.clear'), { danger: true }));
   }
   openPopover({ x: e.clientX, y: e.clientY }, menu, { key: 'ctx' });
