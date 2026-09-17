@@ -20,6 +20,9 @@ class CanvasSizeUiTest {
     return answer.get(10, TimeUnit.SECONDS)
   }
 
+  private fun maybeJs(scenario: ActivityScenario<MainActivity>, code: String): String? =
+    try { js(scenario, code) } catch (_: Exception) { null }
+
   private fun until(
     scenario: ActivityScenario<MainActivity>,
     expression: String,
@@ -27,82 +30,140 @@ class CanvasSizeUiTest {
   ) {
     val started = System.currentTimeMillis()
     while (System.currentTimeMillis() - started < timeout) {
-      if (js(scenario, expression) == "true") return
+      if (maybeJs(scenario, expression) == "true") return
       Thread.sleep(50)
     }
-    val state = js(scenario, """
+    val state = maybeJs(scenario, """
       JSON.stringify({
-        boardId: app?.store?.doc?.id || null,
+        boardId: window.app?.store?.doc?.id || null,
         expectedBoardId: window.__androidCanvasTestBoardId || null,
-        page: app?.store?.page || null,
-        objects: app?.store?.objects?.length ?? null,
-        hasNear: app?.store?.has?.('near') ?? false,
-        hasFar: app?.store?.has?.('far') ?? false,
+        page: window.app?.store?.page || null,
+        objects: window.app?.store?.objects?.length ?? null,
+        hasNear: window.app?.store?.has?.('near') ?? false,
+        hasFar: window.app?.store?.has?.('far') ?? false,
         immediate: window.__androidCanvasImmediate ?? null,
-        offPage: app?.offPageObjects?.().length ?? null,
+        offPage: window.app?.offPageObjects?.().length ?? null,
         panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
         buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
           .map(b => ({ label:b.textContent.trim(), primary:b.classList.contains('primary') }))
       })
-    """.trimIndent())
+    """.trimIndent()) ?: "WebView unavailable"
     fail("Android canvas UI did not satisfy: $expression; state=$state")
+  }
+
+  /**
+   * Establish the state owned by this test inside whichever WebView document is
+   * currently alive. The recovery code deliberately lives in Kotlin rather than
+   * on window: if Android reloads/replaces the document during startup, every
+   * window helper disappears with it but instrumentation is still alive and can
+   * simply inject the setup again into the replacement document.
+   */
+  private fun prepareCanvasTest(scenario: ActivityScenario<MainActivity>) {
+    js(scenario, """
+      app.settings.rememberCanvas = false;
+      delete app.settings.canvasDefaults;
+      app.saveSettings();
+
+      // App construction starts restoreLastBoard() without awaiting it. Mark an
+      // explicit owner as soon as this document is ready, then create sentinels
+      // that let Kotlin detect either a late board restore or a whole-document
+      // replacement without relying on any JS helper surviving the event.
+      app.boardOpenedExplicitly = true;
+      app.newBoard(true);
+      window.__androidCanvasTestBoardId = app.store.doc.id;
+      window.__androidCanvasImmediate = false;
+      app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
+        w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+      app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
+        w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+
+      // background() toggles an already-open panel closed, so always close any
+      // panel restored by another instrumentation test before opening Canvas.
+      app.panels.close?.();
+      app.panels.background();
+      const a4 = [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+        .find(b => b.textContent.trim() === 'A4');
+      if (!a4) throw new Error('A4 canvas button was not rendered');
+      a4.click();
+
+      // android-canvas-ui.js acknowledges the tap synchronously, before the
+      // shared async setPageSize() work completes and rerenders the panel.
+      window.__androidCanvasImmediate = a4.classList.contains('primary');
+    """.trimIndent())
+  }
+
+  private fun untilCanvasSetupSurvives(
+    scenario: ActivityScenario<MainActivity>,
+    timeout: Long = 20_000
+  ) {
+    val started = System.currentTimeMillis()
+    while (System.currentTimeMillis() - started < timeout) {
+      val ready = maybeJs(scenario,
+        "!!window.app && window.__gazboardAndroidCanvasUi === true") == "true"
+      if (!ready) {
+        Thread.sleep(50)
+        continue
+      }
+
+      val owns = maybeJs(scenario, """
+        (() => {
+          const a4 = [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+            .find(b => b.textContent.trim() === 'A4');
+          return app.store.doc.id === window.__androidCanvasTestBoardId &&
+            app.store.has('near') && app.store.has('far') &&
+            document.getElementById('panel')?.classList.contains('open') && !!a4;
+        })()
+      """.trimIndent()) == "true"
+
+      if (!owns) {
+        try { prepareCanvasTest(scenario) } catch (_: Exception) {
+          // The document may have changed between the readiness probe and this
+          // injection. The next iteration waits for the replacement to settle.
+        }
+        Thread.sleep(100)
+        continue
+      }
+
+      val complete = maybeJs(scenario, """
+        (() => {
+          const a4 = [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+            .find(b => b.textContent.trim() === 'A4');
+          return window.__androidCanvasImmediate === true && !!app.store.page &&
+            !!a4 && a4.classList.contains('primary') &&
+            [...document.querySelectorAll('#panelBody button')]
+              .some(b => /Fit .* onto the page/.test(b.textContent));
+        })()
+      """.trimIndent()) == "true"
+      if (complete) return
+
+      Thread.sleep(50)
+    }
+
+    val state = maybeJs(scenario, """
+      JSON.stringify({
+        ready: !!window.app,
+        androidUi: window.__gazboardAndroidCanvasUi ?? null,
+        boardId: window.app?.store?.doc?.id || null,
+        expectedBoardId: window.__androidCanvasTestBoardId || null,
+        page: window.app?.store?.page || null,
+        objects: window.app?.store?.objects?.length ?? null,
+        hasNear: window.app?.store?.has?.('near') ?? false,
+        hasFar: window.app?.store?.has?.('far') ?? false,
+        immediate: window.__androidCanvasImmediate ?? null,
+        offPage: window.app?.offPageObjects?.().length ?? null,
+        panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
+        buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+          .map(b => ({ label:b.textContent.trim(), primary:b.classList.contains('primary') }))
+      })
+    """.trimIndent()) ?: "WebView unavailable"
+    fail("Android canvas test never reached a stable owned setup; state=$state")
   }
 
   @Test fun canvasMenuUpdatesFitsAndRemembersOnlyNewBoards() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
       until(scenario, "!!window.app && window.__gazboardAndroidCanvasUi === true")
-
-      js(scenario, """
-        app.settings.rememberCanvas = false;
-        delete app.settings.canvasDefaults;
-        app.saveSettings();
-
-        // App construction starts restoreLastBoard() without awaiting it. The
-        // restore may already have passed its boardOpenedExplicitly checks by
-        // the time instrumentation gets here, so merely setting the flag cannot
-        // cancel a loadBoard() that is already in flight. Keep one id plus two
-        // sentinel objects for the board this test owns. A late startup load can
-        // replace the contents while preserving an id through persistence, so
-        // identity alone is not enough to prove that the test board survived.
-        app.boardOpenedExplicitly = true;
-        window.prepareAndroidCanvasTest = () => {
-          app.newBoard(true);
-          window.__androidCanvasTestBoardId = app.store.doc.id;
-          window.__androidCanvasImmediate = false;
-          app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
-            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
-          app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
-            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
-
-          // ActivityScenario can restore a panel left open by an earlier device
-          // test. background() toggles an already-open panel closed, so reset the
-          // panel state before opening the Canvas panel this test owns.
-          app.panels.close?.();
-          app.panels.background();
-          window.androidCanvasButton = (label) =>
-            [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
-              .find(b => b.textContent.trim() === label);
-          const a4 = window.androidCanvasButton('A4');
-          if (!a4) throw new Error('A4 canvas button was not rendered');
-          a4.click();
-          // The Android acknowledgement is synchronous: this records the state
-          // before setPageSize() finishes and the shared panel rerenders.
-          window.__androidCanvasImmediate = a4.classList.contains('primary');
-        };
-        window.prepareAndroidCanvasTest();
-      """.trimIndent())
-
-      until(scenario,
-        "(() => { " +
-          "const owns = app.store.doc.id === window.__androidCanvasTestBoardId && " +
-            "app.store.has('near') && app.store.has('far') && " +
-            "document.getElementById('panel')?.classList.contains('open') && " +
-            "typeof window.androidCanvasButton === 'function' && window.androidCanvasButton('A4'); " +
-          "if (!owns) { window.prepareAndroidCanvasTest(); return false; } " +
-          "return window.__androidCanvasImmediate === true && !!app.store.page && " +
-            "window.androidCanvasButton('A4').classList.contains('primary') && " +
-            "[...document.querySelectorAll('#panelBody button')].some(b => /Fit .* onto the page/.test(b.textContent)); " +
-        "})()")
+      prepareCanvasTest(scenario)
+      untilCanvasSetupSurvives(scenario)
 
       // The permanent in-menu action matters on Android because the temporary
       // toast may be gone before someone opens the Canvas panel.
@@ -142,14 +203,12 @@ class CanvasSizeUiTest {
       assertEquals("true", js(scenario,
         "!app.store.page && app.store.doc.background.color === '#ffffff'"))
 
-      // Do not leak the preference or test helpers into another instrumentation test.
+      // Do not leak the preference or test markers into another instrumentation test.
       js(scenario, """
         app.settings.rememberCanvas = false;
         delete app.settings.canvasDefaults;
-        delete window.prepareAndroidCanvasTest;
         delete window.__androidCanvasTestBoardId;
         delete window.__androidCanvasImmediate;
-        delete window.androidCanvasButton;
         app.saveSettings();
       """.trimIndent())
     }
