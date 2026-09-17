@@ -127,7 +127,12 @@ val boardAssets by tasks.registering(Sync::class) {
   from(rootProject.file("../src")) {
     exclude("sw.js", "manifest.webmanifest", "**/.DS_Store")
     filesMatching(listOf("**/*.html", "**/*.js", "**/*.css")) {
-      filter { line: String -> line.replace("app://board/", "https://appassets.androidplatform.net/assets/board/") }
+      filter { line: String ->
+        val mapped = line.replace("app://board/", "https://appassets.androidplatform.net/assets/board/")
+        if (mapped.contains("</body>"))
+          mapped.replace("</body>", "<script src=\"android-canvas-ui.js\"></script></body>")
+        else mapped
+      }
     }
   }
   into(layout.buildDirectory.dir("generated/boardAssets/board"))
