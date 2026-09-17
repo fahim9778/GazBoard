@@ -13,7 +13,11 @@
     const row = button?.parentElement;
     if (!button || !row) return;
 
-    const buttons = [...row.querySelectorAll(':scope > .btn')];
+    // Do not use :scope here. Some Android System WebView releases throw
+    // for :scope in Element.querySelectorAll(), which aborts this capture
+    // listener before it can acknowledge the tap.
+    const buttons = Array.from(row.children)
+      .filter((candidate) => candidate.classList.contains('btn'));
     const labels = buttons.map((candidate) => candidate.textContent.trim());
     if (!labels.includes('Infinite') || !labels.includes('A4')) return;
 
