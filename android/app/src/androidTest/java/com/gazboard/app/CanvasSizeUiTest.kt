@@ -32,8 +32,13 @@ class CanvasSizeUiTest {
     }
     val state = js(scenario, """
       JSON.stringify({
+        boardId: app?.store?.doc?.id || null,
+        expectedBoardId: window.__androidCanvasTestBoardId || null,
         page: app?.store?.page || null,
         objects: app?.store?.objects?.length ?? null,
+        hasNear: app?.store?.has?.('near') ?? false,
+        hasFar: app?.store?.has?.('far') ?? false,
+        immediate: window.__androidCanvasImmediate ?? null,
         offPage: app?.offPageObjects?.().length ?? null,
         panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
         buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
@@ -55,15 +60,15 @@ class CanvasSizeUiTest {
         // App construction starts restoreLastBoard() without awaiting it. The
         // restore may already have passed its boardOpenedExplicitly checks by
         // the time instrumentation gets here, so merely setting the flag cannot
-        // cancel a loadBoard() that is already in flight. Keep one id for the
-        // board this test owns and, if that one late startup load replaces it,
-        // prepare the test board again. After boardOpenedExplicitly is true no
-        // NEW startup restore can begin, so this retry is bounded and tests the
-        // UI rather than racing application startup.
+        // cancel a loadBoard() that is already in flight. Keep one id plus two
+        // sentinel objects for the board this test owns. A late startup load can
+        // replace the contents while preserving an id through persistence, so
+        // identity alone is not enough to prove that the test board survived.
         app.boardOpenedExplicitly = true;
         window.prepareAndroidCanvasTest = () => {
           app.newBoard(true);
           window.__androidCanvasTestBoardId = app.store.doc.id;
+          window.__androidCanvasImmediate = false;
           app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
             w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
           app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
@@ -80,15 +85,24 @@ class CanvasSizeUiTest {
           const a4 = window.androidCanvasButton('A4');
           if (!a4) throw new Error('A4 canvas button was not rendered');
           a4.click();
+          // The Android acknowledgement is synchronous: this records the state
+          // before setPageSize() finishes and the shared panel rerenders.
+          window.__androidCanvasImmediate = a4.classList.contains('primary');
         };
         window.prepareAndroidCanvasTest();
       """.trimIndent())
 
-      until(scenario, "app.store.doc.id !== window.__androidCanvasTestBoardId " +
-        "? (window.prepareAndroidCanvasTest(), false) " +
-        ": (!!app.store.page && " +
-        "window.androidCanvasButton('A4').classList.contains('primary') && " +
-        "[...document.querySelectorAll('#panelBody button')].some(b => /Fit .* onto the page/.test(b.textContent)))")
+      until(scenario,
+        "(() => { " +
+          "const owns = app.store.doc.id === window.__androidCanvasTestBoardId && " +
+            "app.store.has('near') && app.store.has('far') && " +
+            "document.getElementById('panel')?.classList.contains('open') && " +
+            "typeof window.androidCanvasButton === 'function' && window.androidCanvasButton('A4'); " +
+          "if (!owns) { window.prepareAndroidCanvasTest(); return false; } " +
+          "return window.__androidCanvasImmediate === true && !!app.store.page && " +
+            "window.androidCanvasButton('A4').classList.contains('primary') && " +
+            "[...document.querySelectorAll('#panelBody button')].some(b => /Fit .* onto the page/.test(b.textContent)); " +
+        "})()")
 
       // The permanent in-menu action matters on Android because the temporary
       // toast may be gone before someone opens the Canvas panel.
@@ -134,6 +148,7 @@ class CanvasSizeUiTest {
         delete app.settings.canvasDefaults;
         delete window.prepareAndroidCanvasTest;
         delete window.__androidCanvasTestBoardId;
+        delete window.__androidCanvasImmediate;
         delete window.androidCanvasButton;
         app.saveSettings();
       """.trimIndent())
