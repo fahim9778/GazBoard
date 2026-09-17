@@ -42,6 +42,7 @@ class CanvasSizeUiTest {
         hasNear: window.app?.store?.has?.('near') ?? false,
         hasFar: window.app?.store?.has?.('far') ?? false,
         immediate: window.__androidCanvasImmediate ?? null,
+        setupError: window.__androidCanvasSetupError ?? null,
         offPage: window.app?.offPageObjects?.().length ?? null,
         panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
         buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
@@ -52,44 +53,69 @@ class CanvasSizeUiTest {
   }
 
   /**
-   * Establish the state owned by this test inside whichever WebView document is
-   * currently alive. The recovery code deliberately lives in Kotlin rather than
-   * on window: if Android reloads/replaces the document during startup, every
-   * window helper disappears with it but instrumentation is still alive and can
-   * simply inject the setup again into the replacement document.
+   * Build an isolated in-memory document for the Canvas UI assertions.
+   *
+   * This deliberately does not call app.newBoard(). newBoard() also updates
+   * native persistence (the resume pointer), which is unrelated to the Canvas
+   * behaviour under test and can overlap the asynchronous startup restore on a
+   * slow emulator. The real newBoard() path is still exercised later, after the
+   * app is settled, to verify remembered Canvas defaults on newly created boards.
    */
   private fun prepareCanvasTest(scenario: ActivityScenario<MainActivity>) {
-    js(scenario, """
-      app.settings.rememberCanvas = false;
-      delete app.settings.canvasDefaults;
-      app.saveSettings();
+    val result = js(scenario, """
+      (() => {
+        try {
+          window.__androidCanvasSetupError = null;
+          app.settings.rememberCanvas = false;
+          delete app.settings.canvasDefaults;
+          app.saveSettings();
 
-      // App construction starts restoreLastBoard() without awaiting it. Mark an
-      // explicit owner as soon as this document is ready, then create sentinels
-      // that let Kotlin detect either a late board restore or a whole-document
-      // replacement without relying on any JS helper surviving the event.
-      app.boardOpenedExplicitly = true;
-      app.newBoard(true);
-      window.__androidCanvasTestBoardId = app.store.doc.id;
-      window.__androidCanvasImmediate = false;
-      app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
-        w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
-      app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
-        w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+          // Prevent a restore that has not yet committed from claiming ownership
+          // after this point. If one was already in flight, the Kotlin loop below
+          // detects the lost sentinels and simply installs this in-memory fixture
+          // again without touching Android persistence.
+          app.boardOpenedExplicitly = true;
+          app.store.load({
+            id:'android-canvas-device-test',
+            name:'Android canvas device test',
+            schema:2,
+            background:{ color:'#ffffff', pattern:'none' },
+            pages:[], objects:[], order:[]
+          });
+          window.__androidCanvasTestBoardId = app.store.doc.id;
+          window.__androidCanvasImmediate = false;
+          app.store.add({ id:'near', type:'shape', kind:'rect', x:0, y:0,
+            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+          app.store.add({ id:'far', type:'shape', kind:'rect', x:4000, y:3000,
+            w:120, h:90, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+          app.syncUI();
+          app.surface.invalidate();
 
-      // background() toggles an already-open panel closed, so always close any
-      // panel restored by another instrumentation test before opening Canvas.
-      app.panels.close?.();
-      app.panels.background();
-      const a4 = [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
-        .find(b => b.textContent.trim() === 'A4');
-      if (!a4) throw new Error('A4 canvas button was not rendered');
-      a4.click();
+          // background() toggles an already-open panel closed, so always close
+          // any panel left by another instrumentation test before opening Canvas.
+          app.panels.close?.();
+          app.panels.background();
+          const a4 = [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
+            .find(b => b.textContent.trim() === 'A4');
+          if (!a4) throw new Error('A4 canvas button was not rendered');
+          a4.click();
 
-      // android-canvas-ui.js acknowledges the tap synchronously, before the
-      // shared async setPageSize() work completes and rerenders the panel.
-      window.__androidCanvasImmediate = a4.classList.contains('primary');
+          // android-canvas-ui.js acknowledges the tap synchronously, before the
+          // shared async setPageSize() work completes and rerenders the panel.
+          window.__androidCanvasImmediate = a4.classList.contains('primary');
+          return true;
+        } catch (error) {
+          window.__androidCanvasSetupError = String(error?.stack || error);
+          return false;
+        }
+      })()
     """.trimIndent())
+    if (result != "true") {
+      throw IllegalStateException(
+        "Canvas fixture setup failed: " +
+          (maybeJs(scenario, "window.__androidCanvasSetupError || 'unknown error'") ?: "WebView unavailable")
+      )
+    }
   }
 
   private fun untilCanvasSetupSurvives(
@@ -99,7 +125,7 @@ class CanvasSizeUiTest {
     val started = System.currentTimeMillis()
     while (System.currentTimeMillis() - started < timeout) {
       val ready = maybeJs(scenario,
-        "!!window.app && window.__gazboardAndroidCanvasUi === true") == "true"
+        "!!window.app && !!window.app.store && window.__gazboardAndroidCanvasUi === true") == "true"
       if (!ready) {
         Thread.sleep(50)
         continue
@@ -117,8 +143,8 @@ class CanvasSizeUiTest {
 
       if (!owns) {
         try { prepareCanvasTest(scenario) } catch (_: Exception) {
-          // The document may have changed between the readiness probe and this
-          // injection. The next iteration waits for the replacement to settle.
+          // Startup can still be changing the board between the readiness probe
+          // and fixture installation. Retry until the document is stable.
         }
         Thread.sleep(100)
         continue
@@ -150,6 +176,7 @@ class CanvasSizeUiTest {
         hasNear: window.app?.store?.has?.('near') ?? false,
         hasFar: window.app?.store?.has?.('far') ?? false,
         immediate: window.__androidCanvasImmediate ?? null,
+        setupError: window.__androidCanvasSetupError ?? null,
         offPage: window.app?.offPageObjects?.().length ?? null,
         panelOpen: document.getElementById('panel')?.classList.contains('open') ?? false,
         buttons: [...document.querySelectorAll('#panelBody .bg-sizes .btn')]
@@ -161,8 +188,7 @@ class CanvasSizeUiTest {
 
   @Test fun canvasMenuUpdatesFitsAndRemembersOnlyNewBoards() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-      until(scenario, "!!window.app && window.__gazboardAndroidCanvasUi === true")
-      prepareCanvasTest(scenario)
+      until(scenario, "!!window.app && !!window.app.store && window.__gazboardAndroidCanvasUi === true")
       untilCanvasSetupSurvives(scenario)
 
       // The permanent in-menu action matters on Android because the temporary
@@ -186,7 +212,9 @@ class CanvasSizeUiTest {
         "app.settings.canvasDefaults?.color === '#2b2b2b' && " +
         "app.settings.canvasDefaults?.pattern === 'dots'")
 
-      // The remembered look belongs to boards created after the choice.
+      // The remembered look belongs to real boards created after the choice.
+      // By here startup restoration is long finished, so this exercises the
+      // production newBoard() path without using it as test-fixture machinery.
       js(scenario, "app.newBoard(true)")
       until(scenario, "!!app.store.page && " +
         "app.store.doc.background.color === '#2b2b2b' && " +
@@ -209,6 +237,7 @@ class CanvasSizeUiTest {
         delete app.settings.canvasDefaults;
         delete window.__androidCanvasTestBoardId;
         delete window.__androidCanvasImmediate;
+        delete window.__androidCanvasSetupError;
         app.saveSettings();
       """.trimIndent())
     }
