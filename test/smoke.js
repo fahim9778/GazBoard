@@ -5354,6 +5354,13 @@ async function run(win, app) {
     const a4 = sizeButtons().find((b) => b.textContent.trim() === 'A4');
     r.foundA4Button = !!a4;
     if (a4) a4.click();
+    /*
+     * Read the row BEFORE awaiting anything. setPageSize() is async, so this is
+     * the moment a phone spends staring at a tap that looks ignored - the page
+     * is changing but nothing on screen says so. The row has to answer here,
+     * not after the work finishes.
+     */
+    r.litTheInstantItWasPressed = litLabels().join(',');
     await new Promise((res) => setTimeout(res, 200));
 
     r.litAfterChoosingA4 = litLabels().join(',');
@@ -5417,6 +5424,10 @@ async function run(win, app) {
     `panel open: ${sizeMenu.panelOpened}, found the A4 button: ${sizeMenu.foundA4Button}; ` +
     `lit while infinite: "${sizeMenu.litWhileInfinite}", after choosing A4: "${sizeMenu.litAfterChoosingA4}" ` +
     `(wanted "A4" — "Infinite" here means the page changed but the panel never redrew), board is a pad: ${sizeMenu.pageIsNowA4}`);
+  check('the press shows at once, without waiting for the page to be rebuilt',
+    sizeMenu.litTheInstantItWasPressed === 'A4',
+    `the instant A4 was pressed the row showed "${sizeMenu.litTheInstantItWasPressed}" (wanted "A4") — ` +
+    `"Infinite" here is the beat a phone spends looking like it ignored the tap`);
   check('and it lights Infinite again when the board goes back to no edges',
     sizeMenu.litAfterBackToInfinite === 'Infinite',
     `lit after going back: "${sizeMenu.litAfterBackToInfinite}", wanted "Infinite"`);

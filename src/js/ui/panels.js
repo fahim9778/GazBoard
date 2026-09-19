@@ -135,13 +135,38 @@ export function createPanels(app) {
       const orientation = current ? current.orientation : (app.settings.pageOrientation || 'portrait');
 
       const sizeRow = h('div', { class: 'bg-sizes' });
+
+      /*
+       * Show the press before doing the work.
+       *
+       * setPageSize() is asynchronous - it reaches for the paper table with a
+       * dynamic import, then relays out every sheet and commits. On a desktop
+       * that is imperceptible. In a phone WebView, where the first import of a
+       * module comes off the app's own asset server, it is a visible beat, and
+       * for that beat the tap looks ignored: the page is changing, but the row
+       * still shows the old size as the chosen one.
+       *
+       * So the row answers immediately and rerender() corrects the whole panel
+       * when the work lands. The optimistic paint can never be wrong for long -
+       * whatever actually happened is what gets drawn a moment later.
+       */
+      const showPressed = (row, pressed) => {
+        for (const other of Array.from(row.children)) {
+          if (other.classList && other.classList.contains('btn')) other.classList.toggle('primary', other === pressed);
+        }
+      };
+
       const sizeBtn = (id, label, active) => {
         const b = h('button', { class: 'btn' + (active ? ' primary' : '') }, label);
         // rerender(), not just refresh(): refresh() repaints the CANVAS, which
         // is why the page changed but this panel went on showing the old size
         // as the chosen one - and went on hiding the "fit it onto the page"
         // offer at the exact moment it became worth offering.
-        b.addEventListener('click', async () => { await app.setPageSize(id, orientation); rerender(); refresh(); });
+        b.addEventListener('click', async () => {
+          showPressed(sizeRow, b);
+          await app.setPageSize(id, orientation);
+          rerender(); refresh();
+        });
         return b;
       };
       sizeRow.appendChild(sizeBtn('infinite', 'Infinite', !page));
@@ -154,6 +179,7 @@ export function createPanels(app) {
       for (const o of [{ id: 'portrait', label: 'Portrait' }, { id: 'landscape', label: 'Landscape' }]) {
         const b = h('button', { class: 'btn' + (orientation === o.id ? ' primary' : ''), disabled: !page }, o.label);
         b.addEventListener('click', async () => {
+          showPressed(orientRow, b);
           const paper = current ? current.paper : (app.settings.pagePaper || 'a4');
           await app.setPageSize(paper, o.id);
           rerender();
