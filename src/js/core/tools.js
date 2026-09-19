@@ -3,7 +3,7 @@
 import { uid, bboxOfPoints, clamp, dist, simplify, unionBox } from './util.js';
 import { boundsOf, worldBounds, withAttached, withGroups} from './store.js';
 import { pick, inBox, inLasso, strokesAlong, normalizeBox } from './hit.js';
-import { handlePositions, HANDLE, HANDLES, drawShape } from './render.js';
+import { handlePositions, HANDLE, HANDLES, drawShape, inkPaint } from './render.js';
 import { translateObject, scaleObject, rotateObjectAround, normalizeRect, anchorFor, CURSORS } from './transform.js';
 import { recognize, fitError, MAX_FIT_ERROR } from './recognize.js';
 import { splitStroke } from './erase.js';
@@ -1837,8 +1837,11 @@ export class Interaction {
   /** The pen/highlighter cursor, tinted with the colour the tool is loaded with. */
   inkCursor(tool) {
     const s = this.app.settings;
+    // The nib shows the ink. On a dark board the default ink is light, so a
+    // black nib is the same small lie the tray and the swatches were telling:
+    // it says one thing and the pen does another.
     return inkCursor(tool === 'highlighter' ? 'highlighter' : 'pen',
-      tool === 'highlighter' ? s.highlighterColor : s.penColor);
+      tool === 'highlighter' ? s.highlighterColor : inkPaint(s.penColor));
   }
 
   updateHover(sp, wp, deviceType = 'mouse') {

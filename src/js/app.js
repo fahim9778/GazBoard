@@ -9,7 +9,7 @@ import { pick } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
 import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP } from './core/pages.js';
 import { isNewer } from './core/version.js';
-import { emojiAspect, forgetEmojiMetrics } from './core/render.js';
+import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
 import { TextEditor } from './ui/textedit.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { createPanels } from './ui/panels.js';
@@ -37,6 +37,10 @@ export const DEFAULT_SETTINGS = {
   // for the rest of time without being asked - is not a favour. The switch sits
   // in the Canvas panel and adopts whatever is on screen the moment it is used.
   rememberCanvas: false,
+  // 'system' follows the machine's own light/dark setting; 'light' and 'dark'
+  // override it. System is the default because a whiteboard that quietly
+  // matches the rest of the desktop is less surprising than one that picks.
+  theme: 'system',
   // Deliberately absent: `pens`, the map of pens the user has recoloured.
   // DEFAULT_SETTINGS is spread shallowly, so an object literal here would be
   // THE SAME object in every settings copy - and the first recolouring would
@@ -147,6 +151,9 @@ class App {
   constructor() {
     this.store = new Store();
     this.settings = this.loadSettings();
+    // Before the Surface exists, so the very first frame is already the right
+    // colour rather than a white flash that corrects itself a moment later.
+    this.applyTheme();
     this.surface = new Surface(document.getElementById('c'), this.store, { lowLatency: !!this.settings.lowLatencyInk });
     this.surface.showGroupOutlines = this.settings.showGroupOutlines !== false;
     this.tool = 'pen';
@@ -219,7 +226,55 @@ class App {
   }
   saveSettings() {
     try { localStorage.setItem('gazboard.settings', JSON.stringify(this.settings)); } catch {}
+    this.applyTheme();
     this.syncUI();
+  }
+
+  /**
+   * Light or dark, and who decides.
+   *
+   * The choice lands in one place - a data-theme attribute on <html> - and the
+   * stylesheet does the rest. Keeping it to one attribute means nothing else in
+   * the app has to know a theme exists; a panel built tomorrow inherits it for
+   * free because it is using the same variables everything else does.
+   *
+   * 'system' sets no attribute at all, leaving the CSS media query to answer.
+   * That is deliberate: the machine can change its mind at sunset, and the page
+   * should follow without anyone reopening the app.
+   */
+  applyTheme() {
+    const want = this.settings.theme || 'system';
+    const root = document.documentElement;
+    if (want === 'light' || want === 'dark') root.dataset.theme = want;
+    else delete root.dataset.theme;
+    this.watchSystemTheme();
+    // the board is painted on a canvas, which no stylesheet can reach
+    setDarkBoard(this.darkMode);
+    this.surface?.repaintAll?.();
+    // the nib is a cursor, not a drawing - it has to be re-tinted by hand
+    this.interaction?.refreshInkCursor?.();
+  }
+
+  /** Follow the machine's own setting while we are set to 'system'. */
+  watchSystemTheme() {
+    if (this._themeWatch) return;
+    if (typeof matchMedia !== 'function') return;
+    this._themeWatch = matchMedia('(prefers-color-scheme: dark)');
+    this._themeWatch.addEventListener('change', () => {
+      if ((this.settings.theme || 'system') !== 'system') return;
+      setDarkBoard(this.darkMode);
+      this.surface?.repaintAll?.();
+      this.interaction?.refreshInkCursor?.();
+      this.syncUI();
+    });
+  }
+
+  /** True when the board should be painted dark, whatever route got us there. */
+  get darkMode() {
+    const want = this.settings.theme || 'system';
+    if (want === 'dark') return true;
+    if (want === 'light') return false;
+    return typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: dark)').matches;
   }
 
   /* ---------------- board lifecycle ---------------- */

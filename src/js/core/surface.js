@@ -1,7 +1,7 @@
 // The canvas view: sizing, the draw loop, culling, overlays.
 
 import { Camera } from './camera.js';
-import { drawBackground, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT } from './render.js';
+import { drawBackground, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect } from './util.js';
@@ -752,7 +752,23 @@ export class Surface {
   }
 
   /** Render the board (or a region) to an offscreen canvas - used by export. */
+  /**
+   * Render to an offscreen canvas - this is what an export is made of.
+   *
+   * Always on white paper with black ink, whatever the screen is set to. A
+   * board is shared, printed and opened on other people's machines; it must not
+   * carry one person's choice of a dark screen into everybody else's copy. The
+   * dark mapping is switched off around this and put back afterwards rather
+   * than assumed to be off, because an export can happen at any moment.
+   */
   renderTo(box, scale = 2, background = true) {
+    const wasDark = isDarkBoard();
+    setDarkBoard(false);
+    try { return this._renderTo(box, scale, background); }
+    finally { setDarkBoard(wasDark); }
+  }
+
+  _renderTo(box, scale = 2, background = true) {
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(box.w * scale));
     c.height = Math.max(1, Math.round(box.h * scale));

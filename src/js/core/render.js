@@ -127,7 +127,7 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
 
   const sheets = pages && pages.length ? pageRects(pages, cam) : [];
   if (!sheets.length) {
-    ctx.fillStyle = bg.color || '#ffffff';
+    ctx.fillStyle = boardPaint(bg.color);
     ctx.fillRect(0, 0, w, h);
     drawPattern(ctx, bg, cam, w, h, null);
     ctx.restore();
@@ -135,7 +135,7 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
   }
 
   // the desk the pad sits on
-  ctx.fillStyle = shadeOf(bg.color || '#ffffff');
+  ctx.fillStyle = shadeOf(boardPaint(bg.color));
   ctx.fillRect(0, 0, w, h);
 
   for (const sheet of sheets) {
@@ -144,7 +144,7 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
     ctx.shadowColor = 'rgba(0,0,0,.20)';
     ctx.shadowBlur = Math.min(26, 10 + cam.z * 8);
     ctx.shadowOffsetY = 2;
-    ctx.fillStyle = bg.color || '#ffffff';
+    ctx.fillStyle = boardPaint(bg.color);
     ctx.fillRect(sheet.x, sheet.y, sheet.w, sheet.h);
     ctx.restore();
 
@@ -161,11 +161,63 @@ export function drawBackground(ctx, bg, cam, w, h, pages = null) {
 }
 
 /* =================================================================== *
+ *  Light and dark
+ *
+ *  A dark board is a screen decision, not a document one. The file on disk is
+ *  unchanged: a stroke drawn in the default black is still #201f1e in the JSON,
+ *  in the PDF, in the PNG and in a board sent to somebody else. Only the
+ *  painting of it on THIS screen, right now, is allowed to differ.
+ *
+ *  That is what makes a dark board safe. The obvious approach - have the black
+ *  pen write white - produces white ink in a white-backgrounded export: a page
+ *  that looks blank. And it would only help work drawn after the switch, while
+ *  every board already written would stay invisible on the dark canvas.
+ *  Mapping at paint time fixes both at once and risks neither.
+ *
+ *  The mapping applies to DEFAULT ink only. A colour somebody chose on purpose
+ *  is theirs and is painted as chosen; red stays red. Default black and the
+ *  default black of text are the two that flip, because on a dark board they
+ *  are the difference between writing and not.
+ * =================================================================== */
+
+const DEFAULT_INK = '#201f1e';
+const DARK_INK = '#f3f2f1';
+const DARK_BOARD = '#1f1e1d';
+
+let darkBoard = false;
+
+/**
+ * Paint the board dark from here on - screen only.
+ *
+ * Export deliberately turns this OFF around its own rendering rather than
+ * trusting the current value, so a PDF is white paper with black ink whatever
+ * the screen happens to be doing while it is generated.
+ */
+export function setDarkBoard(on) { darkBoard = !!on; }
+export function isDarkBoard() { return darkBoard; }
+
+/** The colour to actually paint with, once the theme has had its say. */
+export function inkPaint(color, fallback = DEFAULT_INK) {
+  const c = color || fallback;
+  if (!darkBoard) return c;
+  return String(c).toLowerCase() === DEFAULT_INK ? DARK_INK : c;
+}
+
+/** The board's own colour, once the theme has had its say. */
+export function boardPaint(color) {
+  const c = color || '#ffffff';
+  if (!darkBoard) return c;
+  // A colour somebody chose for this board is kept - they wanted that board
+  // yellow. Only the default white sheet becomes a dark sheet.
+  return String(c).toLowerCase() === '#ffffff' ? DARK_BOARD : c;
+}
+
+/* =================================================================== *
  *  Ink
  * =================================================================== */
 /** Gradient down the stroke for the rainbow and galaxy inks. */
 function inkStyle(ctx, o) {
-  if (!o.effect || o.effect === 'none') return o.color;
+  if (!o.effect || o.effect === 'none') return inkPaint(o.color);
   const pts = o.points;
   const a = pts[0], b = pts[pts.length - 1];
   const dx = b.x - a.x, dy = b.y - a.y;
@@ -408,7 +460,7 @@ export function drawShape(ctx, o, hideText = false) {
   if (o.text && !hideText) {
     const pad = 10;
     drawTextBlock(ctx, o.text, x + pad, y + pad, w - pad * 2, h - pad * 2, {
-      color: o.textColor || '#201f1e', size: o.fontSize || 0, align: 'center', valign: 'middle',
+      color: inkPaint(o.textColor), size: o.fontSize || 0, align: 'center', valign: 'middle',
       family: faceOf(o.font), weight: o.bold ? '600' : '400', italic: o.italic
     });
   }
@@ -427,7 +479,7 @@ export function drawTextBlock(ctx, text, x, y, w, h, opt = {}) {
   if (!size) size = fitFontSize(ctx, text, w, h, family, weight, opt.maxSize || 72, opt.minSize || 10);
   ctx.save();
   ctx.font = `${italic}${weight} ${size}px ${family}`;
-  ctx.fillStyle = opt.color || '#201f1e';
+  ctx.fillStyle = inkPaint(opt.color);
   ctx.textBaseline = 'top';
   const lines = wrapText(ctx, text, w);
   const lh = size * (opt.lineHeight || 1.28);
@@ -517,7 +569,7 @@ export function drawText(ctx, o, hideText = false) {
     ctx.restore();
   }
   drawTextBlock(ctx, hideText ? '' : o.text, o.x, o.y, o.w, o.h, {
-    color: o.color || '#201f1e', size: o.fontSize || 24,
+    color: inkPaint(o.color), size: o.fontSize || 24,
     align: o.align || 'left', valign: o.valign || 'top',
     family: faceOf(o.font),
     weight: o.bold ? '600' : '400', italic: o.italic, underline: o.underline

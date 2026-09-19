@@ -5515,6 +5515,201 @@ async function run(win, app) {
     a.newBoard(true); a.store.clear();
     return r;
   `);
+  /* ---- dark mode: on screen only, never in what leaves the app ---- */
+  /*
+   * The trap here is worth naming. The obvious way to do a dark board - have
+   * the black pen write white - produces white ink on the white paper of an
+   * export: a page that looks blank. It also does nothing for the boards
+   * already written, which stay invisible on the dark canvas. So the file never
+   * changes; only the painting of it does.
+   */
+  const dark = await js(`
+    const a = window.app;
+    const r = {};
+    const { inkPaint, boardPaint, isDarkBoard } = await import('app://board/js/core/render.js');
+    const was = a.settings.theme;
+
+    a.newBoard(true); a.store.clear();
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+
+    const px = (x, y) => {
+      const d = a.surface.ctx.getImageData(Math.round(x * a.surface.dpr), Math.round(y * a.surface.dpr), 1, 1).data;
+      return '#' + [d[0], d[1], d[2]].map((n) => n.toString(16).padStart(2, '0')).join('');
+    };
+
+    // --- light ------------------------------------------------------------
+    a.settings.theme = 'light'; a.saveSettings();
+    a.surface.repaintAll(); a.surface.draw();
+    r.lightRoot = document.documentElement.dataset.theme || '(none)';
+    r.lightBoardPixel = px(a.surface.width / 2, a.surface.height / 2);
+    r.lightInk = inkPaint('#201f1e');
+
+    // --- dark -------------------------------------------------------------
+    a.settings.theme = 'dark'; a.saveSettings();
+    a.surface.repaintAll(); a.surface.draw();
+    r.darkRoot = document.documentElement.dataset.theme || '(none)';
+    r.darkBoardPixel = px(a.surface.width / 2, a.surface.height / 2);
+    r.darkFlagSet = isDarkBoard();
+    r.chromeWentDark = getComputedStyle(document.body).getPropertyValue('--bg').trim();
+
+    // default ink flips, a chosen colour does not
+    r.defaultInkInDark = inkPaint('#201f1e');
+    r.redStaysRed = inkPaint('#e81123');
+    r.chosenBoardKept = boardPaint('#ffd94a');
+    r.whiteBoardWentDark = boardPaint('#ffffff');
+
+    // --- what is stored is untouched ---------------------------------------
+    a.store.add({ id: 'darkink', type: 'stroke', tool: 'pen', color: '#201f1e', width: 6,
+      effect: 'none', opacity: 1, rotation: 0,
+      points: [{ x: 40, y: 40, p: .6 }, { x: 300, y: 120, p: .6 }],
+      bbox: { x: 40, y: 40, w: 260, h: 80 } }, 'x');
+    r.storedColour = a.store.get('darkink').color;
+
+    // --- and neither is an export -------------------------------------------
+    // rendered while the screen is dark, which is the whole point
+    const shot = a.surface.renderTo({ x: 0, y: 0, w: 200, h: 200 }, 1, true);
+    const sd = shot.getContext('2d').getImageData(190, 190, 1, 1).data;
+    r.exportCorner = '#' + [sd[0], sd[1], sd[2]].map((n) => n.toString(16).padStart(2, '0')).join('');
+    r.darkRestoredAfterExport = isDarkBoard();
+
+    // --- the words, which is what somebody actually reads ------------------
+    // Each of these is a different path to text on the board, and each one got
+    // its colour from somewhere different before the theme existed.
+    const { inkPaint: ip } = await import('app://board/js/core/render.js');
+    r.textObjectInk = ip('#201f1e');              // a text box
+    r.shapeLabelInk = ip(undefined);              // words inside a shape
+    r.chosenTextKept = ip('#e81123');             // text somebody made red
+
+    // A sticky note reads its text colour off its OWN colour, not the theme -
+    // a yellow note wants black words in both themes.
+    const { readableText } = await import('app://board/js/core/util.js');
+    r.noteTextOnYellow = readableText('#ffd94a');
+
+    // and the live editor, where you watch the letters appear as you type
+    a.store.add({ id: 'darktext', type: 'text', x: 60, y: 300, w: 300, h: 60, rotation: 0,
+      text: 'typing on a dark board', color: '#201f1e', fontSize: 28, font: 'hand' }, 'x');
+    a.textEditor.begin(a.store.get('darktext'));
+    await new Promise((res) => setTimeout(res, 120));
+    r.editorInk = a.textEditor.el ? getComputedStyle(a.textEditor.el).color : '(no editor)';
+    a.textEditor.cancel();
+    await new Promise((res) => setTimeout(res, 80));
+
+    // --- the toolbar must not promise a colour the pen will not keep --------
+    a.setTool('pen');
+    a.syncUI();
+    const penBtn = document.querySelector('#toolbar .pen[data-pen="black"]');
+    const tb = await import('app://board/js/ui/toolbar.js');
+    tb.openToolPopover(a, penBtn, 'pen');
+    await new Promise((res) => setTimeout(res, 160));
+    r.popoverOpened = !!document.querySelector('.pop .sw');
+    const sws = [...document.querySelectorAll('.pop .sw')];
+    const swBg = (el) => getComputedStyle(el).backgroundColor;
+    const first = sws[0] || null;
+    r.swatchCount = sws.length;
+    r.defaultSwatchPaint = first ? swBg(first) : '(none)';
+    r.defaultSwatchMarked = !!first && first.classList.contains('sw-adaptive');
+    // the fixed white swatch must NOT be marked - that is the whole point of the ring
+    const whiteSw = sws.find((el) => (el.getAttribute('title') || '').startsWith('#ffffff'));
+    r.whiteSwatchMarked = !!whiteSw && whiteSw.classList.contains('sw-adaptive');
+    const dots = [...document.querySelectorAll('.pop .sizes i')];
+    r.thicknessDotPaint = dots.length ? getComputedStyle(dots[0]).backgroundColor : '(none)';
+    // and there is a way to ask for a colour the theme will never touch
+    const custom = document.querySelector('.pop .sw-custom input[type="color"]');
+    r.hasCustomInk = !!custom;
+    r.customBlackStaysBlack = ip('#000000');
+    a.hideMenus();
+
+    // --- the pen in the tray, and the nib under the pointer -----------------
+    // Both are pictures of the ink. A black barrel and a black nib on a dark
+    // board say "this writes black" while the pen writes light.
+    const trayBtn = document.querySelector('#toolbar .pen[data-pen="black"]');
+    r.trayBarrelPaint = trayBtn ? (trayBtn.dataset.paint || '(unpainted)') : '(no button)';
+    a.setTool('pen');
+    a.interaction.setCursor(a.interaction.inkCursor('pen'));
+    const cur = String(a.surface.canvas.style.cursor || '');
+    // the colour is inside the cursor's inline SVG
+    r.nibCarriesLightInk = /f3f2f1/i.test(decodeURIComponent(cur));
+    r.nibCarriesBlackInk = /201f1e/i.test(decodeURIComponent(cur));
+
+    // menus and panels take their colour from the stylesheet, so one sample
+    // stands for all of them
+    const probe = document.createElement('div');
+    probe.className = 'menu-item';
+    document.body.appendChild(probe);
+    r.menuTextColour = getComputedStyle(document.body).getPropertyValue('--text').trim();
+    probe.remove();
+
+    // --- system follows the machine ----------------------------------------
+    a.settings.theme = 'system'; a.saveSettings();
+    r.systemRoot = document.documentElement.dataset.theme || '(none)';
+    r.systemMatchesMachine = a.darkMode === matchMedia('(prefers-color-scheme: dark)').matches;
+
+    a.settings.theme = was === undefined ? 'system' : was; a.saveSettings();
+    a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+  check('choosing a theme sets it on the page, and System leaves it to the machine',
+    dark.lightRoot === 'light' && dark.darkRoot === 'dark' && dark.systemRoot === '(none)'
+    && dark.systemMatchesMachine === true,
+    `light -> "${dark.lightRoot}", dark -> "${dark.darkRoot}", system -> "${dark.systemRoot}" ` +
+    `(System must set nothing, so the CSS media query answers); System agrees with the machine: ${dark.systemMatchesMachine}`);
+  check('the chrome and the board both actually go dark',
+    dark.lightBoardPixel === '#ffffff' && dark.darkBoardPixel !== '#ffffff'
+    && dark.darkFlagSet === true && dark.chromeWentDark !== '',
+    `board pixel light "${dark.lightBoardPixel}" -> dark "${dark.darkBoardPixel}", ` +
+    `chrome --bg is "${dark.chromeWentDark}"`);
+  check('default ink turns light on a dark board, and a colour you chose is left alone',
+    dark.lightInk === '#201f1e' && dark.defaultInkInDark !== '#201f1e' &&
+    dark.redStaysRed === '#e81123',
+    `default ink paints "${dark.lightInk}" in light and "${dark.defaultInkInDark}" in dark; ` +
+    `red paints "${dark.redStaysRed}" (wanted #e81123 — a chosen colour is the user's, not the theme's)`);
+  check('a board given its own colour keeps it, only the plain white sheet goes dark',
+    dark.chosenBoardKept === '#ffd94a' && dark.whiteBoardWentDark !== '#ffffff',
+    `a yellow board paints "${dark.chosenBoardKept}", a white one paints "${dark.whiteBoardWentDark}"`);
+  check('nothing about the file changes — the stroke is still black on disk',
+    dark.storedColour === '#201f1e',
+    `stored colour is "${dark.storedColour}", wanted #201f1e — anything else means dark mode ` +
+    `rewrote somebody's document`);
+  check('every kind of writing on a dark board is light, except where it should not be',
+    dark.textObjectInk === '#f3f2f1' && dark.shapeLabelInk === '#f3f2f1' &&
+    dark.chosenTextKept === '#e81123' && dark.noteTextOnYellow.toLowerCase() !== '#f3f2f1',
+    `a text box paints ${dark.textObjectInk}, words in a shape ${dark.shapeLabelInk}, ` +
+    `text you made red stays ${dark.chosenTextKept}, and a yellow sticky note's words stay ` +
+    `${dark.noteTextOnYellow} — a note carries its own colour, so its text follows the note, not the theme`);
+  check('and the words are visible while you are still typing them',
+    /248|243|f3f2f1/i.test(dark.editorInk),
+    `the editor is writing in ${dark.editorInk} on a dark board — black here means you type ` +
+    `into blackness and only see the words after clicking away`);
+  check('the ink swatch shows the colour the pen will really use',
+    /243|248|f3f2f1/i.test(dark.defaultSwatchPaint) && dark.defaultSwatchMarked === true &&
+    dark.whiteSwatchMarked === false,
+    `the default swatch is painted ${dark.defaultSwatchPaint} and marked as theme-following: ` +
+    `${dark.defaultSwatchMarked} (popover opened: ${dark.popoverOpened}, ${dark.swatchCount} swatches); ` +
+    `the fixed white swatch marked: ${dark.whiteSwatchMarked} ` +
+    `(must be false — the ring is what tells the two apart once both look light)`);
+  check('and so do the thickness dots',
+    /243|248|f3f2f1/i.test(dark.thicknessDotPaint),
+    `the thickness dots are painted ${dark.thicknessDotPaint} — black here is a row of ` +
+    `invisible dots on a dark panel`);
+  check('a colour you pick yourself is yours, even black on a dark board',
+    dark.hasCustomInk === true && dark.customBlackStaysBlack === '#000000',
+    `custom colour picker present: ${dark.hasCustomInk}; a deliberately chosen black paints ` +
+    `"${dark.customBlackStaysBlack}" (wanted #000000 — only the DEFAULT ink follows the theme)`);
+  check('the pen in the tray and the nib on the pointer show the ink too',
+    /f3f2f1/i.test(dark.trayBarrelPaint) && dark.nibCarriesLightInk === true &&
+    dark.nibCarriesBlackInk === false,
+    `the black pen's barrel is painted "${dark.trayBarrelPaint}" and the nib carries ` +
+    `${dark.nibCarriesLightInk ? 'light' : 'BLACK'} ink — a black barrel and a black nib on a ` +
+    `dark board promise black and deliver light`);
+  check('menus, panels and dialogs take the theme from the stylesheet',
+    dark.menuTextColour !== '' && dark.menuTextColour.toLowerCase() !== '#201f1e',
+    `--text resolves to "${dark.menuTextColour}" in dark`);
+  check('and an export made while the screen is dark is still white paper',
+    dark.exportCorner === '#ffffff' && dark.darkRestoredAfterExport === true,
+    `the exported corner came out "${dark.exportCorner}" (wanted #ffffff — a dark export is a ` +
+    `page that prints black, and white ink on it is a page that looks blank); ` +
+    `dark put back afterwards: ${dark.darkRestoredAfterExport}`);
+
   check('out of the box, setting up a canvas changes that board and nothing else',
     canvasMemory.offByDefault === true && canvasMemory.thisBoardTookIt === true &&
     canvasMemory.nextBoardStayedPlain === true,
@@ -8500,6 +8695,26 @@ module.exports.run = async (win, app) => {
       lostFocus = true;
       return false;
     };
+    /*
+     * Reading is refused for exactly the same reason writing is: Chromium will
+     * not hand the clipboard to a window that is not in front. This wrapper was
+     * written for the writes and the one READ in this probe was left bare, so
+     * the probe still collapsed whenever the machine was being used - the same
+     * thirty-one failures, now with readText in the message instead of
+     * writeText. Both directions go through the same door.
+     */
+    const readClipboard = async (fn, fallback = null) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (!(await focused())) return fallback;
+        try { return await fn(); } catch (e) {
+          if (!/not focused|NotAllowed/i.test(String(e && e.message || e))) throw e;
+          await sleep(200);
+        }
+      }
+      lostFocus = true;
+      return fallback;
+    };
+
     const writeClipboard = async (fn) => {
       for (let attempt = 0; attempt < 3; attempt++) {
         if (!(await focused())) return false;
@@ -8545,7 +8760,7 @@ module.exports.run = async (win, app) => {
     a.command('edit.copy');
     r.copiedCount = a.clipboard.length;
     r.newestAfterCopy = a.boardCopyIsNewest();
-    r.clipboardUndisturbed = (await navigator.clipboard.readText()) === EARLIER;
+    r.clipboardUndisturbed = (await readClipboard(() => navigator.clipboard.readText(), '(unreadable)')) === EARLIER;
 
     const before = a.store.objects.length;
     firePaste(dt => dt.setData('text/plain', EARLIER));

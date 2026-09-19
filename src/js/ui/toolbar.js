@@ -8,6 +8,7 @@ import {
   PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS
 } from './palettes.js';
 import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
+import { inkPaint } from '../core/render.js';
 
 const TOOL_ICON = {
   select: 'select', lasso: 'lasso', pen: 'pen', highlighter: 'highlighter',
@@ -81,7 +82,8 @@ export function initToolbar(app) {
     // every pen wears its own number: 1-6 reach them directly, which is the
     // whole point of putting the keys on the buttons
     const now = penById(app.settings, pen.id) || pen;
-    b.innerHTML = penIcon(now.color, now.effect) + '<span class="size-dot"></span>'
+    // the barrel is a preview of the ink, so it follows it onto a dark board
+    b.innerHTML = penIcon(inkPaint(now.color), now.effect) + '<span class="size-dot"></span>'
       + `<span class="kbd">${PENS.indexOf(pen) + 1}</span>`;
     b.dataset.paint = now.color + '|' + now.effect;
     b.addEventListener('click', () => choosePen(app, pen.id, b));
@@ -176,7 +178,7 @@ function initPhoneToolbar(app, bar) {
     if (!pen) continue;
     const now = penById(app.settings, pen.id) || pen;
     const b = btn('pen', `${pen.label} — tap again for thickness`,
-      penIcon(now.color, now.effect) + '<span class="size-dot"></span>');
+      penIcon(inkPaint(now.color), now.effect) + '<span class="size-dot"></span>');
     b.dataset.pen = pen.id;
     b.dataset.paint = now.color + '|' + now.effect;
     if (pen.id === 'black') b.dataset.tool = 'pen';
@@ -192,7 +194,7 @@ function initPhoneToolbar(app, bar) {
       if (PHONE_PENS.includes(pen.id)) continue;
       const now = penById(app.settings, pen.id) || pen;
       const row = h('button', { class: 'menu-item' },
-        h('span', { html: penIcon(now.color, now.effect), style: 'display:flex;width:17px' }),
+        h('span', { html: penIcon(inkPaint(now.color), now.effect), style: 'display:flex;width:17px' }),
         h('span', {}, pen.label));
       row.addEventListener('click', () => { closePopover(); pickPen(pen, null); });
       body.appendChild(row);
@@ -368,7 +370,23 @@ function swatchRow(colors, current, onPick, extra = []) {
   const wrap = h('div', { class: 'swatches' });
   for (const c of colors) {
     const b = h('button', { class: 'sw' + (c === current ? ' active' : ''), title: c, 'aria-label': c });
-    b.style.background = c;
+    /*
+     * A swatch has to show what the pen will actually put on the board. On a
+     * dark board the default ink paints light, so a black circle here is a
+     * promise the pen does not keep.
+     *
+     * Painting it light creates a second problem, though: #ffffff is already in
+     * this palette, and two swatches that look identical but behave differently
+     * - one follows the theme, one is always white - is a worse lie than the
+     * first. So the adaptive one is marked. The ring says "this one changes
+     * with the board"; the plain white one next to it does not.
+     */
+    const shown = inkPaint(c);
+    b.style.background = shown;
+    if (shown !== c) {
+      b.classList.add('sw-adaptive');
+      b.title = c + ' — follows the board: light on dark, black on white and in exports';
+    }
     b.addEventListener('click', () => { markActive(wrap, b); onPick(c); });
     wrap.appendChild(b);
   }
@@ -378,10 +396,12 @@ function swatchRow(colors, current, onPick, extra = []) {
 
 function sizeRow(sizes, current, onPick, color = '#201f1e') {
   const wrap = h('div', { class: 'sizes' });
+  // the dots are a preview of the ink, so they follow it onto a dark board
+  const dotColor = inkPaint(color);
   for (const s of sizes) {
     const b = h('button', { class: 'size' + (s === current ? ' active' : ''), title: s + ' px' });
     const dotSize = Math.max(4, Math.min(22, s));
-    b.innerHTML = `<i style="width:${dotSize}px;height:${dotSize}px;background:${color}"></i>`;
+    b.innerHTML = `<i style="width:${dotSize}px;height:${dotSize}px;background:${dotColor}"></i>`;
     b.addEventListener('click', () => { markActive(wrap, b); onPick(s); });
     wrap.appendChild(b);
   }
@@ -520,15 +540,34 @@ export function openToolPopover(app, anchor, tool) {
         return b;
       })
     );
+    /*
+     * Any colour, including one the theme will never touch.
+     *
+     * The swatch above marked with a ring is the DEFAULT ink, and it follows
+     * the board by design. Somebody who actually wants black on a dark board -
+     * or white on a white one, which is just as much their business - needs a
+     * way to say so, and a colour they picked themselves is exactly that: it is
+     * a deliberate choice, so it is painted as chosen, in both themes and in
+     * every export.
+     */
+    const pickInk = (c) => {
+      s.penColor = c; s.penEffect = 'none';
+      const held = heldPenId(s);
+      if (held) rememberPen(s, held, { color: c, effect: 'none' });
+      app.saveSettings(); app.syncUI();
+    };
+    const customInk = h('label', { class: 'sw sw-custom', title: 'Any colour — used exactly as picked, whatever the theme' });
+    const customInput = h('input', { type: 'color' });
+    customInput.value = s.penColor || '#201f1e';
+    customInput.addEventListener('input', () => { customInk.style.background = customInput.value; pickInk(customInput.value); });
+    customInk.style.background = s.penColor || '#201f1e';
+    customInk.appendChild(customInput);
+
     body = h('div', {},
       h('h4', {}, 'Ink colour'),
       swatchRow(PEN_COLORS, s.penEffect === 'none' ? s.penColor : null, (c) => {
-        s.penColor = c; s.penEffect = 'none';
-        // the pen in the hand keeps this, so coming back to it later finds it
-        const held = heldPenId(s);
-        if (held) rememberPen(s, held, { color: c, effect: 'none' });
-        app.saveSettings(); app.syncUI(); closePopover();
-      }),
+        pickInk(c); closePopover();
+      }, [customInk]),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('label', {}, 'Effect')),
       effects,
       h('h4', { style: 'margin-top:6px' }, 'Thickness'),
@@ -727,11 +766,13 @@ export function syncToolbar(app) {
     b.classList.toggle('active', app.tool === 'pen' && held === pen.id);
     // a recoloured pen has to LOOK recoloured, or the tray still shows the
     // colour it shipped with while writing in the one you chose
-    const paint = pen.color + '|' + pen.effect;
+    // the painted colour, not the stored one: switching theme changes what the
+    // barrel should look like without changing the pen at all
+    const paint = inkPaint(pen.color) + '|' + pen.effect;
     if (b.dataset.paint !== paint) {
       const kbd = b.querySelector('.kbd');
       const dot = b.querySelector('.size-dot');
-      b.innerHTML = penIcon(pen.color, pen.effect);
+      b.innerHTML = penIcon(inkPaint(pen.color), pen.effect);
       if (dot) b.appendChild(dot);
       if (kbd) b.appendChild(kbd);
       b.dataset.paint = paint;

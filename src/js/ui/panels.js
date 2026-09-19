@@ -1036,6 +1036,16 @@ export function createPanels(app) {
 
       return h('div', {},
         h('div', { class: 'section' },
+          h('h5', {}, 'Appearance'),
+          row('Theme',
+            mkChoice([['system', 'System'], ['light', 'Light'], ['dark', 'Dark']],
+              () => s.theme || 'system',
+              (v) => { s.theme = v; app.saveSettings(); rerender(); }),
+            'System follows whatever your computer or phone is set to, and changes with it. '
+            + 'Light and Dark override that. Exports and printing are always on white paper, '
+            + 'whichever you pick, so a board you share looks the same to everyone.'),
+        ),
+        h('div', { class: 'section' },
           h('h5', {}, 'Inking'),
           row('Straighten shapes I draw', mkToggle(() => s.inkToShape, (v) => (s.inkToShape = v)),
             'Off by default: ink is kept exactly as you drew it. Switch on and a hand-drawn circle, box or arrow snaps to a clean shape when you lift the pen — one undo returns your ink.'),

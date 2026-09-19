@@ -26,6 +26,66 @@
   --r: 8px;
   --topbar-h: 48px;
   color-scheme: light;
+  /* The board itself is painted on a canvas, which no stylesheet can reach.
+     It is declared here anyway so both themes keep their colours in one place,
+     and the renderer reads it from here rather than carrying its own copy. */
+  --board: #ffffff;
+  --board-ink: #201f1e;
+}
+
+/*
+ * Dark.
+ *
+ * Every value below is a replacement for one above - no new names, no rules
+ * that only exist in the dark. That is what keeps the two themes from drifting:
+ * a panel built next month inherits dark for free because it is already using
+ * these variables, and there is no second stylesheet to remember to update.
+ *
+ * Written once and applied twice: once for someone who chose dark by hand, and
+ * once for someone whose machine is dark and who has not chosen either way. The
+ * media query is guarded against [data-theme=light] so choosing light by hand
+ * still wins over a dark desktop.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1a19;
+    --surface: #252423;
+    --surface-2: #2d2c2b;
+    --stroke: #3b3a39;
+    --stroke-2: #484644;
+    --text: #f3f2f1;
+    --text-2: #a19f9d;
+    --accent: #a6a8e0;
+    --accent-2: #4aa3e8;
+    --accent-soft: #33324a;
+    --danger: #f1707b;
+    --shadow-1: 0 1.6px 3.6px rgba(0,0,0,.34), 0 .3px .9px rgba(0,0,0,.28);
+    --shadow-2: 0 6.4px 14.4px rgba(0,0,0,.44), 0 1.2px 3.6px rgba(0,0,0,.32);
+    --shadow-3: 0 12.8px 28.8px rgba(0,0,0,.55), 0 2.4px 7.2px rgba(0,0,0,.36);
+    --board: #1f1e1d;
+    --board-ink: #f3f2f1;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1b1a19;
+  --surface: #252423;
+  --surface-2: #2d2c2b;
+  --stroke: #3b3a39;
+  --stroke-2: #484644;
+  --text: #f3f2f1;
+  --text-2: #a19f9d;
+  --accent: #a6a8e0;
+  --accent-2: #4aa3e8;
+  --accent-soft: #33324a;
+  --danger: #f1707b;
+  --shadow-1: 0 1.6px 3.6px rgba(0,0,0,.34), 0 .3px .9px rgba(0,0,0,.28);
+  --shadow-2: 0 6.4px 14.4px rgba(0,0,0,.44), 0 1.2px 3.6px rgba(0,0,0,.32);
+  --shadow-3: 0 12.8px 28.8px rgba(0,0,0,.55), 0 2.4px 7.2px rgba(0,0,0,.36);
+  --board: #1f1e1d;
+  --board-ink: #f3f2f1;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -82,7 +142,7 @@ input, textarea { font: inherit; }
   flex-shrink: 1; text-overflow: ellipsis;
 }
 #boardTitle:hover { border-color: var(--stroke); }
-#boardTitle:focus { outline: none; border-color: var(--accent-2); background: #fff; }
+#boardTitle:focus { outline: none; border-color: var(--accent-2); background: var(--surface); }
 .spacer { flex: 1; min-width: 6px; }
 .badge { font-size: 11px; color: var(--text-2); background: var(--surface-2); border: 1px solid var(--stroke); padding: 3px 8px; border-radius: 20px; flex-shrink: 0; }
 
@@ -171,6 +231,23 @@ input, textarea { font: inherit; }
 .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; box-shadow: inset 0 0 0 1px rgba(0,0,0,.12); }
 .sw:hover { transform: scale(1.08); }
 .sw.active { border-color: var(--accent-2); box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 1px #fff; }
+/*
+ * The swatch whose colour follows the board.
+ *
+ * It paints light on a dark board and black on a white one, which makes it
+ * look like the plain white swatch beside it in dark mode. The ring is the
+ * difference: white is white everywhere, this one changes.
+ */
+.sw.sw-adaptive { box-shadow: inset 0 0 0 2px var(--surface), inset 0 0 0 3.5px var(--text-2); }
+
+/* the custom picker, dressed as one more swatch; the input itself is the
+   whole hit area so a thumb finds it as easily as any other colour */
+.sw.sw-custom { position: relative; overflow: hidden; }
+.sw.sw-custom input[type="color"] {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; border: 0; padding: 0; cursor: pointer;
+}
+
 .sw.rainbow { background: conic-gradient(#f44,#fa0,#fd0,#4c4,#2af,#66f,#c4f,#f44); }
 .sw.galaxy { background: radial-gradient(circle at 30% 30%, #b18cff, #4a2f8f 55%, #1b1140); }
 
@@ -430,7 +507,7 @@ input, textarea { font: inherit; }
 .btn:hover { background: var(--surface-2); }
 .btn.primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 .btn.primary:hover { background: #106ebe; }
-.btn.danger { color: var(--danger); border-color: #f1bcbd; }
+.btn.danger { color: var(--danger); border-color: var(--stroke-2); }
 
 kbd {
   font: 11.5px/1.6 'Segoe UI', system-ui, sans-serif; background: var(--surface-2);
@@ -785,7 +862,7 @@ kbd {
     max-width: min(86vw, 340px);
     margin: 0;
     padding: 6px 14px 6px 8px;
-    background: var(--panel, #fff);
+    background: var(--surface);
     border-color: rgba(217, 119, 6, .55);
     box-shadow: 0 3px 14px rgba(0, 0, 0, .16);
     font-size: 13px;
@@ -793,7 +870,7 @@ kbd {
   #rxBadge .rx-label { display: block; }
   /* It announces itself by arriving, not by flashing. */
   #rxBadge.alert {
-    background: var(--panel, #fff);
+    background: var(--surface);
     border-color: var(--rx-amber);
     color: var(--rx-amber);
     animation: rx-slide .28s ease-out 1;
@@ -802,7 +879,7 @@ kbd {
     background: conic-gradient(var(--rx-amber) 0deg, rgba(217, 119, 6, .22) 0deg);
   }
   #rxBadge.done {
-    background: var(--panel, #fff);
+    background: var(--surface);
     border-color: var(--rx-green);
   }
 }

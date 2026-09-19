@@ -2,7 +2,7 @@
 
 import { boundsOf } from '../core/store.js';
 import { fitFontSize, readableText, wrapText, clamp } from '../core/util.js';
-import { faceOf, noteTypeRange } from '../core/render.js';
+import { faceOf, noteTypeRange, inkPaint } from '../core/render.js';
 
 export class TextEditor {
   constructor(app) {
@@ -160,8 +160,15 @@ export class TextEditor {
     s.fontWeight = o.bold ? '600' : '400';
     s.fontStyle = o.italic ? 'italic' : 'normal';
     s.textAlign = this.cell ? 'center' : (o.align || (o.type === 'text' ? 'left' : 'center'));
+    /*
+     * A note carries its own colour, so its text is read off that and is right
+     * in either theme. Everything else is ink on the board, which means on a
+     * dark board it has to follow the same rule the canvas does - otherwise you
+     * type in black onto black and watch nothing appear, then see the words the
+     * moment you click away and the canvas takes over.
+     */
     const ink = o.type === 'note' ? (o.textColor || readableText(o.color || '#ffd94a'))
-      : (o.color || o.textColor || '#201f1e');
+      : inkPaint(o.color || o.textColor);
     s.color = ink;
     s.caretColor = ink;                 // a black caret is invisible on a dark note
     /*
