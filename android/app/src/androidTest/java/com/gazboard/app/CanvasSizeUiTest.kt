@@ -100,8 +100,10 @@ class CanvasSizeUiTest {
           if (!a4) throw new Error('A4 canvas button was not rendered');
           a4.click();
 
-          // android-canvas-ui.js acknowledges the tap synchronously, before the
-          // shared async setPageSize() work completes and rerenders the panel.
+          // The panel paints the press synchronously, before the shared async
+          // setPageSize() work finishes and rerenders. That feedback lives in
+          // panels.js and so is the same on every platform - there is no
+          // Android-only script to wait for.
           window.__androidCanvasImmediate = a4.classList.contains('primary');
           return true;
         } catch (error) {
@@ -125,7 +127,7 @@ class CanvasSizeUiTest {
     val started = System.currentTimeMillis()
     while (System.currentTimeMillis() - started < timeout) {
       val ready = maybeJs(scenario,
-        "!!window.app && !!window.app.store && window.__gazboardAndroidCanvasUi === true") == "true"
+        "!!window.app && !!window.app.store && !!window.app.panels") == "true"
       if (!ready) {
         Thread.sleep(50)
         continue
@@ -168,7 +170,7 @@ class CanvasSizeUiTest {
     val state = maybeJs(scenario, """
       JSON.stringify({
         ready: !!window.app,
-        androidUi: window.__gazboardAndroidCanvasUi ?? null,
+        panelsReady: !!window.app?.panels,
         boardId: window.app?.store?.doc?.id || null,
         expectedBoardId: window.__androidCanvasTestBoardId || null,
         page: window.app?.store?.page || null,
@@ -188,7 +190,7 @@ class CanvasSizeUiTest {
 
   @Test fun canvasMenuUpdatesFitsAndRemembersOnlyNewBoards() {
     ActivityScenario.launch(MainActivity::class.java).use { scenario ->
-      until(scenario, "!!window.app && !!window.app.store && window.__gazboardAndroidCanvasUi === true")
+      until(scenario, "!!window.app && !!window.app.store && !!window.app.panels")
       untilCanvasSetupSurvives(scenario)
 
       // The permanent in-menu action matters on Android because the temporary
