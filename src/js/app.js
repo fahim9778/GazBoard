@@ -253,6 +253,9 @@ class App {
     this.surface?.repaintAll?.();
     // the nib is a cursor, not a drawing - it has to be re-tinted by hand
     this.interaction?.refreshInkCursor?.();
+    // and on a phone the status bar and navigation bar belong to Android, not
+    // to this stylesheet - a dark board in a light frame is only half a theme
+    try { window.board?.setTheme?.(want); } catch {}
   }
 
   /** Follow the machine's own setting while we are set to 'system'. */

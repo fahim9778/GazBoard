@@ -21,7 +21,9 @@ import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewFeature
 import com.gazboard.sync.*
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
@@ -113,6 +115,23 @@ class MainActivity : ComponentActivity() {
       settings.displayZoomControls = false
       settings.textZoom = 100
       settings.useWideViewPort = true
+      /*
+       * Do not let the WebView invert the page for us.
+       *
+       * Algorithmic darkening is Android's own guess at a dark theme: it
+       * flips colours it has never seen and knows nothing about. GazBoard has
+       * a real dark mode that decides, deliberately, which ink follows the
+       * board and which colours are the user's own - all of which an automatic
+       * inversion would undo, turning chosen reds into cyans and yellow sticky
+       * notes into blue ones.
+       *
+       * Switching it OFF does not stop the page going dark. The WebView still
+       * reports prefers-color-scheme from this activity's theme, so with
+       * values-night in place the stylesheet does the work itself, properly.
+       */
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
+      }
       isFocusableInTouchMode = true
       overScrollMode = android.view.View.OVER_SCROLL_NEVER
       WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
@@ -206,6 +225,38 @@ class MainActivity : ComponentActivity() {
     return try { result.get(5, TimeUnit.MINUTES) }
       finally { app.main.post { if (picker === result) picker = null } }
   }
+  /**
+   * Paint Android's own chrome to match the theme GazBoard is showing.
+   *
+   * values-night already handles the case where the phone decides. This is the
+   * other case: GazBoard's setting can OVERRIDE the phone - somebody on a light
+   * phone who wants a dark board, or the reverse - and when it does, the status
+   * bar, the navigation bar and the window behind the WebView have to come
+   * along, or a dark board sits in a light frame.
+   *
+   * "system" hands the decision back to the phone by reading the configuration
+   * we were given, which is the same thing values-night is keyed on.
+   */
+  fun applyChromeTheme(want: String): Boolean {
+    val dark = when (want) {
+      "dark" -> true
+      "light" -> false
+      else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+        Configuration.UI_MODE_NIGHT_YES
+    }
+    app.main.post {
+      val bar = if (dark) 0xFF1B1A19.toInt() else 0xFFF5F5F8.toInt()
+      window.statusBarColor = bar
+      window.navigationBarColor = bar
+      window.decorView.setBackgroundColor(bar)
+      val bars = WindowCompat.getInsetsController(window, window.decorView)
+      // light BARS means dark icons on them - the opposite of the theme name
+      bars.isAppearanceLightStatusBars = !dark
+      bars.isAppearanceLightNavigationBars = !dark
+    }
+    return true
+  }
+
   fun shareFile(handle: String): Boolean {
     val grant = app.files.grant(handle)
     onMain {

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The dark half of the app's own theme.
+
+  Android picks this whole file, instead of values/themes.xml, whenever the
+  phone is in dark mode - no code runs, nothing is asked. That matters for two
+  separate reasons.
+
+  The visible one: the status bar, the navigation bar and the window behind the
+  WebView are painted by Android, not by our stylesheet. Without this file a
+  dark board sits in a light frame with a white flash on launch.
+
+  The invisible one, which is the actual bug: a WebView answers
+  prefers-color-scheme from ITS HOST ACTIVITY'S theme, not from the phone's
+  setting. With the activity pinned to Theme.Material.Light the page was always
+  told "light", so GazBoard's System option could never go dark on Android
+  however dark the phone was.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
+  <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+    <item name="android:fontFamily">sans</item>
+    <item name="android:windowLightStatusBar">false</item>
+    <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
+    <item name="android:statusBarColor">#1B1A19</item>
+    <item name="android:navigationBarColor">#1B1A19</item>
+    <item name="android:windowActionModeOverlay">true</item>
+    <item name="android:colorAccent">#A6A8E0</item>
+    <item name="android:windowBackground">#1B1A19</item>
+  </style>
+</resources>

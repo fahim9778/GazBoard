@@ -114,6 +114,9 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     // handle still counts towards the signature so copying one is not mistaken
     // for copying nothing.
     clipboardRead: () => guarded('clipboard:read'),
+    // The page paints itself; the status bar and the navigation bar are
+    // Android's and have to be told which theme is on screen.
+    setTheme: (want) => call('theme:set', want),
     background: () => call('app:background'),
     boards: {
       list: () => call('boards:list'),

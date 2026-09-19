@@ -85,6 +85,10 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "shell:openExternal" -> activity.openReleases(str())
       "updates:check" -> activity.checkForUpdate()
       "clipboard:read" -> activity.readClipboard()
+      // GazBoard's own theme can override the phone's. The page paints itself,
+      // but the status bar, the navigation bar and the window behind the
+      // WebView are Android's - they have to be told.
+      "theme:set" -> activity.applyChromeTheme(str())
       "boards:list" -> s.list()
       "boards:load" -> s.load(str())
       "boards:save" -> s.save(obj())

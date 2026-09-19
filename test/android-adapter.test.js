@@ -118,3 +118,24 @@ test('Flush acknowledgement follows the completed persistence callback', async (
   await native.onmessage({ data: JSON.stringify({ event: 'flush', result: { ticket: 'flush1' } }) });
   assert.deepEqual(order, ['saved', 'app:flushed']);
 });
+
+/*
+ * The page paints itself dark, but the status bar, the navigation bar and the
+ * window behind the WebView belong to Android. Without this the phone shows a
+ * dark board in a light frame - and on a phone the frame is a third of what
+ * you can see.
+ */
+test('Choosing a theme tells Android, so the bars match the board', async () => {
+  const seen = [];
+  const { adapter, calls } = await setup(async (request) => {
+    if (request.method !== 'theme:set') throw new Error('unexpected ' + request.method);
+    seen.push(request.args);
+    return true;
+  });
+  for (const want of ['dark', 'light', 'system']) await adapter.setTheme(want);
+  assert.equal(calls.filter((c) => c.method === 'theme:set').length, 3,
+    `told Android three times; calls were ${JSON.stringify(calls.map((c) => c.method))}`);
+  assert.deepEqual(seen, ['dark', 'light', 'system'],
+    `Android was told ${JSON.stringify(seen)} — it must hear the choice itself, including ` +
+    `"system", which is the one case where the phone decides rather than GazBoard`);
+});
