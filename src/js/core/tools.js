@@ -9,6 +9,7 @@ import { recognize, fitError, MAX_FIT_ERROR } from './recognize.js';
 import { splitStroke } from './erase.js';
 import { inkCursor, inkGlyphUrl, inkGlyphHotspot } from './cursors.js';
 import { pageRects, pageIndexAt, pageIndexForBox, nearestPageIndex, offsetIntoRect, inRect } from './pages.js';
+import { Surface } from './surface.js';
 
 const TAP_SLOP = 4;
 /*
@@ -681,18 +682,53 @@ export class Interaction {
         // the pointer actually went between frames, same as ink does.
         const trail = this.surface.laser;
         const now = performance.now();
-        const push = (q) => {
-          const last = trail[trail.length - 1];
-          if (last && dist(last, q) * this.surface.cam.z <= 1.5) return;
-          trail.push({ x: q.x, y: q.y, t: now });
-        };
         const evs = e && e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+
+        /*
+         * A browser hands over several high-rate pen samples in one
+         * pointermove. Stamping the whole packet with the time it was
+         * delivered made the tail lose all of them on the same frame, which
+         * looked like square chunks vanishing off the end rather than a trail
+         * fading. Each sample needs a time of its own.
+         *
+         * Every coalesced sample already carries the moment it was actually
+         * taken, on the same clock the fade is measured against, so that is
+         * what is kept. Sharing the gap since the previous point out evenly
+         * would also stagger them, but it is only right while the pointer is
+         * moving: after a pause, four samples taken within a frame of each
+         * other would be dated across the whole pause, and a flick would be
+         * born half faded and die almost at once. Real times cannot do that.
+         */
+        const samples = [];
         if (evs && evs.length) {
           for (const ce of evs) {
             const csp = this.surface.screenPoint(ce);
-            push(this.surface.cam.toWorld(csp.x, csp.y));
+            const cwp = this.surface.cam.toWorld(csp.x, csp.y);
+            samples.push({ x: cwp.x, y: cwp.y, t: ce.timeStamp });
           }
-        } else push(wp);
+        }
+        // Some engines leave the pointermove itself out of the packet. Offering
+        // the current position last means a quick curve reaches the nib instead
+        // of visibly cutting the corner.
+        samples.push({ x: wp.x, y: wp.y, t: now });
+
+        /*
+         * A time is used only if it is on this clock and in the recent past. A
+         * synthetic event, or an engine that reports zero, falls back to now
+         * rather than laying down a point that is already dead. Each point is
+         * also held to the one before it: pruning walks the trail from the
+         * front and stops at the first point still alive, so a time that went
+         * backwards would strand everything behind it.
+         */
+        let floor = trail.length ? trail[trail.length - 1].t : now - Surface.LASER_LIFE;
+        for (const q of samples) {
+          const last = trail[trail.length - 1];
+          if (last && dist(last, q) * this.surface.cam.z <= 0.75) continue;
+          const fresh = typeof q.t === 'number' && q.t <= now && now - q.t < Surface.LASER_LIFE;
+          const t = Math.max(floor, fresh ? q.t : now);
+          trail.push({ x: q.x, y: q.y, t });
+          floor = t;
+        }
         break;
       }
       case 'marquee': a.cur = wp; break;

@@ -6973,6 +6973,96 @@ async function run(win, app) {
   check('exports do not contain the laser', laser.exportIgnoresLaser === true);
   check('switching tools clears the laser', laser.clearedOnToolChange === true);
 
+  /* ---- the tail retires one point at a time, and a flick is born bright ---- */
+  const laserTimes = await js(`
+    const a = window.app;
+    const r = {};
+    a.newBoard(true);
+    const sf = a.surface, inter = a.interaction, cam = sf.cam;
+    a.setTool('laser');
+    const box = sf.canvas.getBoundingClientRect();
+    const scr = (w) => ({ x: w.x * cam.z + cam.x, y: w.y * cam.z + cam.y });
+    /*
+     * A pointermove the way a high-rate pen really delivers one: several
+     * samples handed over together, each carrying the moment it was taken.
+     */
+    const packet = (pts) => ({
+      getCoalescedEvents: () => pts.map((p) => {
+        const s = scr(p);
+        return { clientX: box.left + s.x, clientY: box.top + s.y, timeStamp: p.t };
+      })
+    });
+
+    inter.onDown({ pointerId: 1, pointerType: 'pen', button: 0, buttons: 1,
+                   clientX: box.left, clientY: box.top, isPrimary: true,
+                   preventDefault(){}, getCoalescedEvents: null });
+    inter.action = { type: 'laser' };
+
+    /*
+     * Four samples taken 4ms apart, all delivered on one frame. Each must keep
+     * a time of its own: one shared time means the whole packet drops off the
+     * end of the trail on a single frame, which is what made the tail look
+     * like it was losing square chunks rather than fading.
+     */
+    sf.laser = [];
+    const t0 = performance.now();
+    const four = [{ x: 100, y: 100, t: t0 - 12 }, { x: 140, y: 110, t: t0 - 8 },
+                  { x: 180, y: 120, t: t0 - 4 }, { x: 220, y: 130, t: t0 }];
+    const head = scr({ x: 220, y: 130 });
+    inter.applyMotion(head, {}, packet(four));
+    r.kept = sf.laser.length;
+    r.distinctTimes = new Set(sf.laser.map((p) => p.t)).size;
+    r.timesGoForward = sf.laser.every((p, i, all) => i === 0 || p.t >= all[i - 1].t);
+    r.spread = Math.round(sf.laser[sf.laser.length - 1].t - sf.laser[0].t);
+
+    /*
+     * Now the pointer rests, and then flicks. The samples in that flick were
+     * all taken just now, so every one of them has to arrive bright. Dating
+     * them across the pause instead would have the oldest arrive most of the
+     * way through its life and die almost immediately.
+     */
+    sf.laser = [{ x: 0, y: 0, t: performance.now() - 400 }];
+    const t1 = performance.now();
+    const flick = [{ x: 300, y: 300, t: t1 - 12 }, { x: 340, y: 310, t: t1 - 8 },
+                   { x: 380, y: 320, t: t1 - 4 }, { x: 420, y: 330, t: t1 }];
+    inter.applyMotion(scr({ x: 420, y: 330 }), {}, packet(flick));
+    const LIFE = sf.constructor.LASER_LIFE;
+    const fresh = sf.laser.slice(1);
+    const nowish = performance.now();
+    r.flickPoints = fresh.length;
+    r.oldestFlickAge = Math.round(nowish - Math.min(...fresh.map((p) => p.t)));
+    r.dimmestFlick = Math.round(100 * Math.min(...fresh.map((p) => 1 - (nowish - p.t) / LIFE)));
+    r.flickTimesGoForward = sf.laser.every((p, i, all) => i === 0 || p.t >= all[i - 1].t);
+
+    /*
+     * An engine that reports no usable time at all must not lay down a point
+     * that is already dead - it falls back to the moment it arrived.
+     */
+    sf.laser = [];
+    inter.applyMotion(scr({ x: 500, y: 500 }), {}, packet([{ x: 500, y: 500, t: 0 }]));
+    r.junkStampAge = Math.round(performance.now() - sf.laser[0].t);
+
+    inter.action = null;
+    sf.laser = [];
+    a.setTool('select'); a.newBoard(true);
+    return r;
+  `);
+  check('one packet of pen samples keeps a separate time for each point',
+    laserTimes.kept >= 4 && laserTimes.distinctTimes === laserTimes.kept,
+    `${laserTimes.kept} point(s) kept carrying ${laserTimes.distinctTimes} different time(s), ` +
+    `spread over ${laserTimes.spread}ms — one shared time means the whole packet leaves the trail on one frame`);
+  check('and those times only ever go forwards',
+    laserTimes.timesGoForward === true,
+    `pruning walks the trail from the front, so a time that went backwards would strand every point behind it`);
+  check('a flick after the pointer has rested arrives bright, not half faded',
+    laserTimes.dimmestFlick >= 90 && laserTimes.flickTimesGoForward === true,
+    `${laserTimes.flickPoints} new point(s), the oldest ${laserTimes.oldestFlickAge}ms old and drawn at ` +
+    `${laserTimes.dimmestFlick}% brightness (wanted 90% or more) — dating a fresh packet across the pause ` +
+    `before it is what makes a flick appear already fading`);
+  check('a sample with no usable time of its own still starts its full life',
+    laserTimes.junkStampAge < 50,
+    `laid down ${laserTimes.junkStampAge}ms old — an unusable timestamp must fall back to now, not to zero`);
+
   /* ---- writing on imported pages stays cheap ---- *
    * Every pointer move used to repaint the whole board, page bitmaps and all.
    * With a document imported across many sheets that is a lot of redrawing for
