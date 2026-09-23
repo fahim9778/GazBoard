@@ -681,18 +681,36 @@ export class Interaction {
         // the pointer actually went between frames, same as ink does.
         const trail = this.surface.laser;
         const now = performance.now();
-        const push = (q) => {
-          const last = trail[trail.length - 1];
-          if (last && dist(last, q) * this.surface.cam.z <= 1.5) return;
-          trail.push({ x: q.x, y: q.y, t: now });
-        };
         const evs = e && e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+
+        // A browser delivers several high-rate pen samples together in one
+        // pointermove. Giving the whole packet the same timestamp made the
+        // tail lose that whole packet on one animation frame, which looked
+        // like square/pixelated chunks disappearing. Spread the samples over
+        // the real interval since the previous point instead, so the tail
+        // retires continuously.
+        const samples = [];
         if (evs && evs.length) {
           for (const ce of evs) {
             const csp = this.surface.screenPoint(ce);
-            push(this.surface.cam.toWorld(csp.x, csp.y));
+            samples.push(this.surface.cam.toWorld(csp.x, csp.y));
           }
-        } else push(wp);
+        }
+        // Some engines do not include the pointermove itself in the coalesced
+        // packet. Always offer the actual current position as the final sample
+        // so a quick curve reaches the nib instead of visibly cutting corners.
+        samples.push(wp);
+
+        const previousTime = trail.length ? trail[trail.length - 1].t : now;
+        const span = Math.max(0, now - previousTime);
+        const count = samples.length;
+        for (let i = 0; i < count; i++) {
+          const q = samples[i];
+          const last = trail[trail.length - 1];
+          if (last && dist(last, q) * this.surface.cam.z <= 0.75) continue;
+          const t = count > 1 ? previousTime + span * ((i + 1) / count) : now;
+          trail.push({ x: q.x, y: q.y, t });
+        }
         break;
       }
       case 'marquee': a.cur = wp; break;
