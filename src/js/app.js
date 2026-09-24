@@ -2669,7 +2669,10 @@ class App {
         `Contact &nbsp;<a href="mailto:fahim9778@gmail.com" target="_blank" style="color:var(--accent)">fahim9778@gmail.com</a><br>` +
         `Co-created with <span style="color:#e81123">&hearts;</span> by Claude Cowork &amp; GPT Sol, Astra` }));
     const platformDetails = i.electron
-      ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b><br>Electron ${i.electron} · Chromium ${i.chrome}`
+      ? `Office import: <b>${i.libreoffice ? 'LibreOffice detected (high fidelity)' : 'built-in converter (install LibreOffice for higher fidelity)'}</b>` +
+        // Where it was found, so "it says not installed" can be answered without guessing.
+        (i.sofficePath ? `<br><code style="font-size:11px;opacity:.75">${i.sofficePath}</code>` : '') +
+        `<br>Electron ${i.electron} · Chromium ${i.chrome}`
       : i.isAndroid
         ? 'Runtime: <b>Android</b> · WebView editor<br>Persistence: <b>Private board and image files on this device</b>'
         : `Runtime: <b>Web / Progressive Web App</b> · ${i.pwa ? 'Standalone App' : 'Browser'}<br>Persistence: <b>IndexedDB Persistent Storage</b>`;

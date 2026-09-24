@@ -1020,6 +1020,7 @@ export function createPanels(app) {
         const platformLines = i.electron
           ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
             `Office conversion: <b>${i.libreoffice ? 'LibreOffice detected' : 'built-in converter'}</b><br>` +
+            (i.sofficePath ? `<code style="font-size:11px">${i.sofficePath}</code><br>` : '') +
             `Boards folder: <code style="font-size:11px">${i.userData}</code>`
           : i.isAndroid
           ? `Android · WebView ${i.chrome}<br>` +

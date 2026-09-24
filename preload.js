@@ -1,5 +1,5 @@
 'use strict';
-const { contextBridge, ipcRenderer, clipboard } = require('electron');
+const { contextBridge, ipcRenderer, clipboard, nativeImage } = require('electron');
 const crypto = require('node:crypto');
 
 /**
@@ -56,10 +56,52 @@ function clipboardRead() {
   }
 }
 
+/**
+ * Putting something ON the machine's clipboard - for the test suite, and for
+ * nothing else.
+ *
+ * The board itself never writes to the machine's clipboard: copying objects on
+ * a board must not throw away the address or the phone number somebody had
+ * waiting there. But the test that PROVES that rule has to put real things on
+ * the real clipboard first, and the browser's own clipboard API refuses point
+ * blank from a window that is not the one in front - "Document is not
+ * focused". A suite that opens a window and runs for minutes on a machine
+ * somebody is still using loses the foreground constantly, so those writes
+ * failed and took eight checks down with them on every run. Asking the window
+ * back to the front does not help and should not: an app cannot steal focus
+ * from whatever the person is actually doing.
+ *
+ * Electron's clipboard has no focus rule. It is the same clipboard the
+ * fingerprint above is read from, so what lands there is exactly what the
+ * board will see. Handed to the page only when the app was started with
+ * --smoke, which a shipped build never is.
+ */
+function clipboardWriteForTests(payload) {
+  try {
+    /*
+     * Putting the machine's clipboard BACK is as much a part of this as
+     * putting things on it. The suite runs on a developer's own machine, and
+     * a test that eats whatever they had copied - and leaves its own sample
+     * text there to be pasted into something real later - is a test that
+     * misbehaves. An empty clipboard is restored as empty, not as ''.
+     */
+    if (payload && payload.clear) { clipboard.clear(); return true; }
+    if (payload && payload.image) {
+      const img = nativeImage.createFromDataURL(payload.image);
+      if (!img || img.isEmpty()) return false;
+      clipboard.writeImage(img);
+    } else {
+      clipboard.writeText(String((payload && payload.text) || ''));
+    }
+    return true;
+  } catch { return false; }
+}
+
 contextBridge.exposeInMainWorld('board', {
   info: () => ipcRenderer.invoke('app:info'),
   clipboardSignature,
   clipboardRead,
+  ...(process.argv.includes('--smoke') ? { clipboardWriteForTests } : {}),
 
   readFile: (p) => ipcRenderer.invoke('fs:readFile', p),
   // On the desktop the path names the file already; the web build has to work

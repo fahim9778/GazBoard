@@ -368,6 +368,16 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       spellcheck: true,
+      /*
+       * The preload script cannot see the flags this app was started with -
+       * process.argv over there belongs to the renderer, and Chromium fills it
+       * with its own switches. Anything the page side needs to know about how
+       * the app was launched has to be handed across deliberately, and this is
+       * the door for it. Today that is one flag: --smoke, which is how preload
+       * knows to hand the suite a way to put something on the machine's
+       * clipboard. A normal launch passes nothing and the page gets nothing.
+       */
+      additionalArguments: process.argv.includes('--smoke') ? ['--smoke'] : [],
       // The renderer's half of the switches above: never slow the board's
       // drawing down because something appears to be covering it.
       backgroundThrottling: false
@@ -477,21 +487,18 @@ function buildMenu() {
 /* ------------------------------------------------------------------ *
  *  LibreOffice discovery (best-fidelity Office conversion path)
  * ------------------------------------------------------------------ */
-function sofficeCandidates() {
-  const p = process.platform;
-  if (p === 'darwin') return ['/Applications/LibreOffice.app/Contents/MacOS/soffice', '/opt/homebrew/bin/soffice', '/usr/local/bin/soffice'];
-  if (p === 'win32') return [
-    'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
-    'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'LibreOffice', 'program', 'soffice.exe')
-  ];
-  return ['/usr/bin/soffice', '/usr/local/bin/soffice', '/snap/bin/libreoffice', '/usr/bin/libreoffice'];
-}
+const { resolveSoffice } = require('./soffice.js');
+/*
+ * Probed once and remembered: the search touches the filesystem a few dozen
+ * times and the answer cannot change while the app is open. Installing
+ * LibreOffice under a running GazBoard therefore needs a restart before the
+ * app sees it, which is why About reports what was found.
+ */
 let _soffice; // undefined = not probed, null = absent
 function findSoffice() {
-  if (process.env.GAZBOARD_DISABLE_LIBREOFFICE === '1') return null;
   if (_soffice !== undefined) return _soffice;
-  _soffice = sofficeCandidates().find((c) => { try { return c && fs.existsSync(c); } catch { return false; } }) || null;
+  _soffice = resolveSoffice();
+  if (_soffice) console.log('[import] LibreOffice:', _soffice);
   return _soffice;
 }
 
@@ -679,7 +686,7 @@ function ipc() {
   ipcMain.handle('app:info', () => ({
     version: app.getVersion(), platform: process.platform,
     electron: process.versions.electron, chrome: process.versions.chrome,
-    libreoffice: !!findSoffice(), userData: app.getPath('userData'),
+    libreoffice: !!findSoffice(), sofficePath: findSoffice(), userData: app.getPath('userData'),
     // the suite drives the app headlessly; it must never be stopped by a
     // consent dialog, and it must never reach the network
     smoke: process.argv.includes('--smoke'),

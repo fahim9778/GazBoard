@@ -59,6 +59,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "soffice.js",
       "src/**/*",
       "!src/package.json",
       "sync/**/*",

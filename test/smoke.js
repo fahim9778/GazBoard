@@ -8655,12 +8655,19 @@ module.exports.run = async (win, app) => {
 
   /* ---- snip a page, Ctrl+V, ink on it ---- */
   const pasted = await js(`
+   /*
+    * Declared outside the try, because the finally below has to reach both:
+    * the results so far, and what the clipboard held before any of this ran.
+    * Inside the try they are block-scoped and the restore throws instead of
+    * restoring - which is a failure that looks exactly like success.
+    */
+   const r = {};
+   let clipboardBefore = null;
    try {
     const a = window.app, sf = a.surface;
     a.newBoard(true);
     sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
     a.textEditor.cancel();
-    const r = {};
     const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
     // a 1600x900 "screenshot", the shape a snip of a book page tends to be
@@ -8763,63 +8770,55 @@ module.exports.run = async (win, app) => {
     const settled = [];
 
     /*
-     * Chromium refuses to write the clipboard from a window that is not the one
-     * in front: "Document is not focused". This suite opens a real window and
-     * runs for minutes, so anything that takes the foreground while it does -
-     * alt-tab, a notification, somebody picking their own machine back up to do
-     * something else - threw here and took every check in this probe down with
-     * it: thirty-one failures all reading "undefined", not one of them naming
-     * the cause.
+     * Chromium refuses the clipboard to a window that is not the one in front:
+     * "Document is not focused". This suite opens a real window and runs for
+     * minutes, so anything that takes the foreground while it does - alt-tab, a
+     * notification, somebody picking their own machine back up - made every one
+     * of these writes fail and took eight checks down with it, all of them
+     * blaming the board for something the operating system had decided.
      *
-     * The window is asked back to the front and the write retried. If focus
-     * still cannot be had, that is recorded rather than thrown, so the result
-     * says the window was in the background instead of blaming the board.
+     * Asking the window back to the front was the first attempt and it does not
+     * work, nor should it: an app cannot take focus away from whatever a person
+     * is actually using. So the values go onto the clipboard through Electron
+     * instead - the very same clipboard the fingerprint is read from, and one
+     * with no focus rule at all. Nothing about what is being tested moves: the
+     * machine's clipboard really does end up holding the value, and the board
+     * really does have to work out who copied last. The suite just stops
+     * needing to own the screen while it runs.
      */
-    let lostFocus = false;
-    const focused = async () => {
-      for (let i = 0; i < 40; i++) {
-        if (document.hasFocus()) return true;
-        window.focus();
-        await sleep(50);
-      }
-      lostFocus = true;
-      return false;
-    };
+    const native = (() => { try { return window.board?.clipboardWriteForTests || null; } catch { return null; } })();
+    r.usedNativeClipboard = !!native;
+    const asDataUrl = (blob) => new Promise((res, rej) => {
+      const fr = new FileReader();
+      fr.onload = () => res(fr.result);
+      fr.onerror = () => rej(fr.error);
+      fr.readAsDataURL(blob);
+    });
     /*
-     * Reading is refused for exactly the same reason writing is: Chromium will
-     * not hand the clipboard to a window that is not in front. This wrapper was
-     * written for the writes and the one READ in this probe was left bare, so
-     * the probe still collapsed whenever the machine was being used - the same
-     * thirty-one failures, now with readText in the message instead of
-     * writeText. Both directions go through the same door.
+     * The old route is kept for a build that has no test hook - a web run, or
+     * somebody opening the app normally and pasting this in by hand. It still
+     * needs the window in front, and still says so when it does not get it.
      */
-    const readClipboard = async (fn, fallback = null) => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (!(await focused())) return fallback;
-        try { return await fn(); } catch (e) {
-          if (!/not focused|NotAllowed/i.test(String(e && e.message || e))) throw e;
-          await sleep(200);
+    let refusedForFocus = false;
+    const putOnMachineClipboard = async (payload) => {
+      if (native) return native(payload) === true;
+      try {
+        if (payload.image) {
+          const blob = await (await fetch(payload.image)).blob();
+          await navigator.clipboard.write([new ClipboardItem({ [payload.type || blob.type]: blob })]);
+        } else {
+          await navigator.clipboard.writeText(payload.text);
         }
+        return true;
+      } catch (e) {
+        if (/not focused|NotAllowed/i.test(String(e && e.message || e))) refusedForFocus = true;
+        return false;
       }
-      lostFocus = true;
-      return fallback;
-    };
-
-    const writeClipboard = async (fn) => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (!(await focused())) return false;
-        try { await fn(); return true; } catch (e) {
-          if (!/not focused|NotAllowed/i.test(String(e && e.message || e))) throw e;
-          await sleep(200);
-        }
-      }
-      lostFocus = true;
-      return false;
     };
 
     const putText = async (value) => {
       const was = a.clipboardStamp();
-      if (!(await writeClipboard(() => navigator.clipboard.writeText(value)))) { settled.push(false); return false; }
+      if (!(await putOnMachineClipboard({ text: value }))) { settled.push(false); return false; }
       for (let i = 0; i < 150; i++) {
         const now = a.clipboardStamp();
         if (now !== was && (now || '').includes(value)) { settled.push(true); return true; }
@@ -8830,8 +8829,9 @@ module.exports.run = async (win, app) => {
     };
     const putImage = async (blob, type = 'image/png') => {
       const was = a.clipboardStamp();
-      const wrote = await writeClipboard(() => navigator.clipboard.write([new ClipboardItem({ [type]: blob })]));
-      if (!wrote) { settled.push(false); return false; }
+      let dataUrl;
+      try { dataUrl = await asDataUrl(blob); } catch { settled.push(false); return false; }
+      if (!(await putOnMachineClipboard({ image: dataUrl, type }))) { settled.push(false); return false; }
       for (let i = 0; i < 150; i++) {
         if (a.clipboardStamp() !== was) { settled.push(true); return true; }
         await sleep(20);
@@ -8839,6 +8839,17 @@ module.exports.run = async (win, app) => {
       settled.push(false);
       return false;
     };
+
+    /*
+     * Whatever is on the machine's clipboard right now, kept so it can be put
+     * back. This probe writes half a dozen real values to the real clipboard,
+     * and without this the suite quietly destroys whatever the person running
+     * it had copied - then leaves its own sample line sitting there, ready to
+     * be pasted into something that matters an hour later.
+     */
+    clipboardBefore = await (async () => {
+      try { return await window.board?.clipboardRead?.() ?? null; } catch { return null; }
+    })();
 
     const EARLIER = 'something copied earlier, in another app';
     await putText(EARLIER);
@@ -8850,7 +8861,7 @@ module.exports.run = async (win, app) => {
     a.command('edit.copy');
     r.copiedCount = a.clipboard.length;
     r.newestAfterCopy = a.boardCopyIsNewest();
-    r.clipboardUndisturbed = (await readClipboard(() => navigator.clipboard.readText(), '(unreadable)')) === EARLIER;
+    r.clipboardUndisturbed = (((await a.clipboardNow()) || {}).text ?? '(unreadable)') === EARLIER;
 
     const before = a.store.objects.length;
     firePaste(dt => dt.setData('text/plain', EARLIER));
@@ -9105,7 +9116,7 @@ module.exports.run = async (win, app) => {
     r.cutPastesBack = back.length === 1 && back[0].type === 'note' && back[0].text === 'gone';
     r.everyClipboardWriteLanded = settled.every(Boolean);
     r.clipboardWrites = settled.filter(Boolean).length + '/' + settled.length;
-    r.windowLostFocus = lostFocus;
+    r.windowLostFocus = refusedForFocus;
 
     /*
      * --- pasting at a point, which is what a right-click or a held finger means ---
@@ -9131,7 +9142,28 @@ module.exports.run = async (win, app) => {
 
     a.setTool('select'); a.newBoard(true);
     return r;
-   } catch (e) { return { crashed: String(e && e.message || e) }; }
+   } catch (e) { r.crashed = String(e && e.message || e); return r; }
+   finally {
+    /*
+     * Put the machine's clipboard back exactly as it was found, even if the
+     * probe above fell over. A crash is no reason to keep somebody's copied
+     * text hostage.
+     */
+    try {
+      const put = window.board?.clipboardWriteForTests;
+      if (put) {
+        if (clipboardBefore && clipboardBefore.image) put({ image: clipboardBefore.image });
+        else if (clipboardBefore && clipboardBefore.text) put({ text: clipboardBefore.text });
+        else put({ clear: true });
+      }
+      const now = await (async () => {
+        try { return await window.board?.clipboardRead?.() ?? null; } catch { return null; }
+      })();
+      r.clipboardPutBack = (now?.text || '') === (clipboardBefore?.text || '')
+        && !!(now?.image) === !!(clipboardBefore?.image);
+      r.clipboardLeftBehind = (now?.text || '').slice(0, 60);
+    } catch { r.clipboardPutBack = false; }
+   }
   `);
   if (pasted.crashed) console.log('  paste probe threw:', pasted.crashed);
 
@@ -9151,11 +9183,11 @@ module.exports.run = async (win, app) => {
     pasted.editorOpen && pasted.leftTheEditorAlone);
   check('the machine clipboard took every value this test put on it',
     pasted.everyClipboardWriteLanded === true,
-    `${pasted.clipboardWrites} writes landed within three seconds` +
+    `${pasted.clipboardWrites} writes landed within three seconds, written ` +
+    `${pasted.usedNativeClipboard ? 'straight to the machine clipboard (no focus needed)' : 'through the browser clipboard API, which needs the window in front'}` +
     (pasted.windowLostFocus
-      ? ` — THE WINDOW WAS IN THE BACKGROUND. Something else held the foreground while the suite ran, so ` +
-        `Chromium refused the clipboard outright. Nothing about the board is being measured here; run it ` +
-        `again and leave the machine alone while it works.`
+      ? ` — THE WINDOW WAS IN THE BACKGROUND and the browser refused. This build has no test hook; run the ` +
+        `suite from the repo with npm run test:all instead of pasting it into a normal window.`
       : ` — anything less means the checks below were racing the operating system rather than testing the board`));
   check('copying objects leaves the machine clipboard alone',
     pasted.copiedCount === 2 && pasted.clipboardUndisturbed === true,
@@ -9240,6 +9272,11 @@ module.exports.run = async (win, app) => {
   check('and they keep their spacing instead of stacking on the spot',
     pasted.pasteAtKeptSpread === true,
     `kept the original 460-wide spread: ${pasted.pasteAtKeptSpread}`);
+  check('the suite gives the machine clipboard back the way it found it',
+    pasted.clipboardPutBack === true,
+    `what is on the clipboard now: "${pasted.clipboardLeftBehind}" — this probe writes real values to the ` +
+    `real clipboard, so leaving one there means whatever the person had copied is gone and a line of test ` +
+    `text is waiting to be pasted into something that matters`);
 
   /* ---- two files, one id: neither may eat the other ---- */
   const twoFiles = await js(`
@@ -10604,6 +10641,87 @@ module.exports.run = async (win, app) => {
   check('and comes straight back when you stop',
     !!typingOnPhone && typingOnPhone.cleared && typingOnPhone.after === typingOnPhone.before,
     typingOnPhone ? `back to ${typingOnPhone.after}` : 'not measured');
+
+  /* ---- finding LibreOffice, including on a drive that is not C ---- */
+  {
+    const { resolveSoffice, sofficeCandidates } = require('../soffice.js');
+    /*
+     * The search is asked what it WOULD find on a machine laid out a given
+     * way, rather than what it finds on this one - so the case that matters
+     * (LibreOffice moved off a full system drive) is testable on a build
+     * machine that has no LibreOffice anywhere.
+     */
+    const machine = (...installed) => (p) => installed.includes(p) ||
+      // a drive exists when something is installed on it, which is how a real one behaves
+      (/^[A-Za-z]:\\$/.test(p) && installed.some((i) => i.toUpperCase().startsWith(p.toUpperCase())));
+    const WIN = { platform: 'win32' };
+    const onD = 'D:\\LibreOffice\\program\\soffice.exe';
+    const onDProgs = 'D:\\Program Files\\LibreOffice\\program\\soffice.exe';
+    const onC = 'C:\\Program Files\\LibreOffice\\program\\soffice.exe';
+
+    const movedToD = resolveSoffice({ ...WIN, env: {}, exists: machine(onD) });
+    check('LibreOffice installed on a second drive is found',
+      movedToD === onD,
+      `found ${movedToD || 'nothing'}, wanted ${onD} — people with a small C: move a 700MB install, ` +
+      `and the old search only ever looked at C:`);
+
+    const progsOnD = resolveSoffice({ ...WIN, env: {}, exists: machine(onDProgs) });
+    check('and the Program Files shape on that drive too',
+      progsOnD === onDProgs, `found ${progsOnD || 'nothing'}, wanted ${onDProgs}`);
+
+    const both = resolveSoffice({ ...WIN, env: {}, exists: machine(onC, onD) });
+    check('with copies on two drives the system drive still wins',
+      both === onC, `found ${both}, wanted ${onC} — the sweep must stay in order, not take the last match`);
+
+    const told = resolveSoffice({ ...WIN, env: { GAZBOARD_SOFFICE: 'X:\\odd\\place\\soffice.exe' },
+                                  exists: machine(onC, 'X:\\odd\\place\\soffice.exe') });
+    check('being told outright where it is beats anything found by searching',
+      told === 'X:\\odd\\place\\soffice.exe',
+      `found ${told} — GAZBOARD_SOFFICE is the escape hatch for a layout the sweep does not guess`);
+
+    const staleVar = resolveSoffice({ ...WIN, env: { GAZBOARD_SOFFICE: 'X:\\gone.exe' }, exists: machine(onC) });
+    check('and a stale one is ignored rather than believed',
+      staleVar === onC,
+      `found ${staleVar || 'nothing'}, wanted ${onC} — pointing the variable at a file that was deleted ` +
+      `must not turn a working install into "not installed"`);
+
+    const viaPath = resolveSoffice({ platform: 'linux', env: { PATH: '/nope:/opt/lo/bin' },
+                                     exists: machine('/opt/lo/bin/soffice') });
+    check('an install reachable on PATH is found without any of the fixed folders',
+      viaPath === '/opt/lo/bin/soffice', `found ${viaPath || 'nothing'}`);
+
+    const nowhere = resolveSoffice({ ...WIN, env: {}, exists: () => false });
+    check('a machine without LibreOffice still answers plainly',
+      nowhere === null, `got ${JSON.stringify(nowhere)}, wanted null — Word and slides fall back, ` +
+      `spreadsheets say to install it, and neither can happen if this throws`);
+
+    const off = resolveSoffice({ ...WIN, env: { GAZBOARD_DISABLE_LIBREOFFICE: '1' }, exists: machine(onC) });
+    check('the suite can still switch it off on a machine that has it',
+      off === null, `got ${off} — npm run smoke:builtin exercises the built-in converter, which needs this`);
+
+    /*
+     * A letter that is not there must cost one question, not four. On an
+     * office machine with a mapped share that is currently offline, each
+     * question is the one that takes a moment to answer.
+     */
+    const knocks = [];
+    resolveSoffice({ ...WIN, env: {}, exists: (p) => { knocks.push(p); return false; } });
+    const onDeadDrive = knocks.filter((k) => /^D:/i.test(k));
+    const everyLetter = knocks.filter((k) => /^[C-Z]:/i.test(k));
+    check('a drive that is not there is knocked on once, not for every folder',
+      onDeadDrive.length === 1 && onDeadDrive[0] === 'D:\\' && everyLetter.length === 24,
+      `asked about D: ${onDeadDrive.length} time(s) (${onDeadDrive.join(', ') || 'never'}) and about ` +
+      `lettered drives ${everyLetter.length} time(s) in total — wanted 1 and 24, not 3 and 72`);
+
+    const list = sofficeCandidates('win32', {});
+    const floppies = list.filter((c) => /^[AB]:/i.test(c));
+    check('the drive sweep leaves the floppy letters alone',
+      floppies.length === 0,
+      `${floppies.length} A:/B: path(s) in the list — on a machine that still has one, looking makes it grind`);
+    check('and it covers every other drive, both layouts',
+      list.filter((c) => /^[C-Z]:/i.test(c)).length === 24 * 3,
+      `${list.filter((c) => /^[C-Z]:/i.test(c)).length} drive path(s), wanted ${24 * 3} (24 letters x 3 shapes)`);
+  }
 
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);
