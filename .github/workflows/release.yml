@@ -58,11 +58,30 @@ jobs:
         # package.json asks for - which is why no release before 2.4.2 has one.
         run: npx electron-builder --win nsis portable --x64 --publish never
 
+      # The in-app updater (updater.js) reads latest.yml for the installer's
+      # SHA-512, and the .blockmap files to fetch only the parts that changed.
+      # Without them an installed GazBoard cannot update itself, so their
+      # absence fails the build instead of shipping a release it cannot reach.
+      - name: Check the files the in-app updater needs
+        shell: bash
+        run: |
+          set -e
+          V="$(node -p "require('./package.json').version")"
+          test -f dist/latest.yml || { echo "::error::no dist/latest.yml - is build.publish set in package.json?"; exit 1; }
+          grep -q "^version: ${V}$" dist/latest.yml || { echo "::error::latest.yml is not for ${V}"; cat dist/latest.yml; exit 1; }
+          grep -q "GazBoard-Setup-${V}.exe" dist/latest.yml || { echo "::error::latest.yml does not name the installer"; cat dist/latest.yml; exit 1; }
+          grep -q "sha512:" dist/latest.yml || { echo "::error::latest.yml has no checksum"; exit 1; }
+          test -s "dist/GazBoard-Setup-${V}.exe.blockmap" || { echo "::error::no blockmap for the installer"; exit 1; }
+          cat dist/latest.yml
+
       - name: Upload build output as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: GazBoard-windows
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/latest.yml
+            dist/*.exe.blockmap
           if-no-files-found: error
 
       # The notes come from release-notes/<version>.md, written alongside the
@@ -89,12 +108,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          # No .blockmap. It exists for electron-updater's differential
-          # downloads, and GazBoard has no auto-updater - the update check is a
-          # plain look at the releases API that opens the download page in the
-          # browser. Uploading it only put a file on the release that nothing
-          # reads and that people then ask about.
-          files: dist/*.exe
+          # latest.yml and the installer's .blockmap are what the in-app
+          # updater reads: the checksum to verify against, and the map that
+          # lets it download only what changed since the last version.
+          files: |
+            dist/*.exe
+            dist/latest.yml
+            dist/GazBoard-Setup-*.exe.blockmap
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
@@ -223,6 +243,14 @@ jobs:
             /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
             /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
           done
+          # latest-mac.yml gives the in-app updater each .zip's SHA-512: one
+          # for Apple chips and one for Intel, or a Mac cannot update itself
+          V="$(node -p "require('./package.json').version")"
+          test -f dist/latest-mac.yml || { echo "::error::no dist/latest-mac.yml - is build.publish set in package.json?"; exit 1; }
+          grep -q "^version: ${V}$" dist/latest-mac.yml || { echo "::error::latest-mac.yml is not for ${V}"; cat dist/latest-mac.yml; exit 1; }
+          grep -Eq "url: .*arm64.*\.zip" dist/latest-mac.yml || { echo "::error::latest-mac.yml has no Apple-chip zip"; cat dist/latest-mac.yml; exit 1; }
+          grep -E "url: .*\.zip" dist/latest-mac.yml | grep -vq arm64 || { echo "::error::latest-mac.yml has no Intel zip"; cat dist/latest-mac.yml; exit 1; }
+          cat dist/latest-mac.yml
 
       - name: Upload build output as a workflow artifact
         uses: actions/upload-artifact@v4
@@ -231,6 +259,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/latest-mac.yml
           if-no-files-found: error
 
       # The notes come from release-notes/<version>.md, written alongside the
@@ -260,6 +289,7 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.zip
+            dist/latest-mac.yml
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}

@@ -65,7 +65,8 @@
       "!src/package.json",
       "sync/**/*",
       "package.json",
-      "!test/out/**"
+      "!test/out/**",
+      "updater.js"
     ],
     "win": {
       "target": [
@@ -158,7 +159,12 @@
         "icon": "src/assets/icon.ico"
       }
     ],
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "fahim9778",
+      "repo": "GazBoard",
+      "releaseType": "release"
+    },
     "dmg": {
       "title": "GazBoard ${version}",
       "contents": [
@@ -176,5 +182,8 @@
       ]
     }
   },
-  "desktopName": "gazboard.desktop"
+  "desktopName": "gazboard.desktop",
+  "dependencies": {
+    "electron-updater": "6.8.10"
+  }
 }

@@ -517,6 +517,24 @@ function buildMenu() {
 /* ------------------------------------------------------------------ *
  *  LibreOffice discovery (best-fidelity Office conversion path)
  * ------------------------------------------------------------------ */
+/*
+ * The updater, loaded the first time it is needed. A build that somehow went
+ * out without it (or without electron-updater) falls back to the download
+ * page rather than failing to start.
+ */
+let updaterInstance;
+function updater() {
+  if (updaterInstance !== undefined) return updaterInstance;
+  try {
+    const { createUpdater } = require('./updater.js');
+    updaterInstance = createUpdater({ app, net, notePath: path.join(app.getPath('userData'), 'update-note.json') });
+  } catch (e) {
+    console.warn('updater unavailable:', e && e.message);
+    updaterInstance = null;
+  }
+  return updaterInstance;
+}
+
 const { resolveSoffice } = require('./soffice.js');
 const { convertWithMsOffice } = require('./msoffice.js');
 /*
@@ -810,6 +828,35 @@ function ipc() {
     } finally {
       clearTimeout(timer);
     }
+  });
+
+  /*
+   * Download-and-install (updater.js). Like the check above, nothing here
+   * runs unless the person presses the button: download fetches the version
+   * the check found, install puts it in place on a restart.
+   */
+  ipcMain.handle('updates:mode', async () => {
+    const u = updater();
+    return u ? u.mode() : { mode: 'page', reason: 'unavailable' };
+  });
+  ipcMain.handle('updates:download', async (e, version) => {
+    const u = updater();
+    if (!u) return { ok: false, error: 'The updater is not part of this build' };
+    let last = 0;
+    return u.download(String(version || ''), (frac, got, total) => {
+      const now = Date.now();
+      if (now - last < 120 && frac < 1) return;      // a few updates a second is plenty for a bar
+      last = now;
+      try { e.sender.send('updates:progress', { frac, got, total }); } catch { /* window gone */ }
+    });
+  });
+  ipcMain.handle('updates:install', async (_e, opts) => {
+    const u = updater();
+    return u ? u.install({ now: !(opts && opts.now === false) }) : { ok: false, error: 'The updater is not part of this build' };
+  });
+  ipcMain.handle('updates:note', async () => {
+    const u = updater();
+    return u ? u.takeNote() : null;
   });
 
   /* --- board persistence --- */
@@ -1155,6 +1202,8 @@ app.on('before-quit', (e) => {
 // A listening socket must not outlive the window that opened it, and pairings
 // made "just for now" are forgotten here rather than lingering until a crash.
 app.on('will-quit', () => {
+  // an update the person chose to install "when I close GazBoard" goes in now
+  if (updaterInstance) { try { updaterInstance.onQuit(); } catch { /* the old version stays */ } }
   declineAllPending();
   if (syncService) { try { syncService.stop(); } catch {} }
 });

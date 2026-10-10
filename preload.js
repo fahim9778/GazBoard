@@ -186,6 +186,14 @@ contextBridge.exposeInMainWorld('board', {
   openBoardsFolder: () => ipcRenderer.invoke('shell:openBoards'),
   openReleases: (url) => ipcRenderer.invoke('shell:openExternal', url),
   checkForUpdate: () => ipcRenderer.invoke('updates:check'),
+  // Download-and-install, for the builds that can update themselves (see updater.js).
+  updates: {
+    mode: () => ipcRenderer.invoke('updates:mode'),
+    download: (version) => ipcRenderer.invoke('updates:download', version),
+    install: (opts) => ipcRenderer.invoke('updates:install', opts || {}),
+    note: () => ipcRenderer.invoke('updates:note'),
+    onProgress: (cb) => ipcRenderer.on('updates:progress', (_e, p) => cb(p))
+  },
 
   boards: {
     list: () => ipcRenderer.invoke('boards:list'),

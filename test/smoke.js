@@ -9109,6 +9109,270 @@ async function run(win, app) {
   check('a list with no desktop release at all is refused rather than guessed at',
     androidOnly.ok === false, JSON.stringify(androidOnly));
 
+  /* ---- download and install (updater.js) ---- */
+  {
+    const U = require(path.join(__dirname, '..', 'updater.js'));
+    const os = require('node:os');
+    const fsSync = require('node:fs');
+    const nodeCrypto = require('node:crypto');
+    const { spawn: spawnProc } = require('node:child_process');
+
+    // 1. which copies can update themselves
+    const yes = () => true, no = () => false;
+    const modes = {
+      winInstalled: U.installMode({ platform: 'win32', execPath: 'C:\\Users\\a\\AppData\\Local\\Programs\\GazBoard\\GazBoard.exe', env: {}, packaged: true }).mode,
+      winPortable: U.installMode({ platform: 'win32', env: { PORTABLE_EXECUTABLE_FILE: 'D:\\GazBoard-4.6.0-portable.exe' }, packaged: true }).reason,
+      macApps: U.installMode({ platform: 'darwin', execPath: '/Applications/GazBoard.app/Contents/MacOS/GazBoard', env: {}, packaged: true, canWrite: yes }),
+      macDmg: U.installMode({ platform: 'darwin', execPath: '/Volumes/GazBoard 4.6.0/GazBoard.app/Contents/MacOS/GazBoard', env: {}, packaged: true, canWrite: yes }).reason,
+      macMoved: U.installMode({ platform: 'darwin', execPath: '/private/var/folders/x/AppTranslocation/ABC/d/GazBoard.app/Contents/MacOS/GazBoard', env: {}, packaged: true, canWrite: yes }).reason,
+      macLocked: U.installMode({ platform: 'darwin', execPath: '/Applications/GazBoard.app/Contents/MacOS/GazBoard', env: {}, packaged: true, canWrite: no }).reason,
+      linux: U.installMode({ platform: 'linux', env: {}, packaged: true }).mode,
+      dev: U.installMode({ platform: 'win32', env: {}, packaged: false }).reason
+    };
+    check('updater: the installed Windows and Mac apps can update themselves; portable, disk image, moved, locked, Linux and dev copies keep the download page',
+      modes.winInstalled === 'install' && modes.winPortable === 'portable' && modes.macApps.mode === 'install' && modes.macApps.bundle === '/Applications/GazBoard.app'
+        && modes.macDmg === 'not-in-applications' && modes.macMoved === 'not-in-applications' && modes.macLocked === 'read-only' && modes.linux === 'page' && modes.dev === 'not-installed',
+      JSON.stringify(modes));
+
+    // 2. reading latest-mac.yml, as electron-builder writes it, and picking this Mac's file
+    const yml = 'version: 4.6.0\nfiles:\n  - url: GazBoard-4.6.0-arm64-mac.zip\n    sha512: QUFB\n    size: 120\n    blockMapSize: 9\n  - url: GazBoard-4.6.0-mac.zip\n    sha512: QkJC\n    size: 130\npath: GazBoard-4.6.0-mac.zip\nsha512: QkJC\nreleaseDate: \'2026-10-10T00:00:00.000Z\'\n';
+    const parsed = U.parseLatestYml(yml);
+    const arm = U.pickMacZip(parsed.files, 'arm64'), intel = U.pickMacZip(parsed.files, 'x64');
+    check('updater: latest-mac.yml is read, and an Apple-chip Mac gets the arm64 zip while an Intel Mac gets the other',
+      parsed.version === '4.6.0' && parsed.files.length === 2 && arm.url === 'GazBoard-4.6.0-arm64-mac.zip' && arm.sha512 === 'QUFB' && arm.size === 120 && intel.url === 'GazBoard-4.6.0-mac.zip' && intel.size === 130,
+      JSON.stringify({ parsed, arm, intel }));
+
+    // 3. the Mac swap, run for real on a pretend app: waits for the old process, swaps, opens; and every way back
+    const swapRun = async (opts) => {
+      const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gb-swap-'));
+      const app = path.join(dir, 'Applications', 'GazBoard.app');
+      const work = path.join(dir, 'work');
+      const fresh = path.join(work, 'new', 'GazBoard.app');
+      fsSync.mkdirSync(app, { recursive: true }); fsSync.writeFileSync(path.join(app, 'which'), 'old');
+      fsSync.mkdirSync(fresh, { recursive: true }); fsSync.writeFileSync(path.join(fresh, 'which'), 'new');
+      const script = path.join(work, 'swap.sh');
+      fsSync.writeFileSync(script, U.SWAP_SCRIPT, { mode: 0o755 });
+      const opened = path.join(dir, 'opened');
+      const opener = path.join(dir, 'open.sh');
+      fsSync.writeFileSync(opener, `#!/bin/bash\necho "$1" >> "${opened}"\n`, { mode: 0o755 });
+      // a stand-in for the GazBoard that is quitting: any process that ends after a moment
+      const sleeper = spawnProc(process.execPath, ['-e', `setTimeout(() => {}, ${Math.round((opts.sleep ?? 0.4) * 1000)})`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore' });
+      sleeper.on('error', () => {});
+      const t0 = Date.now();
+      // run alongside, not blocking: the "GazBoard" process has to be able to finish and be gone
+      const res = await new Promise((resolve) => {
+        const p = spawnProc('/bin/bash', [script, String(sleeper.pid), app, opts.badNew ? path.join(work, 'nothing.app') : fresh, work],
+          { env: { ...process.env, GAZBOARD_OPEN: opener, GAZBOARD_SWAP_WAIT: String(opts.wait ?? 100), ...(opts.failNew ? { GAZBOARD_SWAP_FAIL_NEW: '1' } : {}) } });
+        p.on('error', (e) => resolve({ status: 'error: ' + e.message }));
+        p.on('close', (status) => resolve({ status }));
+      });
+      try { sleeper.kill(); } catch {}
+      const read = (p) => { try { return fsSync.readFileSync(p, 'utf8').trim(); } catch { return null; } };
+      return { code: res.status, which: read(path.join(app, 'which')), backupLeft: fsSync.existsSync(path.join(work, 'previous.app')), opened: read(opened), openedRight: read(opened) === app, waitedMs: Date.now() - t0 };
+    };
+    // The swap is a macOS step run by bash; Windows has neither, and never runs it
+    if (process.platform === 'win32') {
+      check('updater: the Mac swap test is for Mac and Linux machines (it needs bash); Windows updates through electron-updater instead', true, 'skipped on Windows');
+    } else {
+    const swapOk = await swapRun({});
+    const swapFail = await swapRun({ failNew: true });
+    const swapStuck = await swapRun({ sleep: 5, wait: 5 });
+    const swapBad = await swapRun({ badNew: true });
+    check('updater: on a Mac the swap waits for GazBoard to quit, puts the new app in, removes the old one and opens it',
+      swapOk.code === 0 && swapOk.which === 'new' && !swapOk.backupLeft && swapOk.openedRight && swapOk.waitedMs >= 300,
+      JSON.stringify(swapOk));
+    check('updater: if the new app cannot go in, the old one is put back exactly and opened again',
+      swapFail.code === 5 && swapFail.which === 'old' && !swapFail.backupLeft && swapFail.openedRight,
+      JSON.stringify(swapFail));
+    check('updater: if GazBoard never quits, or the download is not there, nothing is touched',
+      swapStuck.code === 3 && swapStuck.which === 'old' && swapStuck.opened === null && swapBad.code === 2 && swapBad.which === 'old',
+      JSON.stringify({ swapStuck, swapBad }));
+    }
+
+    // 4. the real downloads, against a release served from localhost
+    const payload = nodeCrypto.randomBytes(300 * 1024);
+    const sha = (b) => nodeCrypto.createHash('sha512').update(b).digest('base64');
+    let served = [];
+    const rel = http.createServer((req, res) => {
+      served.push(req.url);
+      const u = req.url.split('?')[0];
+      if (u === '/v99.0.0/latest.yml') { res.end(`version: 99.0.0\nfiles:\n  - url: GazBoard-Setup-99.0.0.exe\n    sha512: ${sha(payload)}\n    size: ${payload.length}\npath: GazBoard-Setup-99.0.0.exe\nsha512: ${sha(payload)}\nreleaseDate: '2026-10-10T00:00:00.000Z'\n`); return; }
+      if (u === '/v98.0.0/latest.yml') { res.end(`version: 98.0.0\nfiles:\n  - url: GazBoard-Setup-98.0.0.exe\n    sha512: ${sha(Buffer.from('something else'))}\n    size: ${payload.length}\npath: GazBoard-Setup-98.0.0.exe\nsha512: x\nreleaseDate: '2026-10-10T00:00:00.000Z'\n`); return; }
+      if (u === '/v99.0.0/GazBoard-Setup-99.0.0.exe' || u === '/v98.0.0/GazBoard-Setup-98.0.0.exe') { res.setHeader('content-length', payload.length); res.end(payload); return; }
+      if (u === '/v99.0.0/latest-mac.yml') { res.end(`version: 99.0.0\nfiles:\n  - url: GazBoard-99.0.0-arm64-mac.zip\n    sha512: ${sha(payload)}\n    size: ${payload.length}\n  - url: GazBoard-99.0.0-mac.zip\n    sha512: ${sha(payload)}\n    size: ${payload.length}\n`); return; }
+      if (u === '/v97.0.0/latest-mac.yml') { res.end(`version: 97.0.0\nfiles:\n  - url: GazBoard-97.0.0-arm64-mac.zip\n    sha512: ${sha(Buffer.from('not it'))}\n    size: ${payload.length}\n  - url: GazBoard-97.0.0-mac.zip\n    sha512: ${sha(Buffer.from('not it'))}\n    size: ${payload.length}\n`); return; }
+      if (/\.zip$/.test(u)) { res.setHeader('content-length', payload.length); res.end(payload); return; }
+      res.statusCode = 404; res.end('');
+    });
+    await new Promise((r) => rel.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${rel.address().port}`;
+    const { app: eApp, net: eNet } = require('electron');
+    const envWas = { d: process.env.GAZBOARD_UPDATE_DOWNLOADS, t: process.env.GAZBOARD_UPDATE_TEST };
+    process.env.GAZBOARD_UPDATE_DOWNLOADS = base;
+    process.env.GAZBOARD_UPDATE_TEST = '1';
+    const notePath = path.join(os.tmpdir(), 'gb-update-note-' + Date.now() + '.json');
+    const progress = [];
+    let win = {}, winBad = {}, macBad = {}, macOn = {};
+    try {
+      const w = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'win32', execPath: 'C:\\GazBoard\\GazBoard.exe' });
+      win = await w.download('99.0.0', (f) => progress.push(f));
+      win.ready = w.ready;
+      const w2 = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'win32', execPath: 'C:\\GazBoard\\GazBoard.exe' });
+      winBad = await w2.download('98.0.0');
+      winBad.ready = w2.ready;
+      const m = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'darwin', arch: 'arm64', execPath: '/Applications/GazBoard.app/Contents/MacOS/GazBoard', canWrite: () => true });
+      macBad = await m.download('97.0.0');
+      macOn = await m.download('99.0.0');
+      // a "restart into 99.0.0" that this test cannot perform: the note says it did not go in
+      const n = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'linux' });
+      fsSync.writeFileSync(notePath, JSON.stringify({ to: '99.0.0', from: eApp.getVersion(), kind: 'mac' }));
+      win.noteMissed = await n.takeNote();
+      fsSync.writeFileSync(notePath, JSON.stringify({ to: eApp.getVersion(), from: '1.0.0', kind: 'win' }));
+      win.noteDone = await n.takeNote();
+      win.noteGone = await n.takeNote();
+    } finally {
+      if (envWas.d === undefined) delete process.env.GAZBOARD_UPDATE_DOWNLOADS; else process.env.GAZBOARD_UPDATE_DOWNLOADS = envWas.d;
+      if (envWas.t === undefined) delete process.env.GAZBOARD_UPDATE_TEST; else process.env.GAZBOARD_UPDATE_TEST = envWas.t;
+      await new Promise((r) => rel.close(r));
+      // the test's own download folder, not the real updater's
+      const cacheBase = process.platform === 'win32' ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
+        : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches') : (process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'));
+      fsSync.rmSync(path.join(cacheBase, 'gazboard-updater-test'), { recursive: true, force: true });
+    }
+    check('updater: Windows downloads the installer named in latest.yml through electron-updater, checks it, and has it ready',
+      win.ok === true && win.ready === '99.0.0' && served.some((u) => u.startsWith('/v99.0.0/latest.yml')) && served.includes('/v99.0.0/GazBoard-Setup-99.0.0.exe') && progress.length > 0,
+      `result: ${JSON.stringify(win)}; requests: ${served.join(', ')}; progress reports: ${progress.length}`);
+    check('updater: an installer whose checksum does not match is refused, and nothing is ready to install',
+      winBad.ok === false && !winBad.ready && /sha512|checksum/i.test(winBad.error || ''),
+      JSON.stringify(winBad));
+    check('updater: on a Mac the zip for this chip is downloaded and a wrong checksum stops it before anything is unpacked',
+      macBad.ok === false && /checksum/.test(macBad.error || '') && served.includes('/v97.0.0/GazBoard-97.0.0-arm64-mac.zip') && !served.includes('/v97.0.0/GazBoard-97.0.0-mac.zip')
+        && macOn.ok === false && (process.platform === 'darwin' ? !/checksum/.test(macOn.error) : /ditto|ENOENT/.test(macOn.error || '')),
+      `wrong checksum: ${JSON.stringify(macBad)}; right checksum (this ${process.platform} test machine then stops at unpacking a pretend zip): ${JSON.stringify(macOn)}`);
+    check('updater: after a restart it can tell "updated to 99.0.0" from "the update did not go in", and says so once',
+      win.noteMissed && win.noteMissed.done === false && win.noteMissed.to === '99.0.0' && win.noteMissed.kind === 'mac' && win.noteDone && win.noteDone.done === true && win.noteGone === null,
+      JSON.stringify({ missed: win.noteMissed, done: win.noteDone, gone: win.noteGone }));
+
+    // 5. the release ships what the updater reads, and the app ships the updater
+    const pkgNow = JSON.parse(fsSync.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+    const wf = fsSync.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
+    const ship = {
+      publish: pkgNow.build && pkgNow.build.publish && pkgNow.build.publish.provider === 'github' && pkgNow.build.publish.owner === 'fahim9778' && pkgNow.build.publish.repo === 'GazBoard',
+      files: (pkgNow.build.files || []).includes('updater.js'),
+      dep: !!(pkgNow.dependencies && pkgNow.dependencies['electron-updater']),
+      winFiles: /dist\/latest\.yml/.test(wf) && /GazBoard-Setup-\*\.exe\.blockmap/.test(wf),
+      macFiles: (wf.match(/dist\/latest-mac\.yml/g) || []).length >= 2
+    };
+    check('updater: package.json makes electron-builder write latest.yml, packs updater.js and electron-updater, and the release uploads latest.yml, the blockmap and latest-mac.yml',
+      Object.values(ship).every(Boolean), JSON.stringify(ship));
+  }
+
+  // 6. what the person sees: the offer, the download, the restart
+  const updFlow = await js(String.raw`
+    const a = window.app, r = {};
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const card = () => document.getElementById('overlayCard');
+    const buttons = () => [...card().querySelectorAll('button')].map((b) => b.textContent.trim()).filter((x) => x !== 'Cancel');
+    const press = (label) => { const b = [...card().querySelectorAll('button')].find((x) => x.textContent.trim() === label); if (b) b.click(); return !!b; };
+    const calls = [];
+    let progressCb = null;
+    a.fetchUpdate = async () => ({ ok: true, version: '99.0.0', prerelease: false, url: 'https://github.com/fahim9778/GazBoard/releases/tag/v99.0.0' });
+    a.updateBridge = () => ({
+      mode: async () => ({ mode: r.mode || 'install' }),
+      onProgress: (cb) => { progressCb = cb; },
+      download: async (v) => { calls.push('download ' + v); progressCb && progressCb({ frac: 0.5, got: 50 * 1048576, total: 100 * 1048576 }); await wait(150); return r.failDownload ? { ok: false, error: 'No connection' } : { ok: true, version: v }; },
+      install: async (o) => { calls.push('install ' + JSON.stringify(o)); return { ok: true }; },
+      note: async () => r.note || null
+    });
+    const persistWas = a.persist.bind(a);
+    a.persist = async () => { calls.push('saved'); return persistWas(); };
+    a.settings.skippedVersion = null; a._updateOffered = null;
+
+    // offered with Download and install
+    const flow = a.checkForUpdates({ force: true });
+    await wait(200);
+    r.offer = buttons();
+    r.offerText = card().querySelector('p')?.textContent || '';
+    press('Download and install');
+    await wait(80);
+    r.progressText = card().textContent;
+    await wait(250);
+    r.ready = buttons();
+    press('Restart now');
+    await flow;
+    await wait(50);
+    r.calls1 = calls.join(' | ');
+
+    // "When I close GazBoard"
+    calls.length = 0;
+    const flow2 = a.checkForUpdates({ force: true });
+    await wait(200); press('Download and install'); await wait(400);
+    press('When I close GazBoard'); await flow2; await wait(50);
+    r.calls2 = calls.join(' | ');
+
+    // "Later", then the hourly look: not asked again this session
+    calls.length = 0;
+    a._updateOffered = null;
+    a.settings.updateCheck = true; a.settings.lastUpdateCheck = 0;
+    const flow3 = a.checkForUpdates({ silent: true });
+    await wait(200); r.laterAsked = !!press('Later'); await flow3;
+    a.settings.lastUpdateCheck = 0;
+    const before = document.getElementById('overlay').classList.contains('show');
+    const again = await Promise.race([a.checkForUpdates({ silent: true }).then(() => 'returned'), wait(400).then(() => 'still asking')]);
+    r.askedAgain = again !== 'returned' || document.getElementById('overlay').classList.contains('show');
+    if (r.askedAgain) press('Later');
+
+    // a failed download: offered the page instead, nothing installed
+    calls.length = 0; r.failDownload = true;
+    const flow4 = a.checkForUpdates({ force: true });
+    await wait(200); press('Download and install'); await wait(400);
+    r.failText = card().textContent;
+    r.failButtons = buttons();
+    press('Close'); await flow4;
+    r.calls4 = calls.join(' | ');
+    r.failDownload = false;
+
+    // a copy that cannot update itself: the page only, as before
+    r.mode = 'page';
+    const flow5 = a.checkForUpdates({ force: true });
+    await wait(200); r.pageOffer = buttons(); press('Later'); await flow5;
+
+    // after a restart
+    r.mode = 'install';
+    r.note = { to: '99.0.0', from: '4.5.1', done: true, kind: 'win' };
+    await a.reportUpdateNote();
+    await wait(50);
+    r.doneToast = [...document.querySelectorAll('.toast')].map((t) => t.textContent).join(' | ');
+    r.note = { to: '99.0.0', from: '4.5.1', done: false, kind: 'mac' };
+    const rep = a.reportUpdateNote();
+    await wait(150);
+    r.missText = card().textContent;
+    press('Close'); await rep;
+
+    delete a.fetchUpdate; delete a.updateBridge; a.persist = persistWas;
+    a.settings.updateCheck = null; a.settings.lastUpdateCheck = 0; a.settings.skippedVersion = null; a._updateOffered = null; a.saveSettings();
+    return r;
+  `);
+  check('update: a newer version is offered with "Download and install" first, saying the boards stay as they are',
+    updFlow.offer[0] === 'Download and install' && updFlow.offer.includes('Open the download page') && updFlow.offer.includes('Later') && /boards and settings stay exactly/.test(updFlow.offerText),
+    `buttons: ${JSON.stringify(updFlow.offer)}; text: "${updFlow.offerText}"`);
+  check('update: the download shows its progress, then offers "Restart now" or "When I close GazBoard"',
+    /Downloading GazBoard 99\.0\.0/.test(updFlow.progressText) && /50\.0 of 100\.0 MB/.test(updFlow.progressText) && JSON.stringify(updFlow.ready) === '["Restart now","When I close GazBoard"]',
+    `while downloading: "${updFlow.progressText.slice(0, 120)}"; then: ${JSON.stringify(updFlow.ready)}`);
+  check('update: "Restart now" saves the boards first, then installs; "When I close GazBoard" leaves it for the quit',
+    /download 99\.0\.0 \| saved .*install \{"now":true\}$/.test(updFlow.calls1) && updFlow.calls2 === 'download 99.0.0 | install {"now":false}',
+    `restart now: ${updFlow.calls1}; when I close: ${updFlow.calls2}`);
+  check('update: "Later" is not asked again by the hourly look in the same session',
+    updFlow.laterAsked && updFlow.askedAgain === false, `first offer answered Later: ${updFlow.laterAsked}; asked again: ${updFlow.askedAgain}`);
+  check('update: a failed download changes nothing and offers the download page',
+    /could not be downloaded/.test(updFlow.failText) && /Nothing was changed/.test(updFlow.failText) && updFlow.failButtons.includes('Open the download page') && !/install/.test(updFlow.calls4),
+    `text: "${updFlow.failText.slice(0, 160)}"; buttons: ${JSON.stringify(updFlow.failButtons)}; calls: ${updFlow.calls4}`);
+  check('update: a copy that cannot update itself still offers just the download page',
+    !updFlow.pageOffer.includes('Download and install') && updFlow.pageOffer[0] === 'Open the download page', JSON.stringify(updFlow.pageOffer));
+  check('update: after the restart it says "Updated to GazBoard 99.0.0", or explains that it did not go in and how to fix it on a Mac',
+    /Updated to GazBoard 99\.0\.0/.test(updFlow.doneToast) && /did not go in/.test(updFlow.missText) && /App Management/.test(updFlow.missText),
+    `toast: "${updFlow.doneToast}"; when it failed: "${updFlow.missText.slice(0, 200)}"`);
+
   const updUi = await js(`
     const a = window.app;
     const r = {};

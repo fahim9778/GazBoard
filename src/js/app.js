@@ -3497,6 +3497,8 @@ class App {
     try {
       const info = await this.appInfo();
       if (info?.smoke) return;
+      // an update put in place on the last restart: say so - or say it did not go in
+      await this.reportUpdateNote();
       if (info?.isAndroid) {
         const finger = this.fingerInks ? t('Your <b>finger</b> draws too. ') : t('One <b>finger</b> moves the board. ');
         const mouse = typeof matchMedia === 'function' && matchMedia('(any-pointer: fine)').matches
@@ -3516,7 +3518,106 @@ class App {
         if (Date.now() - asked > App.ASK_AGAIN_AFTER) await this.askAboutUpdates();
       }
       else if (this.settings.updateCheck) await this.checkForUpdates({ silent: true });
+      /*
+       * GazBoard is often left open all day on a classroom PC. Look again now
+       * and then while it runs - checkForUpdates itself keeps to twice a day,
+       * so this is a reminder to look, not more looking.
+       */
+      if (!this._updateTimer) {
+        this._updateTimer = setInterval(() => {
+          if (this.settings.updateCheck) this.checkForUpdates({ silent: true }).catch(() => {});
+        }, App.UPDATE_RECHECK);
+      }
     } catch { /* an update check must never be able to break the app */ }
+  }
+
+  /** How often a long-running GazBoard reminds itself to look for updates (the look itself keeps to UPDATE_INTERVAL). */
+  static UPDATE_RECHECK = 60 * 60 * 1000;
+
+  /**
+   * The download-and-install side of the bridge (updater.js), or null where
+   * there is none - the web and Android builds. Behind a method so the suite
+   * can answer for it.
+   */
+  updateBridge() { return window.board.updates || null; }
+
+  /** 'install' when this copy can download an update and restart into it, otherwise 'page'. */
+  async updateMode() {
+    const b = this.updateBridge();
+    if (!b) return { mode: 'page' };
+    try { return (await b.mode()) || { mode: 'page' }; } catch { return { mode: 'page' }; }
+  }
+
+  /** After a restart into an update: "Updated to 4.6.0", or what to do if it did not go in. */
+  async reportUpdateNote() {
+    const b = this.updateBridge();
+    if (!b || !b.note) return null;
+    let n = null;
+    try { n = await b.note(); } catch { n = null; }
+    if (!n) return null;
+    if (n.done) {
+      this.toast(t('Updated to GazBoard {version}', { version: n.to }), 'update', 6000);
+      return n;
+    }
+    const mine = (await this.appInfo())?.version || '';
+    const answer = await this.choose(
+      t('The update to {version} did not go in', { version: n.to }),
+      n.kind === 'mac'
+        ? t('GazBoard is still on {version}, and nothing was changed. macOS may have stopped GazBoard from replacing itself: in System Settings, open Privacy & Security, then App Management, and allow GazBoard. Or install it from the download page.', { version: mine })
+        : t('GazBoard is still on {version}, and nothing was changed. You can install it from the download page instead.', { version: mine }),
+      [{ id: 'open', label: t('Open the download page'), primary: true }, { id: 'close', label: t('Close') }],
+      { cancel: false }
+    );
+    if (answer === 'open') await window.board.openReleases('https://github.com/fahim9778/GazBoard/releases/tag/v' + encodeURIComponent(n.to));
+    return n;
+  }
+
+  /**
+   * Download an update and restart into it, once the person has said so.
+   * The download is checked before anything changes; the old version stays
+   * until the new one is in place.
+   * @returns {Promise<boolean>} whether it is downloaded and on its way in
+   */
+  async installUpdate(res) {
+    const b = this.updateBridge();
+    if (!b) return false;
+    const mb = (n) => (n / 1048576).toFixed(1);
+    const progress = this.showProgress(t('Downloading GazBoard {version}', { version: res.version }), t('Starting…'));
+    if (!this._updateProgressHooked) {
+      this._updateProgressHooked = true;
+      b.onProgress((p) => { if (this._onUpdateProgress) this._onUpdateProgress(p || {}); });
+    }
+    this._onUpdateProgress = (p) => progress.update(p.frac || 0, p.total
+      ? t('{got} of {total} MB', { got: mb(p.got || 0), total: mb(p.total) })
+      : t('Downloading…'));
+    let r;
+    try { r = await b.download(res.version); } catch (e) { r = { ok: false, error: e && e.message }; }
+    finally { this._onUpdateProgress = null; progress.close(); }
+    if (!r || !r.ok) {
+      const again = await this.choose(
+        t('The update could not be downloaded'),
+        t('{error}. Nothing was changed. You can download it from the release page instead.', { error: (r && r.error) || t('No connection') }),
+        [{ id: 'open', label: t('Open the download page'), primary: true }, { id: 'close', label: t('Close') }],
+        { cancel: false }
+      );
+      if (again === 'open') await window.board.openReleases(res.url);
+      return false;
+    }
+    const when = await this.choose(
+      t('GazBoard {version} is ready', { version: res.version }),
+      t('Restart now to start using it - your boards are saved first. Or keep working, and it goes in when you close GazBoard.'),
+      [{ id: 'now', label: t('Restart now'), primary: true }, { id: 'later', label: t('When I close GazBoard') }],
+      { cancel: false }
+    );
+    if (when === 'now') {
+      // everything on disk before anything is replaced
+      try { this.textEditor.commit(); await this.persist(); } catch { /* the quit flush tries again */ }
+      await b.install({ now: true });
+    } else {
+      await b.install({ now: false });
+      this.toast(t('GazBoard {version} goes in when you close GazBoard', { version: res.version }), 'update', 6000);
+    }
+    return true;
   }
 
   /** Ask once, on the first launch that gets far enough to matter. */
@@ -3585,15 +3686,23 @@ class App {
     // a prerelease is never pushed at someone on a stable build
     if (res.prerelease && !force) return null;
     if (!force && this.settings.skippedVersion === res.version) return null;
+    // "Later" lasts until GazBoard is next started: the hourly look must not ask again all afternoon
+    if (!force && this._updateOffered === res.version) return null;
+    this._updateOffered = res.version;
 
+    const canInstall = (await this.updateMode()).mode === 'install';
     const answer = await this.choose(
       t('GazBoard {version} is available', { version: res.version }),
-      t('You are running {version}. The download page opens in your browser — your boards and settings are untouched by installing over the top.', { version: mine }),
-      [{ id: 'open', label: t('Open the download page'), primary: true },
+      canInstall
+        ? t('You are running {version}. GazBoard can download it and restart into it — your boards and settings stay exactly as they are.', { version: mine })
+        : t('You are running {version}. The download page opens in your browser — your boards and settings are untouched by installing over the top.', { version: mine }),
+      [...(canInstall ? [{ id: 'install', label: t('Download and install'), primary: true }] : []),
+       { id: 'open', label: t('Open the download page'), primary: !canInstall },
        { id: 'later', label: t('Later') },
        { id: 'skip', label: t('Skip {version}', { version: res.version }) }]
     );
-    if (answer === 'open') await window.board.openReleases(res.url);
+    if (answer === 'install') await this.installUpdate(res);
+    else if (answer === 'open') await window.board.openReleases(res.url);
     else if (answer === 'skip') { this.settings.skippedVersion = res.version; this.saveSettings(); }
     return res;
   }
