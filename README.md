@@ -38,7 +38,9 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 | **macOS — Apple Silicon** | `GazBoard-*-arm64.dmg` | Open it, drag to Applications. See the note below. |
 | **macOS — Intel** | `GazBoard-*.dmg` | Open it, drag to Applications. See the note below. |
 | **Ubuntu / Debian** | `gazboard_*_amd64.deb` | `sudo apt install ./gazboard_*.deb` |
-| **Other Linux** | `GazBoard-*.AppImage` | `chmod +x` it and run it |
+| **Other Linux** | `GazBoard-*.AppImage` | `chmod +x` it and run it. To update later, see below. |
+
+**Updating the Linux AppImage.** From this release on, the AppImage carries update information, so [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) can fetch only what changed: `appimageupdatetool GazBoard-*.AppImage`. AppImages from earlier releases have no update information, so download this one manually first. GazBoard's own update check still just opens the release page.
 
 Not sure which Mac you have? Apple menu →  About This Mac. **Apple M1/M2/M3/M4** means Apple Silicon; anything saying **Intel** takes the other file.
 

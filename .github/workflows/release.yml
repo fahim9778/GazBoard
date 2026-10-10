@@ -138,6 +138,101 @@ jobs:
       - name: Build the AppImage and .deb
         run: npx electron-builder --linux AppImage deb --x64 --publish never
 
+      # Makes the AppImage updatable with AppImageUpdate (appimageupdatetool).
+      # electron-builder's own AppImage carries no update information, so it is
+      # unpacked and repacked with appimagetool, which embeds the string and,
+      # because zsyncmake is installed, writes the matching .zsync file.
+      # The repacked file replaces the original under the SAME versioned name,
+      # so the boot test below and the release upload both pick it up.
+      # The owner/repo come from the workflow's own repository, so a fork's
+      # builds point at the fork's releases instead of the upstream's.
+      - name: Embed update information and generate the .zsync
+        env:
+          APPIMAGETOOL_VERSION: '1.9.0'
+          # SHA-256 of appimagetool-x86_64.AppImage for the version above.
+          # Bump both together and recompute with: sha256sum <downloaded file>
+          APPIMAGETOOL_SHA256: '46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1'
+          # Pin the runtime too; update its SHA-256 when changing the version.
+          APPIMAGE_RUNTIME_VERSION: '20251108'
+          APPIMAGE_RUNTIME_SHA256: '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d'
+          ARCH: x86_64
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsync desktop-file-utils  # zsyncmake and desktop-file-validate
+
+          UPDATE_INFO="gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY##*/}|latest|GazBoard-*.AppImage.zsync"
+
+          TOOL="$RUNNER_TEMP/appimagetool"
+          curl -fsSL -o "$TOOL" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+          echo "${APPIMAGETOOL_SHA256}  ${TOOL}" | sha256sum -c -
+          chmod +x "$TOOL"
+
+          RUNTIME="$RUNNER_TEMP/runtime-x86_64"
+          curl -fsSL -o "$RUNTIME" \
+            "https://github.com/AppImage/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-x86_64"
+          echo "${APPIMAGE_RUNTIME_SHA256}  ${RUNTIME}" | sha256sum -c -
+          chmod +x "$RUNTIME"
+
+          shopt -s nullglob
+          APPIMAGES=(dist/*.AppImage)
+          if [ "${#APPIMAGES[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one AppImage in dist/, found ${#APPIMAGES[@]}"
+            exit 1
+          fi
+          SRC="$GITHUB_WORKSPACE/${APPIMAGES[0]}"
+          NAME="$(basename "$SRC")"
+
+          WORK="$RUNNER_TEMP/appimage-repack"
+          rm -rf "$WORK"
+          mkdir -p "$WORK/out"
+          chmod +x "$SRC"
+          ( cd "$WORK" && "$SRC" --appimage-extract >/dev/null )
+          test -d "$WORK/squashfs-root"
+
+          # Run from the output directory: the .zsync is written beside the
+          # new AppImage, named "<AppImage name>.zsync".
+          # APPIMAGE_EXTRACT_AND_RUN is set for this one command only (the runner
+          # has no FUSE for appimagetool itself). Left set for the whole step,
+          # it would make the repacked AppImage launch the app instead of
+          # answering --appimage-updateinformation below.
+          ( cd "$WORK/out" && APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$WORK/squashfs-root" "$NAME" )
+
+          # Both files must exist and be non-empty, or the release does not go out.
+          test -s "$WORK/out/$NAME"       || { echo "::error::repacked AppImage is missing or empty"; exit 1; }
+          test -s "$WORK/out/$NAME.zsync" || { echo "::error::$NAME.zsync is missing or empty"; ls -la "$WORK/out"; exit 1; }
+
+          # The embedded update information must be exactly what we asked for.
+          chmod +x "$WORK/out/$NAME"
+          GOT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$WORK/out/$NAME" --appimage-updateinformation)"
+          if [ "$GOT" != "$UPDATE_INFO" ]; then
+            echo "::error::update information mismatch"
+            echo "expected: $UPDATE_INFO"
+            echo "got:      $GOT"
+            exit 1
+          fi
+
+          # Confirm the repacked AppImage carries the pinned runtime.
+          WANT_RT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$RUNTIME" --appimage-version 2>&1)"
+          GOT_RT="$(env -u APPIMAGE_EXTRACT_AND_RUN "$WORK/out/$NAME" --appimage-version 2>&1)"
+          if [ "$GOT_RT" != "$WANT_RT" ]; then
+            echo "::error::AppImage runtime is not the pinned one"
+            echo "expected: $WANT_RT"
+            echo "got:      $GOT_RT"
+            exit 1
+          fi
+
+          # The .zsync must name the asset exactly as it will be uploaded,
+          # otherwise AppImageUpdate cannot find the file to download.
+          grep -a -m1 -qx "Filename: $NAME" "$WORK/out/$NAME.zsync" \
+            || { echo "::error::$NAME.zsync does not reference $NAME"; head -c 400 "$WORK/out/$NAME.zsync" | strings; exit 1; }
+
+          mv -f "$WORK/out/$NAME" "dist/$NAME"
+          mv -f "$WORK/out/$NAME.zsync" "dist/$NAME.zsync"
+          ls -la dist/*.AppImage dist/*.AppImage.zsync
+          echo "update info: $GOT"
+
       # Proof the packaged AppImage really starts, not just that it built. The
       # screenshot ships with the artifacts, so it can be checked from any
       # machine - useful when you have no Linux box to hand.
@@ -165,6 +260,7 @@ jobs:
           name: GazBoard-linux
           path: |
             dist/*.AppImage
+            dist/*.AppImage.zsync
             dist/*.deb
             dist/linux-boot-screenshot.png
           if-no-files-found: error
@@ -193,8 +289,11 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # The .zsync sits beside the AppImage so AppImageUpdate can find it
+          # through the embedded gh-releases-zsync|...|latest|... string.
           files: |
             dist/*.AppImage
+            dist/*.AppImage.zsync
             dist/*.deb
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
@@ -312,4 +411,3 @@ jobs:
 
       - name: Run web test suite
         run: npm run test:web
-
