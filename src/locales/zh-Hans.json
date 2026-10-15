@@ -1119,5 +1119,6 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "卸载 GazBoard 会删除这些白板。要在你自己的文件夹中保留安全副本吗？",
  "Choose folder": "选择文件夹",
  "{store} keeps GazBoard up to date": "{store} 会让 GazBoard 保持最新",
- "Updates": "更新"
+ "Updates": "更新",
+ "No matching boards": "没有匹配的白板"
 }

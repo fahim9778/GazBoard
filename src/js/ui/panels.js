@@ -12,6 +12,7 @@ import { inkTrailSupported } from '../core/inktrail.js';
 import { PATTERN_SPACINGS } from '../core/render.js';
 import { todayStamp } from '../core/pages.js';
 import * as F from '../core/folders.js';
+import { matchBoards } from './boardpicker.js';
 
 /**
  * How a paired computer that is NOT currently visible should be shown.
@@ -44,6 +45,7 @@ export function createPanels(app) {
   const body = document.getElementById('panelBody');
   let currentKey = null;
   let currentRender = null;
+  let boardQuery = '';
 
   document.getElementById('panelClose').addEventListener('click', close);
 
@@ -1563,7 +1565,41 @@ export function createPanels(app) {
    * Settings - the plain list in the side panel it used to be.
    */
   function boards(opts = {}) {
+    if (!opts.stay) boardQuery = '';
     return app.settings.boardsPage === false ? boardsList(opts) : boardsGallery(opts);
+  }
+
+  function boardSearch(all, here, render) {
+    const input = h('input', { type: 'search', class: 'emoji-search',
+      placeholder: t('Find a board…'), 'aria-label': t('Find a board…'),
+      autocomplete: 'off', spellcheck: 'false' });
+    input.value = boardQuery;
+    const status = h('p', { role: 'status', 'aria-live': 'polite', class: 'board-search-status' });
+    const update = () => {
+      boardQuery = input.value;
+      const searching = !!boardQuery.trim();
+      const list = searching ? matchBoards(boardQuery, all, all.length, null) : F.boardsIn(app.settings, all, here);
+      status.textContent = searching ? (list.length ? t('{n} boards', { n: list.length }) : t('No matching boards')) : '';
+      render(list, searching);
+    };
+    input.addEventListener('input', update);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && input.value) {
+        e.preventDefault(); e.stopPropagation();
+        input.value = ''; update();
+      }
+    });
+    return { el: h('div', { class: 'board-search' }, input, status), update };
+  }
+
+  function boardMoveFrom(ids) {
+    const from = F.folderOf(app.settings, ids[0]);
+    // Mixed folders have no shared current location to disable in the move dialog.
+    return ids.every((id) => F.folderOf(app.settings, id) === from) ? from : false;
+  }
+
+  function boardPath(b) {
+    return F.folderPath(app.settings, F.folderOf(app.settings, b.id)).map((f) => f.name).join(' › ') || t('My boards');
   }
 
   async function boardsGallery(opts = {}) {
@@ -1586,8 +1622,8 @@ export function createPanels(app) {
     if (app.storageElsewhere === false && F.pruneBoards(app.settings, all)) app.saveSettings();
     const here = app.boardFolder && F.folderPath(app.settings, app.boardFolder).length ? app.boardFolder : null;
     app.boardFolder = here;
-    const list = F.boardsIn(app.settings, all, here);
-    const go = (id) => { app.boardFolder = id || null; boards({ stay: true }); };
+    let list = F.boardsIn(app.settings, all, here);
+    const go = (id) => { app.boardFolder = id || null; boardQuery = ''; boards({ stay: true }); };
     const keep = () => { try { localStorage.setItem('gazboard.settings', JSON.stringify(app.settings)); } catch { /* storage refused */ } app.syncBoardPath?.(); };
 
     /*
@@ -1758,14 +1794,15 @@ export function createPanels(app) {
     moveSelected.addEventListener('click', async () => {
       const ids = [...chosen];
       if (!ids.length) return;
-      const to = await chooseFolder(t('Move {n} boards to…', { n: ids.length }), { from: here });
+      const to = await chooseFolder(t('Move {n} boards to…', { n: ids.length }), { from: boardMoveFrom(ids) });
       if (to === undefined) return;
       moveBoards(ids, to);
     });
     const boardGrid = h('div', { class: 'board-grid' });
     main.appendChild(boardGrid);
-    if (!list.length && !folders.length) main.appendChild(h('p', { style: 'color:var(--text-2);font-size:13px' },
-      here ? t('This folder is empty. Make a new board here, or move boards in with “Move to…” or by dragging them onto it.') : t('No saved boards yet.')));
+    const empty = h('p', { style: 'color:var(--text-2);font-size:13px' },
+      here ? t('This folder is empty. Make a new board here, or move boards in with “Move to…” or by dragging them onto it.') : t('No saved boards yet.'));
+    main.appendChild(empty);
     if (all.length > 1 && !F.folderList(app.settings).length) main.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
       t('Tip: + New folder files boards by subject. Hold a board and drag it onto a folder, or use its “Move to…” button.')));
 
@@ -1807,42 +1844,56 @@ export function createPanels(app) {
       }
     });
 
-    /* -- boards here, as pictures -- */
-    for (const b of list) {
-      const input = h('input', { type: 'checkbox', 'aria-label': t('Export {name}', { name: b.name || t('Untitled board') }) });
-      boxes.push({ input, id: b.id });
-      input.addEventListener('change', () => {
-        if (input.checked) chosen.add(b.id); else chosen.delete(b.id);
-        wrap.classList.toggle('ticked', input.checked);
-        syncChosen();
-      });
-      const when = new Date(b.modified).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-      const tile = h('button', { class: 'board-tile' + (b.id === app.store.doc.id ? ' current' : ''), 'data-board': b.id,
-        title: b.objects === 1 ? t('{n} item · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() }) : t('{n} items · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() }) },
-        h('span', { class: 'bt-thumb' }, b.thumb
-          ? h('img', { src: b.thumb, alt: '', draggable: 'false', loading: 'lazy' })
-          : h('span', { class: 'bt-blank', html: icon('board', 30) })),
-        h('b', { class: 'bt-name' }, b.name || t('Untitled board')),
-        h('small', { class: 'bt-date' }, when),
-        h('span', { class: 'bt-actions' },
-          h('span', { class: 'icon-btn', title: t('Move to…'), html: icon('folderMove', 15), 'data-move': b.id, onclick: async (e) => {
-            e.stopPropagation();
-            const ids = movingWith(b.id);
-            const to = await chooseFolder(ids.length > 1 ? t('Move {n} boards to…', { n: ids.length }) : t('Move “{name}” to…', { name: b.name || t('Untitled board') }), { from: here });
-            if (to === undefined) return;
-            moveBoards(ids, to);
-          } }),
-          h('span', { class: 'icon-btn', title: t('Delete'), html: icon('trash', 15), onclick: async (e) => { e.stopPropagation(); if (await app.confirm(t('Delete board?'), t('"{name}" will be permanently removed.', { name: b.name }), t('Delete'))) { await app.deleteBoard(b.id); boards({ stay: true }); } } })));
-      tile.addEventListener('click', async () => {
-        if (tile._dragged) return;
-        const data = await window.board.boards.load(b.id);
-        if (data) { await app.loadBoard(data); close(); }
-        else if (b.id === app.store.doc.id) close();      // the board in front, not saved yet
-      });
-      pickUp(tile, { kind: 'board', id: b.id, name: b.name || t('Untitled board') });
-      const wrap = h('div', { class: 'tile-wrap board-wrap' },
-        h('label', { class: 'tick', title: t('Select') }, input), tile);
-      boardGrid.appendChild(wrap);
+    const search = boardSearch(all, here, (matches, searching) => {
+      list = matches;
+      chosen.clear(); boxes.length = 0;
+      boardGrid.replaceChildren();
+      folderGrid.hidden = searching;
+      empty.hidden = searching || !!list.length || !!folders.length;
+      renderBoards(searching);
+      syncChosen();
+    });
+    main.querySelector('.gal-head').after(search.el);
+    search.update();
+
+    function renderBoards(searching) {
+      for (const b of list) {
+        const input = h('input', { type: 'checkbox', 'aria-label': t('Export {name}', { name: b.name || t('Untitled board') }) });
+        boxes.push({ input, id: b.id });
+        input.addEventListener('change', () => {
+          if (input.checked) chosen.add(b.id); else chosen.delete(b.id);
+          wrap.classList.toggle('ticked', input.checked);
+          syncChosen();
+        });
+        const when = new Date(b.modified).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+        const tile = h('button', { class: 'board-tile' + (b.id === app.store.doc.id ? ' current' : ''), 'data-board': b.id,
+          title: b.objects === 1 ? t('{n} item · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() }) : t('{n} items · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() }) },
+          h('span', { class: 'bt-thumb' }, b.thumb
+            ? h('img', { src: b.thumb, alt: '', draggable: 'false', loading: 'lazy' })
+            : h('span', { class: 'bt-blank', html: icon('board', 30) })),
+          h('b', { class: 'bt-name' }, b.name || t('Untitled board')),
+          h('small', { class: 'bt-date' }, when),
+          searching ? h('small', { class: 'bt-path', title: boardPath(b) }, boardPath(b)) : null,
+          h('span', { class: 'bt-actions' },
+            h('span', { class: 'icon-btn', title: t('Move to…'), html: icon('folderMove', 15), 'data-move': b.id, onclick: async (e) => {
+              e.stopPropagation();
+              const ids = movingWith(b.id);
+              const to = await chooseFolder(ids.length > 1 ? t('Move {n} boards to…', { n: ids.length }) : t('Move “{name}” to…', { name: b.name || t('Untitled board') }), { from: boardMoveFrom(ids) });
+              if (to === undefined) return;
+              moveBoards(ids, to);
+            } }),
+            h('span', { class: 'icon-btn', title: t('Delete'), html: icon('trash', 15), onclick: async (e) => { e.stopPropagation(); if (await app.confirm(t('Delete board?'), t('"{name}" will be permanently removed.', { name: b.name }), t('Delete'))) { await app.deleteBoard(b.id); boards({ stay: true }); } } })));
+        tile.addEventListener('click', async () => {
+          if (tile._dragged) return;
+          const data = await window.board.boards.load(b.id);
+          if (data) { await app.loadBoard(data); close(); }
+          else if (b.id === app.store.doc.id) close();      // the board in front, not saved yet
+        });
+        pickUp(tile, { kind: 'board', id: b.id, name: b.name || t('Untitled board') });
+        const wrap = h('div', { class: 'tile-wrap board-wrap' },
+          h('label', { class: 'tick', title: t('Select') }, input), tile);
+        boardGrid.appendChild(wrap);
+      }
     }
 
     /*
@@ -2013,8 +2064,8 @@ export function createPanels(app) {
     if (app.storageElsewhere === false && F.pruneBoards(app.settings, all)) app.saveSettings();
     const here = app.boardFolder && F.folderPath(app.settings, app.boardFolder).length ? app.boardFolder : null;
     app.boardFolder = here;
-    const list = F.boardsIn(app.settings, all, here);
-    const go = (id) => { app.boardFolder = id || null; boards({ stay: true }); };
+    let list = F.boardsIn(app.settings, all, here);
+    const go = (id) => { app.boardFolder = id || null; boardQuery = ''; boards({ stay: true }); };
     const keep = () => { try { localStorage.setItem('gazboard.settings', JSON.stringify(app.settings)); } catch { /* storage refused */ } app.syncBoardPath?.(); };
 
     host.innerHTML = '';
@@ -2143,14 +2194,15 @@ export function createPanels(app) {
     moveSelected.addEventListener('click', async () => {
       const ids = [...chosen];
       if (!ids.length) return;
-      const to = await chooseFolder(t('Move {n} boards to…', { n: ids.length }), { from: here });
+      const to = await chooseFolder(t('Move {n} boards to…', { n: ids.length }), { from: boardMoveFrom(ids) });
       if (to === undefined) return;
       moveBoards(ids, to);
     });
     host.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
       t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.')));
-    if (!list.length && !folders.length) host.appendChild(h('p', { style: 'color:var(--text-2);font-size:13px' },
-      here ? t('This folder is empty. Make a new board here, or move boards in with “Move to…” or by dragging them onto it.') : t('No saved boards yet.')));
+    const empty = h('p', { style: 'color:var(--text-2);font-size:13px' },
+      here ? t('This folder is empty. Make a new board here, or move boards in with “Move to…” or by dragging them onto it.') : t('No saved boards yet.'));
+    host.appendChild(empty);
     if (all.length > 1 && !F.folderList(app.settings).length) host.appendChild(h('p', { style: 'font-size:12px;color:var(--text-2)' },
       t('Tip: + New folder files boards by subject. Hold a board and drag it onto a folder, or use its “Move to…” button.')));
 
@@ -2192,38 +2244,54 @@ export function createPanels(app) {
       }
     });
 
-    /* -- boards here -- */
-    for (const b of list) {
-      const input = h('input', { type: 'checkbox', 'aria-label': t('Export {name}', { name: b.name || t('Untitled board') }) });
-      boxes.push({ input, id: b.id });
-      input.addEventListener('change', () => {
-        if (input.checked) chosen.add(b.id); else chosen.delete(b.id);
-        syncChosen();
-      });
-      const row = h('button', { class: 'board-row', style: 'flex:1;min-width:0', 'data-board': b.id },
-        h('span', { html: icon('board', 20), style: 'color:var(--text-2);display:flex' }),
-        h('span', { class: 'meta' },
-          h('b', {}, b.name || t('Untitled board')),
-          h('small', {}, b.objects === 1
-            ? t('{n} item · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() })
-            : t('{n} items · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() }))),
-        h('span', { class: 'icon-btn', title: t('Move to…'), html: icon('folderMove', 16), 'data-move': b.id, onclick: async (e) => {
-          e.stopPropagation();
-          const ids = movingWith(b.id);
-          const to = await chooseFolder(ids.length > 1 ? t('Move {n} boards to…', { n: ids.length }) : t('Move “{name}” to…', { name: b.name || t('Untitled board') }), { from: here });
-          if (to === undefined) return;
-          moveBoards(ids, to);
-        } }),
-        h('span', { class: 'icon-btn', title: t('Delete'), html: icon('trash', 16), onclick: async (e) => { e.stopPropagation(); if (await app.confirm(t('Delete board?'), t('"{name}" will be permanently removed.', { name: b.name }), t('Delete'))) { await app.deleteBoard(b.id); boards({ stay: true }); } } })
-      );
-      row.addEventListener('click', async () => {
-        if (row._dragged) return;
-        const data = await window.board.boards.load(b.id);
-        if (data) { await app.loadBoard(data); close(); }
-      });
-      pickUp(row, { kind: 'board', id: b.id, name: b.name || t('Untitled board') });
-      host.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' },
-        h('label', { style: 'display:grid;place-items:center;min-width:40px;min-height:48px' }, input), row));
+    const rows = h('div');
+    host.appendChild(rows);
+    const search = boardSearch(all, here, (matches, searching) => {
+      list = matches;
+      chosen.clear(); boxes.length = 0;
+      rows.replaceChildren();
+      host.querySelectorAll('.folder-row').forEach((row) => { row.parentElement.hidden = searching; });
+      empty.hidden = searching || !!list.length || !!folders.length;
+      renderBoards(searching);
+      syncChosen();
+    });
+    crumbs.after(search.el);
+    search.update();
+
+    function renderBoards(searching) {
+      for (const b of list) {
+        const input = h('input', { type: 'checkbox', 'aria-label': t('Export {name}', { name: b.name || t('Untitled board') }) });
+        boxes.push({ input, id: b.id });
+        input.addEventListener('change', () => {
+          if (input.checked) chosen.add(b.id); else chosen.delete(b.id);
+          syncChosen();
+        });
+        const row = h('button', { class: 'board-row', style: 'flex:1;min-width:0', 'data-board': b.id },
+          h('span', { html: icon('board', 20), style: 'color:var(--text-2);display:flex' }),
+          h('span', { class: 'meta' },
+            h('b', {}, b.name || t('Untitled board')),
+            h('small', {}, b.objects === 1
+              ? t('{n} item · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() })
+              : t('{n} items · {date}', { n: b.objects, date: new Date(b.modified).toLocaleString() })),
+            searching ? h('small', { class: 'board-result-path', title: boardPath(b) }, boardPath(b)) : null),
+          h('span', { class: 'icon-btn', title: t('Move to…'), html: icon('folderMove', 16), 'data-move': b.id, onclick: async (e) => {
+            e.stopPropagation();
+            const ids = movingWith(b.id);
+            const to = await chooseFolder(ids.length > 1 ? t('Move {n} boards to…', { n: ids.length }) : t('Move “{name}” to…', { name: b.name || t('Untitled board') }), { from: boardMoveFrom(ids) });
+            if (to === undefined) return;
+            moveBoards(ids, to);
+          } }),
+          h('span', { class: 'icon-btn', title: t('Delete'), html: icon('trash', 16), onclick: async (e) => { e.stopPropagation(); if (await app.confirm(t('Delete board?'), t('"{name}" will be permanently removed.', { name: b.name }), t('Delete'))) { await app.deleteBoard(b.id); boards({ stay: true }); } } })
+        );
+        row.addEventListener('click', async () => {
+          if (row._dragged) return;
+          const data = await window.board.boards.load(b.id);
+          if (data) { await app.loadBoard(data); close(); }
+        });
+        pickUp(row, { kind: 'board', id: b.id, name: b.name || t('Untitled board') });
+        rows.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' },
+          h('label', { style: 'display:grid;place-items:center;min-width:40px;min-height:48px' }, input), row));
+      }
     }
 
     /*

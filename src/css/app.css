@@ -1423,6 +1423,12 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .gal-head .crumb { max-width: 18em; }
 .gal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .gal-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 22px 0 12px; font-size: 13px; color: var(--text-2); }
+.board-search { margin-block: 12px; }
+.board-search .emoji-search { width: 100%; margin: 0; }
+.board-search-status { margin: 8px 0; font-size: 13px; color: var(--text-2); }
+.board-search-status:empty { display: none; }
+.bt-path { display: block; margin: 0 12px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+#boardList [hidden] { display: none; }
 .gal-note { font-size: 12px; color: var(--text-2); margin-top: 18px; }
 
 /* folders: a coloured card with a folder drawn on it */

@@ -4,3 +4,4 @@ dist-web/
 test/out/
 sync-inbox/
 dist-sync/
+test/smoke.js

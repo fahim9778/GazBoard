@@ -1119,5 +1119,6 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "Desinstalar o GazBoard apaga estes quadros. Guardar uma cópia segura em uma pasta sua?",
  "Choose folder": "Escolher pasta",
  "{store} keeps GazBoard up to date": "O {store} mantém o GazBoard atualizado",
- "Updates": "Atualizações"
+ "Updates": "Atualizações",
+ "No matching boards": "Nenhum quadro correspondente"
 }

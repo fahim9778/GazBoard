@@ -1119,5 +1119,6 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "GazBoard আনইনস্টল করলে এই বোর্ডগুলো মুছে যায়। নিজের একটা ফোল্ডারে নিরাপদ কপি রাখবেন?",
  "Choose folder": "ফোল্ডার বেছে নিন",
  "{store} keeps GazBoard up to date": "{store} GazBoard-কে আপডেট রাখে",
- "Updates": "আপডেট"
+ "Updates": "আপডেট",
+ "No matching boards": "কোনো মিলযুক্ত বোর্ড পাওয়া যায়নি"
 }

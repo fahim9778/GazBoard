@@ -2793,6 +2793,7 @@ class App {
       if (e.key !== 'Escape') return;
       if (this.dismissOverlay()) { e.preventDefault(); e.stopPropagation(); return; }
       if (popoverOpen()) { closePopover(); e.preventDefault(); e.stopPropagation(); return; }
+      if (e.target instanceof HTMLInputElement && e.target.closest('.board-search') && e.target.value) return;
       if (this.panels.open) { this.panels.close(); e.preventDefault(); e.stopPropagation(); }
     }, true);
 

@@ -16096,6 +16096,65 @@ module.exports.run = async (win, app) => {
       `My boards was open when the app started: ${globalThis.__startedOnBoards}`);
   }
 
+  /* ---- searching My boards across folders, in both views ---- */
+  {
+    const r = await js(`
+      const a = window.app, F = await import('app://board/js/core/folders.js');
+      const original = { folders: a.settings.folders, boardFolders: a.settings.boardFolders, page: a.settings.boardsPage };
+      const ids = ['search-exact', 'search-prefix', 'search-other'];
+      const results = [];
+      try {
+        if (a.panels.open) a.panels.close();
+        a.settings.folders = []; a.settings.boardFolders = {};
+        const course = F.createFolder(a.settings, 'Course'), nested = F.createFolder(a.settings, 'Lectures', course);
+        for (const [id, name] of [['search-exact', 'Searchfixture Algebra'], ['search-prefix', 'Searchfixture Algebra notes'], ['search-other', 'Geometry']]) {
+          await window.board.boards.save({ id, name, objects: [], order: [], pages: [], modified: Date.now(), camera: { x: 0, y: 0, z: 1 } });
+        }
+        F.moveBoard(a.settings, ids[0], nested); F.moveBoard(a.settings, ids[1], course);
+        for (const page of [true, false]) {
+          a.settings.boardsPage = page; a.boardFolder = nested;
+          await a.panels.boards();
+          const host = document.getElementById('boardList');
+          const input = host.querySelector('input[type=search]');
+          const shown = () => [...host.querySelectorAll('[data-board]')].map((b) => b.dataset.board);
+          const query = (value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); };
+          const out = { page, initial: shown() };
+          input.focus(); query('  SEARCHFIXTURE ALGEBRA  ');
+          out.matches = shown(); out.focus = document.activeElement === input;
+          out.path = host.querySelector('.bt-path, .board-result-path')?.textContent;
+          host.querySelector('input[aria-label="Select all boards"]').click();
+          out.selected = host.querySelector('[data-move-selected]').textContent;
+          host.querySelector('[data-move-selected]').click();
+          out.rootEnabled = !document.querySelector('#overlayCard [data-choose=""]').disabled;
+          [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent === 'Cancel').click();
+          query('no-such-board');
+          out.empty = shown().length === 0 && host.querySelector('[role=status]').textContent === 'No matching boards';
+          out.selectionCleared = host.querySelector('[data-move-selected]').disabled;
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+          out.restored = shown(); out.cleared = input.value === '' && a.panels.open;
+          query('notes searchfixture algebra'); out.words = shown();
+          await a.panels.boards({ stay: true });
+          out.kept = document.querySelector('#boardList input[type=search]').value === 'notes searchfixture algebra';
+          a.panels.close(); results.push(out);
+        }
+      } finally {
+        a.panels.close(); a.settings.folders = original.folders; a.settings.boardFolders = original.boardFolders;
+        a.settings.boardsPage = original.page; a.boardFolder = null;
+        for (const id of ids) await window.board.boards.remove(id);
+      }
+      return results;
+    `);
+    for (const v of r) {
+      const view = v.page ? 'gallery' : 'list';
+      check('board search ranks names across nested folders in the ' + view,
+        v.initial.join() === 'search-exact' && v.matches.join() === 'search-exact,search-prefix' && v.path === 'Course › Lectures' && v.words.join() === 'search-prefix', JSON.stringify(v));
+      check('board search keeps focus and clears back to the current folder in the ' + view,
+        v.focus && v.empty && v.selectionCleared && v.cleared && v.restored.join() === 'search-exact' && v.kept);
+      check('search selection includes only results and can move mixed folders to the top level in the ' + view,
+        v.selected.includes('(2)') && v.rootEnabled);
+    }
+  }
+
   /* ---- pasting into a box that takes typing stays in that box ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);

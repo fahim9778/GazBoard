@@ -1119,5 +1119,6 @@
  "{n} board brought back": "{n} Whiteboard zurückgeholt",
  "{n} boards brought back": "{n} Whiteboards zurückgeholt",
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "Beim Deinstallieren von GazBoard werden diese Whiteboards gelöscht. Eine Sicherheitskopie in einem eigenen Ordner behalten?",
- "Choose folder": "Ordner wählen"
+ "Choose folder": "Ordner wählen",
+ "No matching boards": "Keine passenden Boards"
 }

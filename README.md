@@ -241,6 +241,9 @@ which engine is active. Set `GAZBOARD_DISABLE_LIBREOFFICE=1` to force the built-
   the whole board on one sheet, or tiled at actual size across as many sheets as it takes)
 - `.gazboard` document files (Save a copy / Open); `.openboard` files from earlier versions still open
 - Autosave to a local board library, browsable from **Boards**
+- Search board names across all folders from **Boards**, in both gallery and list views.
+  Results show their folder paths; clear the search or press Escape to return to the current folder.
+  See the [board search guide](docs/board-search.md) for matching rules and selection behavior.
 
 By default, boards live in `<userData>/boards` — on Windows that is
 `%APPDATA%\GazBoard\boards`, on Linux `~/.config/GazBoard/boards`. In the desktop app,

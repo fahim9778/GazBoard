@@ -1119,5 +1119,6 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "إلغاء تثبيت GazBoard يحذف هذه اللوحات. هل تريد الاحتفاظ بنسخة آمنة في مجلد خاص بك؟",
  "Choose folder": "اختر مجلدًا",
  "{store} keeps GazBoard up to date": "يحافظ {store} على تحديث GazBoard",
- "Updates": "التحديثات"
+ "Updates": "التحديثات",
+ "No matching boards": "لا توجد لوحات مطابقة"
 }
