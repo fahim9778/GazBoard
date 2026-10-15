@@ -1119,5 +1119,15 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "إلغاء تثبيت GazBoard يحذف هذه اللوحات. هل تريد الاحتفاظ بنسخة آمنة في مجلد خاص بك؟",
  "Choose folder": "اختر مجلدًا",
  "{store} keeps GazBoard up to date": "يحافظ {store} على تحديث GazBoard",
- "Updates": "التحديثات"
+ "Updates": "التحديثات",
+ "“{name}” is not available": "«{name}» غير متاح",
+ "Not available": "غير متاح",
+ "Opened {when}": "فُتحت {when}",
+ "Remove from Recent": "إزالة من الأخيرة",
+ "“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.": "لم تعد «{name}» في مجلد اللوحات هذا. حُذفت، أو أنها في مجلد لوحات آخر.",
+ "“{name}” could not be opened": "تعذّر فتح «{name}»",
+ "Search boards and folders…": "ابحث في اللوحات والمجلدات…",
+ "Search boards and folders": "ابحث في اللوحات والمجلدات",
+ "Nothing called “{words}”": "لا شيء باسم «{words}»",
+ "Keep typing to narrow it down": "واصل الكتابة لتضييق النتائج"
 }

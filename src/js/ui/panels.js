@@ -12,6 +12,8 @@ import { inkTrailSupported } from '../core/inktrail.js';
 import { PATTERN_SPACINGS } from '../core/render.js';
 import { todayStamp } from '../core/pages.js';
 import * as F from '../core/folders.js';
+import * as Recent from '../core/recent.js';
+import { scoreBoard } from './boardpicker.js';
 
 /**
  * How a paired computer that is NOT currently visible should be shown.
@@ -1566,12 +1568,167 @@ export function createPanels(app) {
     return app.settings.boardsPage === false ? boardsList(opts) : boardsGallery(opts);
   }
 
+  /*
+   * Recent boards, at the top of My boards: the last boards this device
+   * opened, with where each one is filed and when it was opened. A board the
+   * list remembers that is not here any more is shown greyed out and marked,
+   * with an × to take it off the list - never opened, and never silently
+   * dropped. `compact` is the side-panel list; the full page gets pictures.
+   */
+  /*
+   * Search, at the top of My boards: every board and folder, wherever it is
+   * filed, narrowing as you type - the same matching as the @ list and the
+   * emoji search. Typing a folder's name also finds the boards inside it.
+   * While there is a search the page shows only what it found; clearing it
+   * (the x, or Escape) puts the page back exactly as it was. The words stay
+   * while you work in My boards, and are gone the next time it is opened.
+   */
+  let searchWords = '';
+  function boardSearch(container, all, { compact = false } = {}) {
+    const input = h('input', { class: 'board-search-input', type: 'search', placeholder: t('Search boards and folders…'),
+      'aria-label': t('Search boards and folders'), autocomplete: 'off', spellcheck: 'false', value: searchWords });
+    const results = h('div', { class: 'search-results' + (compact ? ' compact' : ''), role: 'list', 'aria-live': 'polite' });
+    const box = h('div', { class: 'board-search' }, h('span', { class: 'bs-icon', html: icon('search', 16), 'aria-hidden': 'true' }), input);
+    const pathOf = (folderId) => [t('My boards'), ...F.folderPath(app.settings, folderId).map((f) => f.name)].join(' › ');
+    const mark = (text, q) => {
+      const ws = String(q).toLowerCase().split(/[\s\-_.,/]+/).filter(Boolean).sort((a, b) => b.length - a.length);
+      const out = h('span', {});
+      if (!ws.length) { out.textContent = text; return out; }
+      const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp('(' + ws.map(esc).join('|') + ')', 'gi');
+      let at = 0;
+      for (const m of String(text).matchAll(re)) {
+        if (m.index > at) out.append(text.slice(at, m.index));
+        out.append(h('mark', {}, m[0]));
+        at = m.index + m[0].length;
+      }
+      if (at < text.length) out.append(text.slice(at));
+      return out;
+    };
+    const draw = () => {
+      const q = input.value.trim();
+      searchWords = input.value;
+      container.classList.toggle('searching', !!q);
+      results.innerHTML = '';
+      if (!q) return;
+      const folders = F.folderList(app.settings)
+        .map((f) => ({ f, s: scoreBoard(f.name, q) })).filter((x) => x.s > 0)
+        .sort((a, b) => b.s - a.s).slice(0, 12).map((x) => x.f);
+      // a board answers by its own name first; failing that, by the folders it is filed in
+      const found = all.map((b) => {
+        const own = scoreBoard(b.name || t('Untitled board'), q);
+        if (own) return { b, s: own + 1000 };
+        const via = scoreBoard(F.folderPath(app.settings, F.folderOf(app.settings, b.id)).map((f) => f.name).join(' '), q);
+        return { b, s: via };
+      }).filter((x) => x.s > 0).sort((a, b) => b.s - a.s || (b.b.modified || 0) - (a.b.modified || 0)).map((x) => x.b);
+      if (!folders.length && !found.length) {
+        results.appendChild(h('p', { class: 'search-none' }, t('Nothing called “{words}”', { words: q })));
+        return;
+      }
+      // folders first, as a row of their own; then the boards
+      const folderRow = folders.length ? h('div', { class: 'folder-hits' }) : null;
+      if (folderRow) results.appendChild(folderRow);
+      results.appendChild(h('div', { class: 'recent-title' }, found.length === 1 ? t('1 board') : t('{n} boards', { n: found.length })));
+      for (const f of folders) {
+        const row = h('button', { class: 'search-hit folder-hit', role: 'listitem', 'data-search-folder': f.id, style: `--fc:${F.folderColour(f)}` },
+          h('span', { class: 'sh-icon', html: icon('folder', 22), style: `color:${F.folderColour(f)}` }),
+          h('span', { class: 'rt-text' }, h('b', { class: 'rt-name' }, mark(f.name, q)),
+            h('small', { class: 'rt-where' }, pathOf(F.folderPath(app.settings, f.id).slice(-2, -1)[0]?.id || null))));
+        row.addEventListener('click', () => { searchWords = ''; app.boardFolder = f.id; boards({ stay: true }); });
+        folderRow.appendChild(row);
+      }
+      for (const b of found.slice(0, 60)) {
+        const name = (b.id === app.store.doc.id ? app.store.doc.name : b.name) || t('Untitled board');
+        const row = h('button', { class: 'search-hit' + (b.id === app.store.doc.id ? ' current' : ''), role: 'listitem', 'data-search-board': b.id },
+          compact ? null : h('span', { class: 'rt-thumb' }, b.thumb
+            ? h('img', { src: b.thumb, alt: '', draggable: 'false', loading: 'lazy' })
+            : h('span', { class: 'bt-blank', html: icon('board', 24) })),
+          h('span', { class: 'rt-text' }, h('b', { class: 'rt-name' }, mark(name, q)),
+            h('small', { class: 'rt-where' }, mark(pathOf(F.folderOf(app.settings, b.id)), q))));
+        row.addEventListener('click', async () => {
+          if (b.id === app.store.doc.id) { close(); return; }
+          let data = null;
+          try { data = await window.board.boards.load(b.id); } catch { data = null; }
+          if (data) { searchWords = ''; await app.loadBoard(data); close(); }
+          else app.toast(t('“{name}” could not be opened', { name }), 'help');
+        });
+        results.appendChild(row);
+      }
+      if (found.length > 60) results.appendChild(h('p', { class: 'search-none' }, t('Keep typing to narrow it down')));
+    };
+    input.addEventListener('input', draw);
+    input.addEventListener('keydown', (e) => {
+      const hits = [...results.querySelectorAll('.search-hit')];
+      if (e.key === 'Escape' && input.value) { e.preventDefault(); e.stopPropagation(); input.value = ''; draw(); return; }
+      if (e.key === 'Enter' && hits[0]) { e.preventDefault(); hits[0].click(); return; }
+      if (e.key === 'ArrowDown' && hits[0]) { e.preventDefault(); hits[0].focus(); }
+    });
+    results.addEventListener('keydown', (e) => {
+      const hits = [...results.querySelectorAll('.search-hit')];
+      const i = hits.indexOf(document.activeElement);
+      if (i < 0) return;
+      if (e.key === 'ArrowDown' && hits[i + 1]) { e.preventDefault(); hits[i + 1].focus(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); (hits[i - 1] || input).focus(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); input.value = ''; draw(); input.focus(); }
+    });
+    draw();
+    // put the caret back where it was when the page is drawn again with words still in the box
+    if (searchWords.trim()) requestAnimationFrame(() => { if (input.isConnected) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } });
+    return { box, results, input };
+  }
+
+  function recentSection(all, { compact = false } = {}) {
+    // the side panel is narrow and tall already: five rows there, pictures for eight on the page
+    const items = Recent.entries(app.settings, all, compact ? 5 : Recent.SHOW);
+    if (!items.length) return null;
+    const lang = currentLanguage();
+    const where = (id) => {
+      const path = F.folderPath(app.settings, F.folderOf(app.settings, id));
+      return [t('My boards'), ...path.map((f) => f.name)].join(' › ');
+    };
+    const row = h('div', { class: 'recent-row' + (compact ? ' compact' : ''), role: 'list' });
+    for (const r of items) {
+      const gone = !r.board;
+      // the board in front may have been renamed since it was last saved
+      const name = (r.id === app.store.doc.id ? app.store.doc.name : r.name) || t('Untitled board');
+      const tile = h('button', { class: 'recent-tile' + (gone ? ' gone' : '') + (r.id === app.store.doc.id ? ' current' : ''), role: 'listitem',
+        'data-recent': r.id, title: gone ? t('“{name}” is not available', { name }) : name },
+        compact ? null : h('span', { class: 'rt-thumb' }, !gone && r.board.thumb
+          ? h('img', { src: r.board.thumb, alt: '', draggable: 'false', loading: 'lazy' })
+          : h('span', { class: 'bt-blank', html: icon('board', 26) })),
+        h('span', { class: 'rt-text' },
+          h('b', { class: 'rt-name' }, name),
+          h('small', { class: 'rt-where' }, gone ? t('Not available') : where(r.id)),
+          h('small', { class: 'rt-when' }, t('Opened {when}', { when: Recent.ago(r.at, lang) }))),
+        gone ? h('span', { class: 'icon-btn rt-forget', title: t('Remove from Recent'), 'data-forget': r.id, html: icon('close', 14), onclick: (e) => {
+          e.stopPropagation();
+          if (Recent.forget(app.settings, r.id)) app.keepRecent();
+          boards({ stay: true });
+        } }) : null);
+      tile.addEventListener('click', async () => {
+        if (gone) {
+          app.toast(t('“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.', { name }), 'help', 6000);
+          return;
+        }
+        if (r.id === app.store.doc.id) { close(); return; }
+        let data = null;
+        try { data = await window.board.boards.load(r.id); } catch { data = null; }
+        if (data) { await app.loadBoard(data); close(); }
+        else { app.toast(t('“{name}” could not be opened', { name }), 'help'); boards({ stay: true }); }
+      });
+      row.appendChild(tile);
+    }
+    return h('section', { class: 'recent', 'aria-label': t('Recent') },
+      h('div', { class: 'recent-title' }, t('Recent')), row);
+  }
+
   async function boardsGallery(opts = {}) {
     // Re-drawing in place (after a move, a new folder, a step into a folder)
     // must not go through open(), which treats a second open as "close". And
     // asking for My boards while it is already showing just refreshes it: it
     // covers the whole window, so there is no button behind it to toggle.
     if (!(currentKey === 'boards' && document.getElementById('boardList'))) {
+      searchWords = '';          // a fresh look at My boards starts with no search
       open('boards', t('My boards'), () => h('div', { id: 'boardList' }, h('p', { style: 'color:var(--text-2)' }, t('Loading…'))));
     }
     const all = await window.board.boards.list();
@@ -1654,6 +1811,9 @@ export function createPanels(app) {
       crumbs.appendChild(c);
     });
     main.appendChild(h('div', { class: 'gal-head' }, crumbs, actions));
+    const search = boardSearch(main, all);
+    main.appendChild(search.box);
+    main.appendChild(search.results);
 
     const chosen = new Set();
     const boxes = [];
@@ -1702,6 +1862,9 @@ export function createPanels(app) {
         syncChosen();
       }
     });
+
+    // recent boards, on the first page of My boards only: inside a folder you are already somewhere
+    if (!here) { const rec = recentSection(all); if (rec) main.appendChild(rec); }
 
     /* -- folders here, as coloured tiles -- */
     const folders = F.childFolders(app.settings, here);
@@ -2001,6 +2164,7 @@ export function createPanels(app) {
     // Re-drawing in place (after a move, a new folder, a step into a folder)
     // must not go through open(), which treats a second open as "close".
     if (!(opts && opts.stay && currentKey === 'boards' && document.getElementById('boardList'))) {
+      searchWords = '';          // a fresh look at My boards starts with no search
       open('boards', t('My boards'), () => h('div', { id: 'boardList' }, h('p', { style: 'color:var(--text-2)' }, t('Loading…'))));
     }
     const all = await window.board.boards.list();
@@ -2049,6 +2213,10 @@ export function createPanels(app) {
       crumbs.appendChild(c);
     });
     host.appendChild(crumbs);
+    const search = boardSearch(host, all, { compact: true });
+    host.insertBefore(search.box, host.firstChild);
+    host.appendChild(search.results);
+    if (!here) { const rec = recentSection(all, { compact: true }); if (rec) host.appendChild(rec); }
 
     const chosen = new Set();
     const boxes = [];

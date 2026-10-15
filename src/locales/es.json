@@ -1119,5 +1119,15 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "Desinstalar GazBoard borra estas pizarras. ¿Guardar una copia segura en una carpeta tuya?",
  "Choose folder": "Elegir carpeta",
  "{store} keeps GazBoard up to date": "{store} mantiene GazBoard actualizado",
- "Updates": "Actualizaciones"
+ "Updates": "Actualizaciones",
+ "“{name}” is not available": "«{name}» no está disponible",
+ "Not available": "No disponible",
+ "Opened {when}": "Abierta {when}",
+ "Remove from Recent": "Quitar de Recientes",
+ "“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.": "«{name}» ya no está en esta carpeta de pizarras. Se eliminó o está en otra carpeta de pizarras.",
+ "“{name}” could not be opened": "No se pudo abrir «{name}»",
+ "Search boards and folders…": "Buscar pizarras y carpetas…",
+ "Search boards and folders": "Buscar pizarras y carpetas",
+ "Nothing called “{words}”": "Nada se llama «{words}»",
+ "Keep typing to narrow it down": "Sigue escribiendo para afinar"
 }

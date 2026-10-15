@@ -1119,5 +1119,15 @@
  "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "Desinstalar o GazBoard apaga estes quadros. Guardar uma cópia segura em uma pasta sua?",
  "Choose folder": "Escolher pasta",
  "{store} keeps GazBoard up to date": "O {store} mantém o GazBoard atualizado",
- "Updates": "Atualizações"
+ "Updates": "Atualizações",
+ "“{name}” is not available": "“{name}” não está disponível",
+ "Not available": "Indisponível",
+ "Opened {when}": "Aberto {when}",
+ "Remove from Recent": "Remover dos recentes",
+ "“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.": "“{name}” não está mais nesta pasta de quadros. Foi excluído ou está em outra pasta de quadros.",
+ "“{name}” could not be opened": "Não foi possível abrir “{name}”",
+ "Search boards and folders…": "Buscar quadros e pastas…",
+ "Search boards and folders": "Buscar quadros e pastas",
+ "Nothing called “{words}”": "Nada se chama “{words}”",
+ "Keep typing to narrow it down": "Continue digitando para filtrar"
 }

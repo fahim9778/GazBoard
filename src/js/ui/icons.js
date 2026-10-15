@@ -28,6 +28,7 @@ const P = {
   zoomOut: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM16 16l4.5 4.5M8 11h6',
   fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
   close: 'M6 6l12 12M18 6L6 18',
+  search: 'M10.5 4a6.5 6.5 0 1 1 0 13a6.5 6.5 0 0 1 0-13zM15.4 15.4L20 20',
   back: 'M15 5l-7 7 7 7',
   chevronDown: 'M6 9l6 6 6-6',
   chevronUp: 'M6 15l6-6 6 6',

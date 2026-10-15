@@ -16662,6 +16662,190 @@ module.exports.run = async (win, app) => {
     (process.platform === 'darwin' || enMenu.includes('File')),
     `lang ${enUi.lang}, dir ${enUi.dir}, Present button "${enUi.present}", zoom bar on the left: ${enUi.zoombarLeft}, menu: ${enMenu.join(' | ')}`);
 
+  /* ---- Recent boards: the last boards opened, at the top of My boards ---- */
+  {
+    const unit = await js(`const Rc = await import('app://board/js/core/recent.js');
+      const s = {};
+      for (let i = 0; i < 15; i++) Rc.noteOpened(s, { id: 'u' + i, name: 'B' + i }, 1000 + i * 100000);
+      const capped = s.recentBoards.length, newest = s.recentBoards[0].id;
+      Rc.noteOpened(s, { id: 'u5', name: 'B5' }, 1e10);
+      const again = s.recentBoards[0].id, once = s.recentBoards.filter((r) => r.id === 'u5').length;
+      const shown = Rc.entries(s, [{ id: 'u5', name: 'Renamed elsewhere' }]);
+      return { capped, newest, again, once, length: shown.length, firstName: shown[0].name, firstLive: !!shown[0].board, secondLive: !!shown[1].board,
+        oldSettings: Rc.entries({}, [{ id: 'x' }]).length, junk: Rc.entries({ recentBoards: 'nonsense' }, []).length,
+        junkItems: Rc.entries({ recentBoards: [null, 7, { id: '' }, { id: 'ok', at: 5 }] }, []).length,
+        forgot: Rc.forget(s, 'u5'), afterForget: s.recentBoards.some((r) => r.id === 'u5'),
+        words: [Rc.ago(Date.now() - 5000, 'en'), Rc.ago(Date.now() - 3 * 3600e3, 'en'), Rc.ago(Date.now() - 86400e3, 'en'), Rc.ago(Date.now() - 3 * 86400e3, 'de')] };`);
+    check('Recent remembers twelve boards, newest first, each once, and moves a reopened board back to the top',
+      unit.capped === 12 && unit.newest === 'u14' && unit.again === 'u5' && unit.once === 1, JSON.stringify(unit));
+    check('Recent shows a board under its current name, marks the ones not here, and shrugs off old or damaged settings',
+      unit.length === 8 && unit.firstName === 'Renamed elsewhere' && unit.firstLive && !unit.secondLive
+        && unit.oldSettings === 0 && unit.junk === 0 && unit.junkItems === 1 && unit.forgot && !unit.afterForget, JSON.stringify(unit));
+    check('Recent says when in plain words, in the app’s language',
+      unit.words[0] === 'now' && unit.words[1] === '3 hours ago' && unit.words[2] === 'yesterday' && /vor 3 Tagen/.test(unit.words[3]), JSON.stringify(unit.words));
+
+    const live = await js(`const a = window.app; const F = await import('app://board/js/core/folders.js');
+      const wait = async (fn, ms = 4000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 50)); } return null; };
+      const before = { list: a.settings.recentBoards, page: a.settings.boardsPage, folders: JSON.stringify({ folders: a.settings.folders, boardFolders: a.settings.boardFolders }) };
+      a.settings.recentBoards = [];
+      const ids = {};
+      for (const name of ['Recent one', 'Recent two', 'Recent three']) {
+        a.newBoard(true); a.store.rename(name);
+        a.store.add({ id: 'r-' + name, type: 'shape', kind: 'rect', x: 0, y: 0, w: 50, h: 40, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'x');
+        await a.persist({ force: true }); ids[name] = a.store.doc.id;
+      }
+      // opened in this order: three, one, two - so two is the newest
+      for (const name of ['Recent three', 'Recent one', 'Recent two']) await a.loadBoard(await window.board.boards.load(ids[name]), { silent: true });
+      const fid = F.createFolder(a.settings, 'Recent maths', null);
+      F.moveBoard(a.settings, ids['Recent one'], fid);
+      // renamed while open
+      const title = document.getElementById('boardTitle'); title.value = 'Recent two, renamed'; title.dispatchEvent(new Event('change'));
+      // gone behind GazBoard's back
+      await window.board.boards.remove(ids['Recent three']);
+      a.settings.boardsPage = true;
+      await a.panels.boards();
+      await wait(() => document.querySelector('#boardList .recent [data-recent]'));
+      const tiles = [...document.querySelectorAll('#boardList .recent [data-recent]')];
+      const seen = tiles.map((el) => ({ id: el.dataset.recent, name: el.querySelector('.rt-name')?.textContent, where: el.querySelector('.rt-where')?.textContent,
+        when: el.querySelector('.rt-when')?.textContent, gone: el.classList.contains('gone'), thumb: !!el.querySelector('.rt-thumb img'), cross: !!el.querySelector('[data-forget]') }));
+      const order = seen.map((x) => Object.keys(ids).find((k) => ids[k] === x.id));
+      const firstAboveFolders = (() => { const r = document.querySelector('#boardList .recent'), f = document.querySelector('#boardList .board-grid'); return !!(r && f && (r.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING)); })();
+      // a missing board is not opened
+      const openBefore = a.store.doc.id;
+      document.querySelector('#boardList .recent [data-recent="' + ids['Recent three'] + '"]').click();
+      await new Promise((r) => setTimeout(r, 300));
+      const stayed = a.store.doc.id === openBefore && !!document.getElementById('boardList');
+      // the x takes it off the list
+      document.querySelector('#boardList .recent [data-forget="' + ids['Recent three'] + '"]').click();
+      await wait(() => !document.querySelector('#boardList .recent [data-recent="' + ids['Recent three'] + '"]') && document.querySelector('#boardList .recent [data-recent]'));
+      const afterCross = [...document.querySelectorAll('#boardList .recent [data-recent]')].map((el) => el.dataset.recent);
+      const stored = (JSON.parse(localStorage.getItem('gazboard.settings') || '{}').recentBoards || []).map((r) => r.id);
+      // tapping a live one opens it
+      document.querySelector('#boardList .recent [data-recent="' + ids['Recent one'] + '"]').click();
+      await wait(() => a.store.doc.id === ids['Recent one'] && !document.getElementById('panel').classList.contains('open'));
+      const opened = a.store.doc.id === ids['Recent one'], closed = !document.getElementById('panel').classList.contains('open');
+      // the side-panel list has it too, as plain rows
+      a.settings.boardsPage = false;
+      await a.panels.boards();
+      await wait(() => document.querySelector('#boardList .recent-row.compact [data-recent]'));
+      const compact = [...document.querySelectorAll('#boardList .recent-row.compact [data-recent]')].map((el) => el.dataset.recent);
+      a.panels.close?.();
+      // deleting a board in GazBoard takes it off the list, it is not "missing"
+      await a.deleteBoard(ids['Recent two']);
+      const afterDelete = a.settings.recentBoards.map((r) => r.id);
+      // tidy up
+      await a.deleteBoard(ids['Recent one']);
+      F.deleteFolder(a.settings, fid);
+      const restored = JSON.parse(before.folders); a.settings.folders = restored.folders; a.settings.boardFolders = restored.boardFolders;
+      a.settings.recentBoards = before.list || []; a.settings.boardsPage = before.page; a.saveSettings();
+      return { ids, seen, order, firstAboveFolders, stayed, afterCross, stored, opened, closed, compact, afterDelete };`);
+    const one = live.ids['Recent one'], two = live.ids['Recent two'], three = live.ids['Recent three'];
+    const byId = (id) => live.seen.find((x) => x.id === id) || {};
+    check('My boards opens with Recent at the top: the boards last opened, newest first, above the boards themselves',
+      live.order.join(',') === 'Recent two,Recent one,Recent three' && live.firstAboveFolders,
+      `order ${JSON.stringify(live.order)}; recent above the boards: ${live.firstAboveFolders}`);
+    check('each recent board shows its picture, where it is filed and when it was opened, under the name it has now',
+      byId(two).name === 'Recent two, renamed' && byId(one).where === 'My boards › Recent maths' && byId(two).where === 'My boards'
+        && byId(one).thumb && /now|second|minute/.test(byId(one).when || ''), JSON.stringify(live.seen));
+    check('a board that is not there any more is marked not available, with an x, and tapping it opens nothing',
+      byId(three).gone && byId(three).where === 'Not available' && byId(three).cross && !byId(one).gone && !byId(one).cross && live.stayed,
+      JSON.stringify({ three: byId(three), stayed: live.stayed }));
+    check('the x takes it off the list, on screen and in the saved settings',
+      !live.afterCross.includes(three) && live.afterCross.length === 2 && !live.stored.includes(three) && live.stored[0] === two,
+      JSON.stringify({ afterCross: live.afterCross, stored: live.stored }));
+    check('tapping a recent board opens it and puts My boards away',
+      live.opened && live.closed, JSON.stringify({ opened: live.opened, closed: live.closed }));
+    check('the plain list version of My boards has Recent too, with the board just opened first',
+      live.compact[0] === one && live.compact.includes(two), JSON.stringify(live.compact));
+    check('a board deleted in GazBoard simply leaves Recent, rather than turning up as missing',
+      !live.afterDelete.includes(two) && live.afterDelete[0] === one, JSON.stringify(live.afterDelete));
+  }
+
+  /* ---- Search in My boards: every board and folder, narrowing as you type ---- */
+  {
+    const r = await js(`const a = window.app; const F = await import('app://board/js/core/folders.js');
+      const wait = async (fn, ms = 4000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((res) => setTimeout(res, 50)); } return null; };
+      const before = { page: a.settings.boardsPage, folders: JSON.stringify({ folders: a.settings.folders, boardFolders: a.settings.boardFolders }), recent: a.settings.recentBoards, here: a.boardFolder };
+      const ids = {};
+      for (const name of ['Binary search lecture', 'Fractions quiz', 'Photosynthesis', 'গণিত ক্লাস']) {
+        a.newBoard(true); a.store.rename(name);
+        a.store.add({ id: 's-' + name, type: 'shape', kind: 'rect', x: 0, y: 0, w: 50, h: 40, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'x');
+        await a.persist({ force: true }); ids[name] = a.store.doc.id;
+      }
+      const bio = F.createFolder(a.settings, 'Biology', null), other = F.createFolder(a.settings, 'Elsewhere', null);
+      F.moveBoard(a.settings, ids['Photosynthesis'], bio);
+      a.newBoard(true);
+      a.settings.boardsPage = true; a.boardFolder = other;          // looking inside a different folder: search still finds everything
+      a.panels.close?.(); await new Promise((res) => setTimeout(res, 250));
+      await a.panels.boards();
+      const input = await wait(() => document.querySelector('#boardList .board-search-input'));
+      const type = async (words) => { const i = document.querySelector('#boardList .board-search-input'); if (!i) throw new Error('no search box when typing ' + words + '; panel open ' + document.getElementById('panel').classList.contains('open') + '; boardList ' + !!document.getElementById('boardList') + '; here ' + a.boardFolder); i.value = words; i.dispatchEvent(new Event('input')); await new Promise((res) => setTimeout(res, 60)); };
+      const shown = () => [...document.querySelectorAll('#boardList .search-results [data-search-board]')].map((el) => ({ id: el.dataset.searchBoard, name: el.querySelector('.rt-name')?.textContent, where: el.querySelector('.rt-where')?.textContent, mark: el.querySelector('.rt-name mark')?.textContent }));
+      const name = (id) => Object.keys(ids).find((k) => ids[k] === id) || id;
+      const gridHidden = () => { const g = document.querySelector('#boardList .board-grid'); return !g || getComputedStyle(g).display === 'none'; };
+      const out = { emptyAtStart: input.value === '', resultsHiddenAtStart: getComputedStyle(document.querySelector('#boardList .search-results')).display === 'none' };
+      await type('bin');
+      out.bin = shown().map((x) => ({ ...x, id: name(x.id) })); out.gridHiddenWhileSearching = gridHidden();
+      await type('biology');
+      out.bio = { folders: [...document.querySelectorAll('#boardList [data-search-folder]')].map((el) => el.textContent), boards: shown().map((x) => ({ ...x, id: name(x.id) })) };
+      await type('গণিত');
+      out.bangla = shown().map((x) => name(x.id));
+      await type('zzzz nothing');
+      out.none = document.querySelector('#boardList .search-none')?.textContent || null;
+      // the words survive the page being drawn again while you work in it
+      await type('quiz');
+      await a.panels.boards({ stay: true });
+      await wait(() => document.querySelector('#boardList .search-results [data-search-board]'));
+      out.kept = { value: document.querySelector('#boardList .board-search-input').value, hits: shown().map((x) => name(x.id)), searching: !!document.querySelector('#boardList .searching, #boardList.searching') };
+      // Escape clears it and puts the page back
+      document.querySelector('#boardList .board-search-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      await new Promise((res) => setTimeout(res, 60));
+      out.cleared = { value: document.querySelector('#boardList .board-search-input').value, hits: shown().length, gridBack: !gridHidden(), stillOpen: document.getElementById('panel').classList.contains('open') };
+      // a folder in the results takes you into it
+      await type('biol');
+      document.querySelector('#boardList [data-search-folder]').click();
+      await wait(() => a.boardFolder === bio && document.querySelector('#boardList .board-search-input') && !document.querySelector('#boardList .searching, #boardList.searching'));
+      out.intoFolder = { here: a.boardFolder === bio, cleared: (document.querySelector('#boardList .board-search-input')?.value || '') === '' };
+      // Enter opens the best match
+      await type('fract');
+      document.querySelector('#boardList .board-search-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await wait(() => a.store.doc.id === ids['Fractions quiz'] && !document.getElementById('panel').classList.contains('open'));
+      out.enterOpened = a.store.doc.id === ids['Fractions quiz'];
+      // opened again later, My boards starts with no search
+      await a.panels.boards();
+      await wait(() => document.querySelector('#boardList .board-search-input'));
+      out.freshEmpty = document.querySelector('#boardList .board-search-input').value === '';
+      a.panels.close?.(); await new Promise((res) => setTimeout(res, 250));
+      // the plain list has the same search
+      a.settings.boardsPage = false; a.boardFolder = null;
+      await a.panels.boards();
+      await wait(() => document.querySelector('#boardList .board-search-input'));
+      await type('photo');
+      out.list = { hits: shown().map((x) => name(x.id)), compact: !!document.querySelector('#boardList .search-results.compact'), rowsHidden: getComputedStyle(document.querySelector('#boardList .recent, #boardList .crumbs') || document.body).display };
+      a.panels.close?.();
+      for (const id of Object.values(ids)) await a.deleteBoard(id);
+      const restored = JSON.parse(before.folders); a.settings.folders = restored.folders; a.settings.boardFolders = restored.boardFolders;
+      a.settings.boardsPage = before.page; a.settings.recentBoards = before.recent || []; a.boardFolder = before.here || null; a.saveSettings();
+      return out;`);
+    check('My boards has a search box, empty to begin with, and nothing in the way until something is typed',
+      r.emptyAtStart && r.resultsHiddenAtStart, JSON.stringify({ emptyAtStart: r.emptyAtStart, resultsHiddenAtStart: r.resultsHiddenAtStart }));
+    check('typing finds boards in every folder at once, with the words marked, and the usual page steps aside',
+      r.bin.length === 1 && r.bin[0].id === 'Binary search lecture' && r.bin[0].mark === 'Bin' && r.gridHiddenWhileSearching,
+      JSON.stringify({ bin: r.bin, gridHidden: r.gridHiddenWhileSearching }));
+    check('a folder’s name finds the folder and the boards filed in it, each shown with where it is',
+      r.bio.folders.some((f) => f.includes('Biology')) && r.bio.boards.length === 1 && r.bio.boards[0].id === 'Photosynthesis' && r.bio.boards[0].where === 'My boards › Biology',
+      JSON.stringify(r.bio));
+    check('search works in Bangla too, and says so plainly when nothing matches',
+      r.bangla.length === 1 && r.bangla[0] === 'গণিত ক্লাস' && /zzzz nothing/.test(r.none || ''), JSON.stringify({ bangla: r.bangla, none: r.none }));
+    check('the words stay while you work in My boards, and Escape clears them without closing it',
+      r.kept.value === 'quiz' && r.kept.hits.join() === 'Fractions quiz' && r.kept.searching
+        && r.cleared.value === '' && r.cleared.hits === 0 && r.cleared.gridBack && r.cleared.stillOpen, JSON.stringify({ kept: r.kept, cleared: r.cleared }));
+    check('a folder in the results opens that folder; Enter opens the best board; the next visit starts fresh',
+      r.intoFolder.here && r.intoFolder.cleared && r.enterOpened && r.freshEmpty, JSON.stringify({ intoFolder: r.intoFolder, enter: r.enterOpened, fresh: r.freshEmpty }));
+    check('the plain list version of My boards searches the same way, in rows',
+      r.list.hits.join() === 'Photosynthesis' && r.list.compact && r.list.rowsHidden === 'none', JSON.stringify(r.list));
+  }
+
   /* ---- desktop boards folder ---- */
   const storageRoot = path.join(os.tmpdir(), `gazboard-storage-smoke-${process.pid}`);
   const copiedFolder = path.join(storageRoot, 'copied');

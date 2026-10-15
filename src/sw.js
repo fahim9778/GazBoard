@@ -55,6 +55,7 @@ const PRECACHE_ASSETS = [
   './js/core/emoji.js',
   './js/core/erase.js',
   './js/core/folders.js',
+  './js/core/recent.js',
   './js/core/maths.js',
   './js/ui/mathedit.js',
   './js/core/hit.js',

@@ -19,6 +19,7 @@ import { isNewer } from './core/version.js';
 import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
 import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard, catalogueOf, mergeCatalogue } from './core/folders.js';
+import * as Recent from './core/recent.js';
 import { TextEditor } from './ui/textedit.js';
 import { MathEditor } from './ui/mathedit.js';
 import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './core/maths.js';
@@ -64,7 +65,7 @@ export const DEFAULT_SETTINGS = {
   eraserSize: 30, eraserMode: 'partial',
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,
   noteColor: '#ffd94a', noteSize: 200, noteFont: 'hand',
-  emojiChar: '\u2705', emojiSize: 96, emojiRecent: [],
+  emojiChar: '\u2705', emojiSize: 96, emojiRecent: [], recentBoards: [],
   textColor: '#201f1e', textSize: 32, textFont: 'hand',
   shapeKind: 'rect', arrowRoute: 'straight', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
@@ -837,9 +838,21 @@ class App {
    *
    * @returns {boolean} whether the board that was deleted was the open one
    */
+  /*
+   * Recent boards change every time a board is opened, so they are written
+   * straight to this device's settings - not through saveSettings, which also
+   * rewrites the folders file beside the boards, and a shared folder should not
+   * churn every time somebody opens a board.
+   */
+  keepRecent() {
+    try { localStorage.setItem('gazboard.settings', JSON.stringify(this.settings)); } catch { /* storage refused: the list lives until the app closes */ }
+  }
+
   async deleteBoard(id) {
     const wasOpen = id === this.store.doc.id;
     await window.board.boards.remove(id);
+    // deleted on purpose, here: nothing to mark as missing, it simply goes
+    if (Recent.forget(this.settings, id)) this.keepRecent();
     this.refreshBoardDirectory();          // links to it now say it is gone
     if (wasOpen) {
       this.textEditor.cancel();
@@ -942,6 +955,7 @@ class App {
     this.syncUI();
     this.surface.invalidate();
     localStorage.setItem('gazboard.lastBoard', this.store.doc.id);
+    if (Recent.noteOpened(this.settings, this.store.doc)) this.keepRecent();
     if (!opts.silent) this.toast(t('Opened {name}', { name: this.store.doc.name }));
     if (!opts.noMigrationPrompt) this.checkStrayContent(data);
     this.refreshBoardDirectory();
@@ -2793,6 +2807,9 @@ class App {
       if (e.key !== 'Escape') return;
       if (this.dismissOverlay()) { e.preventDefault(); e.stopPropagation(); return; }
       if (popoverOpen()) { closePopover(); e.preventDefault(); e.stopPropagation(); return; }
+      // Escape in the My boards search clears the words first; only an empty search lets it close the page
+      const el = e.target;
+      if (el instanceof Element && el.closest('.board-search, .search-results') && document.querySelector('#boardList .board-search-input')?.value) return;
       if (this.panels.open) { this.panels.close(); e.preventDefault(); e.stopPropagation(); }
     }, true);
 
@@ -4014,7 +4031,10 @@ class App {
 
   wireGlobalEvents() {
     const titleEl = document.getElementById('boardTitle');
-    titleEl.addEventListener('change', () => this.store.rename(titleEl.value.trim() || t('Untitled board')));
+    titleEl.addEventListener('change', () => {
+      this.store.rename(titleEl.value.trim() || t('Untitled board'));
+      if (Recent.rename(this.settings, this.store.doc.id, this.store.doc.name)) this.keepRecent();
+    });
     titleEl.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') titleEl.blur(); });
 
     window.board.onMenu((id) => this.command(id));
