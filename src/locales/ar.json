@@ -1125,7 +1125,6 @@
  "Opened {when}": "فُتحت {when}",
  "Remove from Recent": "إزالة من الأخيرة",
  "“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.": "لم تعد «{name}» في مجلد اللوحات هذا. حُذفت، أو أنها في مجلد لوحات آخر.",
- "“{name}” could not be opened": "تعذّر فتح «{name}»",
  "Search boards and folders…": "ابحث في اللوحات والمجلدات…",
  "Search boards and folders": "ابحث في اللوحات والمجلدات",
  "Nothing called “{words}”": "لا شيء باسم «{words}»",

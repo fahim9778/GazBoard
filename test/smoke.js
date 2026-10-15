@@ -15798,6 +15798,8 @@ module.exports.run = async (win, app) => {
       }
       a.settings.folders = []; a.settings.boardFolders = {}; a.boardFolder = null;
       a.askText = async () => 'CSE221';
+      // this is about folders: an empty Recent keeps the boards where a small window can reach them
+      a.settings.recentBoards = [];
       if (a.panels.open) a.panels.close();
       await a.panels.boards(); await new Promise((res) => setTimeout(res, 300));
       document.querySelector('[data-new-folder]').click();
@@ -15807,7 +15809,7 @@ module.exports.run = async (win, app) => {
     const centre = (sel) => js(`const el = document.querySelector('${sel}'); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };`);
     // Both ends measured in ONE layout: scrolling to one and then the other
     // would leave the first position stale on a machine with many boards.
-    const ends = await js(`const body = document.getElementById('panelBody'); body.scrollTop = 0;
+    const ends = await js(`const body = document.querySelector('#boardList .gal-main') || document.getElementById('panelBody'); body.scrollTop = 0;
       const f = document.querySelector('#boardList [data-folder]'), b = document.querySelector('#boardList [data-board="fold-a"]');
       if (!f || !b) return null;
       const br = b.getBoundingClientRect(), pr = body.getBoundingClientRect();
@@ -15887,7 +15889,7 @@ module.exports.run = async (win, app) => {
       for (let i = 1; i <= 6; i++) { await cdp('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pt({ x: tf2.x, y: tf2.y + i * 6 }) }); await sleep(16); }
       await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await sleep(300);
       const afterSwipe = await js(`const F = await import('app://board/js/core/folders.js'); return F.folderOf(window.app.settings, 'fold-b');`);
-      const both = await js(`const body = document.getElementById('panelBody'); body.scrollTop = 0;
+      const both = await js(`const body = document.querySelector('#boardList .gal-main') || document.getElementById('panelBody'); body.scrollTop = 0;
         const f = document.querySelector('#boardList [data-folder]'), b = document.querySelector('#boardList [data-board="fold-b"]');
         const br = b.getBoundingClientRect(), pr = body.getBoundingClientRect();
         if (br.bottom > pr.bottom - 50) body.scrollTop += br.bottom - (pr.bottom - 50);
@@ -15930,7 +15932,7 @@ module.exports.run = async (win, app) => {
       const bar = document.querySelector('[data-move-selected]');
       return { target, other, label: bar && bar.textContent, enabled: bar && !bar.disabled };`);
     // drag one of the ticked boards with the mouse: all three go
-    const ends = await js(`const body = document.getElementById('panelBody'); body.scrollTop = 0;
+    const ends = await js(`const body = document.querySelector('#boardList .gal-main') || document.getElementById('panelBody'); body.scrollTop = 0;
       const f = document.querySelector('#boardList [data-folder="${setup.target}"]'), b = document.querySelector('#boardList [data-board="multi-2"]');
       const br = b.getBoundingClientRect(), pr = body.getBoundingClientRect();
       if (br.bottom > pr.bottom - 50) body.scrollTop += br.bottom - (pr.bottom - 50);
@@ -15984,7 +15986,7 @@ module.exports.run = async (win, app) => {
       if (a.panels.open) a.panels.close();
       await a.panels.boards(); await new Promise((res) => setTimeout(res, 300));
       for (const id of ['out-1', 'out-2']) document.querySelector('#boardList [data-board="' + id + '"]').parentElement.querySelector('input[type=checkbox]').click();
-      const body = document.getElementById('panelBody'); body.scrollTop = 0;
+      const body = document.querySelector('#boardList .gal-main') || document.getElementById('panelBody'); body.scrollTop = 0;
       const crumb = [...document.querySelectorAll('#boardList .crumb')].find((c) => c.textContent === 'My boards');
       const b = document.querySelector('#boardList [data-board="out-2"]');
       const c = (el) => { const r = el.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; };
@@ -16685,7 +16687,8 @@ module.exports.run = async (win, app) => {
       unit.words[0] === 'now' && unit.words[1] === '3 hours ago' && unit.words[2] === 'yesterday' && /vor 3 Tagen/.test(unit.words[3]), JSON.stringify(unit.words));
 
     const live = await js(`const a = window.app; const F = await import('app://board/js/core/folders.js');
-      const wait = async (fn, ms = 4000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 50)); } return null; };
+      const wait = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 50)); } return null; };
+      const clickOn = async (sel) => { const el = await wait(() => document.querySelector(sel)); if (!el) throw new Error('nothing to click at ' + sel + ' - on screen: ' + (document.getElementById('boardList')?.innerText || '(My boards not open)').replace(/\\s+/g, ' ').slice(0, 300)); el.click(); return el; };
       const before = { list: a.settings.recentBoards, page: a.settings.boardsPage, folders: JSON.stringify({ folders: a.settings.folders, boardFolders: a.settings.boardFolders }) };
       a.settings.recentBoards = [];
       const ids = {};
@@ -16707,21 +16710,31 @@ module.exports.run = async (win, app) => {
       await wait(() => document.querySelector('#boardList .recent [data-recent]'));
       const tiles = [...document.querySelectorAll('#boardList .recent [data-recent]')];
       const seen = tiles.map((el) => ({ id: el.dataset.recent, name: el.querySelector('.rt-name')?.textContent, where: el.querySelector('.rt-where')?.textContent,
-        when: el.querySelector('.rt-when')?.textContent, gone: el.classList.contains('gone'), thumb: !!el.querySelector('.rt-thumb img'), cross: !!el.querySelector('[data-forget]') }));
+        when: el.querySelector('.rt-when')?.textContent, gone: el.classList.contains('gone'), thumb: !!el.querySelector('.bt-thumb img, .rt-thumb img'), cross: !!el.querySelector('[data-forget]'),
+        move: !!el.querySelector('[data-move]'), tickBox: !!el.closest('.board-wrap')?.querySelector('input[type=checkbox]') }));
+      // ticking a board in Recent ticks the same board below it, and the selection counts it once
+      const recentTick = document.querySelector('#boardList .recent [data-recent="' + ids['Recent one'] + '"]')?.closest('.board-wrap')?.querySelector('input[type=checkbox]');
+      let ticking = null;
+      if (recentTick) {
+        recentTick.click();
+        const below = document.querySelector('#boardList .gal-main > .board-grid [data-board="' + ids['Recent one'] + '"]')?.closest('.board-wrap')?.querySelector('input[type=checkbox]');
+        ticking = { recent: recentTick.checked, below: below ? below.checked : 'not in this folder', button: document.querySelector('#boardList [data-move-selected]')?.textContent };
+        recentTick.click();
+      }
       const order = seen.map((x) => Object.keys(ids).find((k) => ids[k] === x.id));
       const firstAboveFolders = (() => { const r = document.querySelector('#boardList .recent'), f = document.querySelector('#boardList .board-grid'); return !!(r && f && (r.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING)); })();
       // a missing board is not opened
       const openBefore = a.store.doc.id;
-      document.querySelector('#boardList .recent [data-recent="' + ids['Recent three'] + '"]').click();
+      await clickOn('#boardList .recent [data-recent="' + ids['Recent three'] + '"]');
       await new Promise((r) => setTimeout(r, 300));
       const stayed = a.store.doc.id === openBefore && !!document.getElementById('boardList');
       // the x takes it off the list
-      document.querySelector('#boardList .recent [data-forget="' + ids['Recent three'] + '"]').click();
+      await clickOn('#boardList .recent [data-forget="' + ids['Recent three'] + '"]');
       await wait(() => !document.querySelector('#boardList .recent [data-recent="' + ids['Recent three'] + '"]') && document.querySelector('#boardList .recent [data-recent]'));
       const afterCross = [...document.querySelectorAll('#boardList .recent [data-recent]')].map((el) => el.dataset.recent);
       const stored = (JSON.parse(localStorage.getItem('gazboard.settings') || '{}').recentBoards || []).map((r) => r.id);
       // tapping a live one opens it
-      document.querySelector('#boardList .recent [data-recent="' + ids['Recent one'] + '"]').click();
+      await clickOn('#boardList .recent [data-recent="' + ids['Recent one'] + '"]');
       await wait(() => a.store.doc.id === ids['Recent one'] && !document.getElementById('panel').classList.contains('open'));
       const opened = a.store.doc.id === ids['Recent one'], closed = !document.getElementById('panel').classList.contains('open');
       // the side-panel list has it too, as plain rows
@@ -16738,7 +16751,7 @@ module.exports.run = async (win, app) => {
       F.deleteFolder(a.settings, fid);
       const restored = JSON.parse(before.folders); a.settings.folders = restored.folders; a.settings.boardFolders = restored.boardFolders;
       a.settings.recentBoards = before.list || []; a.settings.boardsPage = before.page; a.saveSettings();
-      return { ids, seen, order, firstAboveFolders, stayed, afterCross, stored, opened, closed, compact, afterDelete };`);
+      return { ids, seen, order, firstAboveFolders, stayed, afterCross, stored, opened, closed, compact, afterDelete, ticking };`);
     const one = live.ids['Recent one'], two = live.ids['Recent two'], three = live.ids['Recent three'];
     const byId = (id) => live.seen.find((x) => x.id === id) || {};
     check('My boards opens with Recent at the top: the boards last opened, newest first, above the boards themselves',
@@ -16747,6 +16760,10 @@ module.exports.run = async (win, app) => {
     check('each recent board shows its picture, where it is filed and when it was opened, under the name it has now',
       byId(two).name === 'Recent two, renamed' && byId(one).where === 'My boards › Recent maths' && byId(two).where === 'My boards'
         && byId(one).thumb && /now|second|minute/.test(byId(one).when || ''), JSON.stringify(live.seen));
+    check('a recent board has the same tick, Move to\u2026 and Delete as any board, and ticking it there ticks it everywhere',
+      byId(one).move && byId(one).tickBox && byId(two).move && !byId(three).move && !byId(three).tickBox
+        && live.ticking && live.ticking.recent === true && /\(1\)/.test(live.ticking.button || ''),
+      JSON.stringify({ one: byId(one), ticking: live.ticking }));
     check('a board that is not there any more is marked not available, with an x, and tapping it opens nothing',
       byId(three).gone && byId(three).where === 'Not available' && byId(three).cross && !byId(one).gone && !byId(one).cross && live.stayed,
       JSON.stringify({ three: byId(three), stayed: live.stayed }));
@@ -16764,7 +16781,8 @@ module.exports.run = async (win, app) => {
   /* ---- Search in My boards: every board and folder, narrowing as you type ---- */
   {
     const r = await js(`const a = window.app; const F = await import('app://board/js/core/folders.js');
-      const wait = async (fn, ms = 4000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((res) => setTimeout(res, 50)); } return null; };
+      const wait = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { const v = fn(); if (v) return v; await new Promise((res) => setTimeout(res, 50)); } return null; };
+      const clickOn = async (sel) => { const el = await wait(() => document.querySelector(sel)); if (!el) throw new Error('nothing to click at ' + sel + ' - on screen: ' + (document.getElementById('boardList')?.innerText || '(My boards not open)').replace(/\\s+/g, ' ').slice(0, 300)); el.click(); return el; };
       const before = { page: a.settings.boardsPage, folders: JSON.stringify({ folders: a.settings.folders, boardFolders: a.settings.boardFolders }), recent: a.settings.recentBoards, here: a.boardFolder };
       const ids = {};
       for (const name of ['Binary search lecture', 'Fractions quiz', 'Photosynthesis', 'গণিত ক্লাস']) {
@@ -16782,7 +16800,7 @@ module.exports.run = async (win, app) => {
       const type = async (words) => { const i = document.querySelector('#boardList .board-search-input'); if (!i) throw new Error('no search box when typing ' + words + '; panel open ' + document.getElementById('panel').classList.contains('open') + '; boardList ' + !!document.getElementById('boardList') + '; here ' + a.boardFolder); i.value = words; i.dispatchEvent(new Event('input')); await new Promise((res) => setTimeout(res, 60)); };
       const shown = () => [...document.querySelectorAll('#boardList .search-results [data-search-board]')].map((el) => ({ id: el.dataset.searchBoard, name: el.querySelector('.rt-name')?.textContent, where: el.querySelector('.rt-where')?.textContent, mark: el.querySelector('.rt-name mark')?.textContent }));
       const name = (id) => Object.keys(ids).find((k) => ids[k] === id) || id;
-      const gridHidden = () => { const g = document.querySelector('#boardList .board-grid'); return !g || getComputedStyle(g).display === 'none'; };
+      const gridHidden = () => { const g = document.querySelector('#boardList .gal-main > .board-grid'); return !g || getComputedStyle(g).display === 'none'; };
       const out = { emptyAtStart: input.value === '', resultsHiddenAtStart: getComputedStyle(document.querySelector('#boardList .search-results')).display === 'none' };
       await type('bin');
       out.bin = shown().map((x) => ({ ...x, id: name(x.id) })); out.gridHiddenWhileSearching = gridHidden();
@@ -16797,13 +16815,36 @@ module.exports.run = async (win, app) => {
       await a.panels.boards({ stay: true });
       await wait(() => document.querySelector('#boardList .search-results [data-search-board]'));
       out.kept = { value: document.querySelector('#boardList .board-search-input').value, hits: shown().map((x) => name(x.id)), searching: !!document.querySelector('#boardList .searching, #boardList.searching') };
+      // what a search finds are real boards: Select all takes only them, Move selected files them, Delete removes one - and the words stay
+      await type('lecture');
+      const selAll = [...document.querySelectorAll('#boardList .gal-tools input[type=checkbox]')][0];
+      selAll.click();
+      const ticked = [...document.querySelectorAll('#boardList input[type=checkbox]')].filter((i) => i.checked && i !== selAll).length;
+      out.selectAll = { ticked, label: document.querySelector('#boardList [data-move-selected]')?.textContent, toolsShown: getComputedStyle(document.querySelector('#boardList .gal-tools')).display !== 'none' };
+      await clickOn('#boardList [data-move-selected]');
+      await wait(() => document.querySelector('#overlayCard [data-choose="' + bio + '"]'));
+      await clickOn('#overlayCard [data-choose="' + bio + '"]');
+      await wait(() => F.folderOf(a.settings, ids['Binary search lecture']) === bio && /Biology/.test(document.querySelector('#boardList .search-results [data-search-board] .rt-where')?.textContent || ''));
+      out.moved = { filed: F.folderOf(a.settings, ids['Binary search lecture']) === bio, words: document.querySelector('#boardList .board-search-input')?.value, where: shown()[0]?.where };
+      await type('quiz');
+      out.newSearchClears = [...document.querySelectorAll('#boardList input[type=checkbox]')].filter((i) => i.checked).length;
+      a.confirm = async () => true;
+      await clickOn('#boardList .search-results [data-search-board="' + ids['Fractions quiz'] + '"] .icon-btn[title="Delete"]');
+      await wait(() => !document.querySelector('#boardList .search-results [data-search-board="' + ids['Fractions quiz'] + '"]') && document.querySelector('#boardList .board-search-input'));
+      out.deleted = { gone: !(await window.board.boards.list()).some((b) => b.id === ids['Fractions quiz']), words: document.querySelector('#boardList .board-search-input')?.value, none: document.querySelector('#boardList .search-none')?.textContent || null };
+      ids['Fractions quiz'] = null;
+      // put "quiz" back for the Escape check
+      a.newBoard(true); a.store.rename('Fractions quiz'); a.store.add({ id: 's-again', type: 'shape', kind: 'rect', x: 0, y: 0, w: 50, h: 40, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2 }, 'x');
+      await a.persist({ force: true }); ids['Fractions quiz'] = a.store.doc.id;
+      await a.panels.boards({ stay: true });
+      await wait(() => document.querySelector('#boardList .search-results [data-search-board]'));
       // Escape clears it and puts the page back
       document.querySelector('#boardList .board-search-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       await new Promise((res) => setTimeout(res, 60));
       out.cleared = { value: document.querySelector('#boardList .board-search-input').value, hits: shown().length, gridBack: !gridHidden(), stillOpen: document.getElementById('panel').classList.contains('open') };
       // a folder in the results takes you into it
       await type('biol');
-      document.querySelector('#boardList [data-search-folder]').click();
+      await clickOn('#boardList [data-search-folder]');
       await wait(() => a.boardFolder === bio && document.querySelector('#boardList .board-search-input') && !document.querySelector('#boardList .searching, #boardList.searching'));
       out.intoFolder = { here: a.boardFolder === bio, cleared: (document.querySelector('#boardList .board-search-input')?.value || '') === '' };
       // Enter opens the best match
@@ -16823,7 +16864,7 @@ module.exports.run = async (win, app) => {
       await type('photo');
       out.list = { hits: shown().map((x) => name(x.id)), compact: !!document.querySelector('#boardList .search-results.compact'), rowsHidden: getComputedStyle(document.querySelector('#boardList .recent, #boardList .crumbs') || document.body).display };
       a.panels.close?.();
-      for (const id of Object.values(ids)) await a.deleteBoard(id);
+      for (const id of Object.values(ids)) if (id) await a.deleteBoard(id);
       const restored = JSON.parse(before.folders); a.settings.folders = restored.folders; a.settings.boardFolders = restored.boardFolders;
       a.settings.boardsPage = before.page; a.settings.recentBoards = before.recent || []; a.boardFolder = before.here || null; a.saveSettings();
       return out;`);
@@ -16837,6 +16878,11 @@ module.exports.run = async (win, app) => {
       JSON.stringify(r.bio));
     check('search works in Bangla too, and says so plainly when nothing matches',
       r.bangla.length === 1 && r.bangla[0] === 'গণিত ক্লাস' && /zzzz nothing/.test(r.none || ''), JSON.stringify({ bangla: r.bangla, none: r.none }));
+    check('search results are real boards: Select all takes only what was found, and Move selected files them, keeping the search',
+      r.selectAll.ticked === 1 && /\(1\)/.test(r.selectAll.label || '') && r.selectAll.toolsShown
+        && r.moved.filed && r.moved.words === 'lecture' && r.moved.where === 'My boards › Biology', JSON.stringify({ selectAll: r.selectAll, moved: r.moved }));
+    check('a new search starts with nothing ticked, and deleting a found board keeps the search open',
+      r.newSearchClears === 0 && r.deleted.gone && r.deleted.words === 'quiz', JSON.stringify({ clears: r.newSearchClears, deleted: r.deleted }));
     check('the words stay while you work in My boards, and Escape clears them without closing it',
       r.kept.value === 'quiz' && r.kept.hits.join() === 'Fractions quiz' && r.kept.searching
         && r.cleared.value === '' && r.cleared.hits === 0 && r.cleared.gridBack && r.cleared.stillOpen, JSON.stringify({ kept: r.kept, cleared: r.cleared }));
@@ -17045,6 +17091,13 @@ module.exports.run = async (win, app) => {
       && ['Maths smoke', 'Physics'].every((n) => (sharedCatalogue.folders || []).some((f) => f.name === n)),
     `their board filed in: ${sharedFiling.theirs} (wanted Physics); this computer's board still in: ${sharedFiling.mine} (wanted Maths smoke); ` +
     `folders.json beside the boards: ${JSON.stringify((sharedCatalogue.folders || []).map((f) => f.name))}`);
+  // a save over there moves the overall "last board" to the other computer's board: going back must still find this folder's own
+  await js(`const a = window.app; a.store.add({ id:'there-too', type:'shape', kind:'rect', x:40, y:0, w:10, h:10, rotation:0, stroke:'#000', fill:'none', lineWidth:2 }); await a.persist({ force:true }); return true;`);
+  // and make every other board at home look newer than the one left open, so only remembering it per folder can find it
+  {
+    const later = new Date(Date.now() + 60000);
+    for (const f of await fs.readdir(boardsDir)) if (f.endsWith('.json') && f !== beforeShared + '.json') await fs.utimes(path.join(boardsDir, f), later, later).catch(() => {});
+  }
   const backHome = await js(`return await window.board.storage.reset({ mode:'use-as-is' });`);
   let homeOpen = '';
   for (let i = 0; i < 40 && homeOpen !== 'Open before the switch'; i++) { await sleep(100); homeOpen = await js(`return window.app.store.doc.name;`); }

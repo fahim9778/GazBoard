@@ -1125,7 +1125,6 @@
  "Opened {when}": "{when}打开",
  "Remove from Recent": "从最近中移除",
  "“{name}” is not in this boards folder any more. It was deleted, or it is in another boards folder.": "“{name}”已不在此白板文件夹中。它已被删除，或在另一个白板文件夹中。",
- "“{name}” could not be opened": "无法打开“{name}”",
  "Search boards and folders…": "搜索白板和文件夹…",
  "Search boards and folders": "搜索白板和文件夹",
  "Nothing called “{words}”": "没有名为“{words}”的内容",

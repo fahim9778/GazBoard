@@ -1445,21 +1445,20 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .board-search .bs-icon { position: absolute; inset-inline-start: 12px; display: flex; color: var(--text-2); pointer-events: none; }
 .board-search-input { width: 100%; box-sizing: border-box; min-height: 42px; padding: 8px 12px; padding-inline-start: 38px; border-radius: 10px; border: 1px solid var(--stroke); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; }
 .board-search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px rgba(15, 108, 189, .25); }
-.searching > :not(.gal-head):not(.board-search):not(.search-results) { display: none !important; }
+.searching > :not(.gal-head):not(.board-search):not(.search-results):not(.gal-tools):not(.gal-tools-list) { display: none !important; }
 .search-results { display: none; }
-.searching > .search-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; align-content: start; }
-.search-results > .recent-title, .search-results > .search-none { grid-column: 1 / -1; }
-.search-results.compact, .searching > .search-results.compact { grid-template-columns: 1fr; gap: 6px; }
+.searching > .search-results { display: block; }
+.search-results.compact > .list-board { margin-bottom: 6px; }
 .search-none { color: var(--text-2); font-size: 13px; margin: 6px 0; }
 .search-hit { display: flex; flex-direction: column; padding: 0; border-radius: 12px; overflow: hidden; cursor: pointer; text-align: start; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--stroke); }
 .search-hit:hover, .search-hit:focus-visible { box-shadow: var(--shadow-2); border-color: var(--accent); outline: none; }
 .search-hit.current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .search-hit.folder-hit, .search-results.compact .search-hit { flex-direction: row; align-items: center; }
 .search-hit .sh-icon { display: flex; padding: 0 2px 0 12px; }
-.folder-hits { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
+.folder-hits { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .folder-hits .folder-hit { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .folder-hits .folder-hit .rt-text { padding: 7px 14px 7px 6px; }
-.search-hit mark { background: rgba(255, 217, 74, .7); color: inherit; border-radius: 3px; padding: 0 1px; }
+.search-hit mark, .board-tile mark, .board-row mark { background: rgba(255, 217, 74, .7); color: inherit; border-radius: 3px; padding: 0 1px; }
 /* Recent boards, at the top of My boards: one row that scrolls sideways */
 .recent { margin: 2px 0 18px; }
 .recent-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); margin: 0 0 8px; }
@@ -1477,6 +1476,10 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .recent-tile.gone .rt-name { color: var(--text-2); text-decoration: line-through; text-decoration-color: rgba(197, 15, 31, .55); }
 .recent-tile.gone .rt-where { color: #c50f1f; font-weight: 600; }
 .recent-tile .rt-forget { position: absolute; top: 6px; inset-inline-end: 6px; background: var(--surface); border-radius: 50%; box-shadow: var(--shadow-1, 0 1px 3px rgba(0,0,0,.2)); }
+.recent-row > .board-wrap { flex: 0 0 196px; scroll-snap-align: start; }
+.board-tile .bt-path { display: block; padding: 2px 12px 0; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-results .board-tile .bt-path { padding-bottom: 10px; }
+.board-row .rt-where, .board-row .rt-when { display: block; }
 .recent-row.compact { flex-direction: column; overflow: visible; gap: 6px; padding: 0; }
 .recent-row.compact .recent-tile { flex: none; width: 100%; flex-direction: row; align-items: center; }
 .recent-row.compact .rt-text { padding: 8px 40px 8px 12px; }

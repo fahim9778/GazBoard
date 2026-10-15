@@ -524,11 +524,31 @@ async function applyStorageLocation(target, mode, reset = false) {
   }
 }
 
+/*
+ * The board to reopen. It is remembered for each boards folder as well
+ * (byFolder), so switching to another folder and back reopens the board that
+ * was left open here - not whatever was opened over there. `id` is still the
+ * last one overall, the way it always was, for a file written by an older
+ * GazBoard and for the first look at a folder.
+ */
+async function readLastBoard() {
+  try { const raw = JSON.parse(await fsp.readFile(lastBoardFile(), 'utf8')); return raw && typeof raw === 'object' ? raw : {}; } catch { return {}; }
+}
 async function setLastBoard(id) {
-  try { await writeAtomic(lastBoardFile(), JSON.stringify({ id, at: Date.now() })); } catch {}
+  try {
+    const was = await readLastBoard();
+    const byFolder = was.byFolder && typeof was.byFolder === 'object' ? { ...was.byFolder } : {};
+    if (id) byFolder[dataDir()] = id; else delete byFolder[dataDir()];
+    // a handful of folders is plenty; the oldest entries go first
+    const keys = Object.keys(byFolder); for (const k of keys.slice(0, Math.max(0, keys.length - 20))) delete byFolder[k];
+    await writeAtomic(lastBoardFile(), JSON.stringify({ id, at: Date.now(), byFolder }));
+  } catch {}
 }
 async function getLastBoard() {
-  try { return JSON.parse(await fsp.readFile(lastBoardFile(), 'utf8')).id || null; } catch { return null; }
+  const raw = await readLastBoard();
+  const here = raw.byFolder && typeof raw.byFolder === 'object' ? raw.byFolder[dataDir()] : undefined;
+  if (typeof here === 'string' && here) return here;
+  return typeof raw.id === 'string' && raw.id ? raw.id : null;
 }
 
 // The app was called OpenBoard up to 1.12. Electron derives userData from the
