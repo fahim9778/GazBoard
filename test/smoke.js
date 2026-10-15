@@ -9257,6 +9257,83 @@ async function run(win, app) {
       win.noteMissed && win.noteMissed.done === false && win.noteMissed.to === '99.0.0' && win.noteMissed.kind === 'mac' && win.noteDone && win.noteDone.done === true && win.noteGone === null,
       JSON.stringify({ missed: win.noteMissed, done: win.noteDone, gone: win.noteGone }));
 
+    // 4a. Windows: only the changed parts of the installer, from a server that behaves like GitHub's
+    {
+      const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+      const work = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gb-win-delta-'));
+      const oldVersion = eApp.getVersion(), newVersion = '99.1.0';
+      // an old installer, and a new one with a stretch changed in the middle and a little added at the end
+      const oldExe = nodeCrypto.randomBytes(3 * 1024 * 1024);
+      const newExe = Buffer.concat([oldExe.subarray(0, 1500000), nodeCrypto.randomBytes(60000), oldExe.subarray(1560000), nodeCrypto.randomBytes(20000)]);
+      const oldPath = path.join(work, 'old.exe'), newPath = path.join(work, 'new.exe');
+      fsSync.writeFileSync(oldPath, oldExe); fsSync.writeFileSync(newPath, newExe);
+      await buildBlockMap(oldPath, 'gzip', oldPath + '.blockmap');
+      await buildBlockMap(newPath, 'gzip', newPath + '.blockmap');
+      const sha512 = (b) => nodeCrypto.createHash('sha512').update(b).digest('base64');
+      const log = { ranges: [], multi: 0, whole: 0, bytes: 0, redirected: 0 };
+      // the files themselves live on a second server, as GitHub hands them over to another host
+      const assets = http.createServer((req, res) => {
+        const file = { '/a/new.exe': newExe, '/a/new.exe.blockmap': fsSync.readFileSync(newPath + '.blockmap'), '/a/old.exe.blockmap': fsSync.readFileSync(oldPath + '.blockmap') }[req.url.split('?')[0]];
+        if (!file) { res.statusCode = 404; res.end(''); return; }
+        const range = req.headers.range;
+        if (range && range.includes(',')) { log.multi++; res.statusCode = 501; res.end('Unsupported client range'); return; }   // GitHub's answer
+        const m = range && /^bytes=(\d+)-(\d+)$/.exec(range);
+        if (m) {
+          const a = Number(m[1]), b = Math.min(Number(m[2]), file.length - 1);
+          log.ranges.push([a, b]); log.bytes += b - a + 1;
+          res.statusCode = 206; res.setHeader('content-range', `bytes ${a}-${b}/${file.length}`); res.setHeader('content-length', b - a + 1);
+          res.end(file.subarray(a, b + 1)); return;
+        }
+        if (req.url.startsWith('/a/new.exe') && !req.url.includes('blockmap')) { log.whole++; log.bytes += file.length; }
+        res.setHeader('content-length', file.length); res.end(file);
+      });
+      await new Promise((r) => assets.listen(0, '127.0.0.1', r));
+      const assetBase = `http://127.0.0.1:${assets.address().port}`;
+      const release = http.createServer((req, res) => {
+        const u = req.url.split('?')[0];
+        if (u === `/v${newVersion}/latest.yml`) { res.end(`version: ${newVersion}\nfiles:\n  - url: GazBoard-Setup-${newVersion}.exe\n    sha512: ${sha512(newExe)}\n    size: ${newExe.length}\npath: GazBoard-Setup-${newVersion}.exe\nsha512: ${sha512(newExe)}\nreleaseDate: '2026-10-15T00:00:00.000Z'\n`); return; }
+        const to = { [`/v${newVersion}/GazBoard-Setup-${newVersion}.exe`]: '/a/new.exe', [`/v${newVersion}/GazBoard-Setup-${newVersion}.exe.blockmap`]: '/a/new.exe.blockmap',
+          [`/v${oldVersion}/GazBoard-Setup-${oldVersion}.exe.blockmap`]: '/a/old.exe.blockmap' }[u];
+        if (to) { log.redirected++; res.statusCode = 302; res.setHeader('location', assetBase + to); res.end(''); return; }
+        res.statusCode = 404; res.end('');
+      });
+      await new Promise((r) => release.listen(0, '127.0.0.1', r));
+      // the installer GazBoard was installed with, where the Windows installer leaves a copy of itself
+      const cacheBase = process.platform === 'win32' ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
+        : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches') : (process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'));
+      const cacheDir = path.join(cacheBase, 'gazboard-updater-test');
+      fsSync.rmSync(cacheDir, { recursive: true, force: true });
+      fsSync.mkdirSync(cacheDir, { recursive: true });
+      fsSync.writeFileSync(path.join(cacheDir, 'installer.exe'), oldExe);
+      const was = { d: process.env.GAZBOARD_UPDATE_DOWNLOADS, t: process.env.GAZBOARD_UPDATE_TEST, f: process.env.GAZBOARD_UPDATE_DIFF };
+      process.env.GAZBOARD_UPDATE_DOWNLOADS = `http://127.0.0.1:${release.address().port}`;
+      process.env.GAZBOARD_UPDATE_TEST = '1';
+      process.env.GAZBOARD_UPDATE_DIFF = '1';
+      let delta = {}, got = null;
+      const seen = [];
+      try {
+        const w = U.createUpdater({ app: eApp, net: eNet, notePath: path.join(work, 'note.json'), platform: 'win32', execPath: 'C:\\GazBoard\\GazBoard.exe' });
+        delta = await w.download(newVersion, (f, done, total) => seen.push([done, total]));
+        delta.ready = w.ready;
+        const pending = path.join(cacheDir, 'pending');
+        const exe = fsSync.existsSync(pending) ? fsSync.readdirSync(pending).find((n) => n.endsWith('.exe')) : null;
+        got = exe ? fsSync.readFileSync(path.join(pending, exe)) : null;
+      } finally {
+        for (const [k, v] of [['GAZBOARD_UPDATE_DOWNLOADS', was.d], ['GAZBOARD_UPDATE_TEST', was.t], ['GAZBOARD_UPDATE_DIFF', was.f]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+        await new Promise((r) => release.close(r)); await new Promise((r) => assets.close(r));
+        fsSync.rmSync(cacheDir, { recursive: true, force: true });
+        fsSync.rmSync(work, { recursive: true, force: true });
+      }
+      check('updater: Windows fetches only the changed parts of the installer, one part per request as GitHub requires, and the result is exactly the new installer',
+        delta.ok === true && delta.ready === newVersion && log.multi === 0 && log.whole === 0 && log.ranges.length > 0
+          && log.bytes < newExe.length / 4 && got && got.equals(newExe),
+        `result ${JSON.stringify(delta)}; ${log.ranges.length} part request(s), ${log.multi} several-parts request(s) (GitHub refuses those), ${log.whole} whole download(s); ` +
+        `${(log.bytes / 1e6).toFixed(2)} MB fetched of ${(newExe.length / 1e6).toFixed(2)} MB; assembled file ${got ? (got.equals(newExe) ? 'matches' : `differs (${got.length} bytes)`) : 'missing'}; redirects followed ${log.redirected}`);
+      check('updater: and the progress bar counts the parts being fetched, not the whole installer',
+        seen.length > 0 && seen[seen.length - 1][1] > 0 && seen[seen.length - 1][1] < newExe.length / 4,
+        `progress reports: ${seen.length}; last ${JSON.stringify(seen[seen.length - 1] || null)} (bytes done, bytes to fetch)`);
+    }
+
     // 4b. Linux AppImage: only the changed parts are downloaded (zsync), checked, and put in place under the same name
     {
       const Fx = require(path.join(FIX, 'appimage-update.js'));
@@ -16613,9 +16690,12 @@ module.exports.run = async (win, app) => {
   const seedBytes = await fs.readFile(seedPath);
   const appliedCopy = await js(`return await window.board.storage.apply({ path:${JSON.stringify(copiedFolder)}, mode:'copy' });`);
   const copyBytes = await fs.readFile(path.join(copiedFolder, storageSeed + '.json'));
+  // the app keeps the folder's real path: on a Mac the temp folder /var/... is really /private/var/...
+  const copiedReal = await fs.realpath(copiedFolder);
+  const activeAfterCopy = await js(`return (await window.board.storage.get()).current;`);
   check('copying changes the active folder only after preserving the source board byte for byte',
-    appliedCopy.ok && copyBytes.equals(seedBytes) && (await js(`return (await window.board.storage.get()).current;`)) === copiedFolder,
-    `copy result ${JSON.stringify(appliedCopy)}, source ${seedBytes.length} bytes, destination ${copyBytes.length} bytes`);
+    appliedCopy.ok && copyBytes.equals(seedBytes) && activeAfterCopy === copiedReal,
+    `copy result ${JSON.stringify(appliedCopy)}, source ${seedBytes.length} bytes, destination ${copyBytes.length} bytes, same bytes ${copyBytes.equals(seedBytes)}; active folder ${activeAfterCopy} (expected ${copiedReal})`);
   const storageNew = await js(`
     const a = window.app;
     a.newBoard(true); a.store.rename('Written in custom folder');

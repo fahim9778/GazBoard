@@ -10,7 +10,9 @@
  *
  * Windows (the installed build) uses electron-updater, the updater that ships
  * with the tool GazBoard is built with. It fetches only the parts of the
- * installer that changed (the .blockmap files on the release), checks the
+ * installer that changed (the .blockmap files on the release, compared with
+ * the copy of the installer it keeps in %LOCALAPPDATA%\gazboard-updater,
+ * one part per request because that is all GitHub serves), checks the
  * whole file against the SHA-512 in latest.yml, and reinstalls silently over
  * the top. The portable .exe cannot replace itself, so it keeps the download
  * page.
@@ -450,9 +452,18 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
     }
     // The suite exercises the Windows download on its own machine; there, electron-updater
     // has to be told which platform's file to read (latest.yml, not latest-linux.yml).
-    if (env.GAZBOARD_UPDATE_TEST && platform !== process.platform) u._testOnlyOptions = { platform, isUseDifferentialDownload: false };
-    // after the config path: setting that resets the feed
-    u.setFeedURL({ provider: 'generic', url: `${downloadBase()}/v${version}` });
+    // GAZBOARD_UPDATE_DIFF: the suite's own test of the parts-only download, where a failure must not hide behind a whole download
+    if (env.GAZBOARD_UPDATE_TEST && (platform !== process.platform || env.GAZBOARD_UPDATE_DIFF)) u._testOnlyOptions = { platform, isUseDifferentialDownload: !!env.GAZBOARD_UPDATE_DIFF };
+    /*
+     * After the config path: setting that resets the feed.
+     *
+     * One part per request. Asked for several parts at once (its default for a
+     * plain web address), GitHub answers "501 Unsupported client range", and
+     * electron-updater quietly falls back to downloading the whole installer -
+     * which is what every Windows update did until 4.7.1: 102 MB where 4 MB
+     * had changed. electron-updater's own GitHub setting does exactly this.
+     */
+    u.setFeedURL({ provider: 'generic', url: `${downloadBase()}/v${version}`, useMultipleRangeRequest: false });
     u.on('download-progress', (p) => onProgress((p.percent || 0) / 100, p.transferred || 0, p.total || 0));
     const found = await u.checkForUpdates();
     const info = found && found.updateInfo;
