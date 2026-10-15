@@ -265,6 +265,24 @@ async function writeAtomic(file, text) {
  * so only the Storage controls ask for it, and it is read without holding up
  * anything else; app:info, asked for on every My boards, never counts.
  */
+/*
+ * Where a folder picker should open for a boards folder: the folder the person
+ * picked (the one holding GazBoard), or the nearest folder above it that still
+ * exists when a drive was unplugged. Undefined leaves the system's own start.
+ */
+function pickerStart(boardsDir) {
+  if (!boardsDir) return undefined;
+  let dir = path.resolve(boardsDir);
+  if (path.basename(dir).toLowerCase() === StorageLocation.FOLDER_NAME.toLowerCase()) dir = path.dirname(dir);
+  for (;;) {
+    try { if (fs.statSync(dir).isDirectory()) return dir; } catch { /* not there: try the folder above */ }
+    const up = path.dirname(dir);
+    if (up === dir) return undefined;
+    dir = up;
+  }
+}
+module.exports.pickerStart = pickerStart;
+
 async function storageInfo({ count = false } = {}) {
   let defaultExistingBoards = 0;
   if (count) {
@@ -1026,8 +1044,11 @@ function ipc() {
 
   ipcMain.handle('storage:get', () => storageInfo({ count: true }));
   ipcMain.handle('storage:choose', async () => {
+    // open where the boards are now (or were, when that folder has gone missing), as other apps do;
+    // the usual place inside the app's own data is no help to anyone, so that one keeps the system's start
     const r = await dialog.showOpenDialog(mainWindow, {
-      title: 'Choose where GazBoard saves boards', properties: ['openDirectory', 'createDirectory']
+      title: 'Choose where GazBoard saves boards', properties: ['openDirectory', 'createDirectory'],
+      defaultPath: pickerStart(activeDataDir || (storageFallback ? storedStorageLocation?.boardsDir : null))
     });
     if (r.canceled || !r.filePaths[0]) return { canceled: true };
     return checkPickedFolder(r.filePaths[0]);
@@ -1520,7 +1541,8 @@ async function prepareConfiguredStorage() {
     if (choice.response === 0) continue;
     if (choice.response === 1) { activeDataDir = null; storageFallback = true; return; }
     const picked = await dialog.showOpenDialog({
-      title: 'Choose another boards folder', properties: ['openDirectory', 'createDirectory']
+      title: 'Choose another boards folder', properties: ['openDirectory', 'createDirectory'],
+      defaultPath: pickerStart(activeDataDir)
     });
     if (picked.canceled || !picked.filePaths[0]) continue;
     const valid = StorageLocation.validateBoardsDir(StorageLocation.boardsFolderFor(picked.filePaths[0]), {

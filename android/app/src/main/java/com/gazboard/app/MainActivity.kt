@@ -270,22 +270,36 @@ class MainActivity : ComponentActivity() {
       catch (e: Exception) { app.main.post { Toast.makeText(this, e.message ?: "Could not open file", Toast.LENGTH_LONG).show() } }
     }
   }
-  /** Android's own folder picker. Null when the person backed out. */
-  fun pickFolder(): Uri? {
+  /** Android's own folder picker, opening at `start` when given (the folder in use), else Documents. Null when the person backed out. */
+  fun pickFolder(start: Uri? = null): Uri? {
     val result = CompletableFuture<Uri?>()
     onMain {
       check(folderPicker == null) { "Finish choosing the folder first" }
       folderPicker = result
       val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
         Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-      // open on Documents, the place people look for their own files; a suggestion only, any folder can be picked.
+      // open on the folder already in use, as other apps do, or else Documents, the place people look for their
+      // own files; a suggestion only, any folder can be picked.
       // No storage permission is involved: the picker hands over this one folder and nothing else.
-      runCatching { intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+      runCatching { intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, start ?:
         android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Documents")) }
       try { folderLauncher.launch(intent) } catch (e: Exception) { folderPicker = null; throw e }
     }
     return try { result.get(5, TimeUnit.MINUTES) }
       finally { app.main.post { if (folderPicker === result) folderPicker = null } }
+  }
+  /**
+   * Show a folder in the phone's Files app. Most phones' Files app opens a folder handed over this way;
+   * false when none on this phone does, so the page can say where to look instead.
+   */
+  fun openFolder(folder: Uri): Boolean {
+    val result = CompletableFuture<Boolean>()
+    onMain {
+      val view = Intent(Intent.ACTION_VIEW).setDataAndType(folder, android.provider.DocumentsContract.Document.MIME_TYPE_DIR)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+      result.complete(try { startActivity(view); true } catch (e: Exception) { false })
+    }
+    return result.get(10, TimeUnit.SECONDS)
   }
   fun pickFiles(options: JsonObject, save: Boolean): List<String> {
     val result = CompletableFuture<List<String>>()

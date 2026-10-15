@@ -124,6 +124,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       choose: () => call('backup:choose'),
       restore: () => call('backup:restore'),
       stop: () => call('backup:stop'),
+      open: () => call('backup:open'),
       catalogue: (json) => call('backup:catalogue', json)
     },
     openReleases: (url) => call('shell:openExternal', url),

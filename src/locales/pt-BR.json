@@ -1109,6 +1109,7 @@
  "Copying {done} of {total}…": "Copiando {done} de {total}…",
  "The copy could not be written: {error}": "Não foi possível gravar a cópia: {error}",
  "Bring boards back from a folder…": "Trazer quadros de volta de uma pasta…",
+ "Open your Files app and look in {folder}": "Abra o app Arquivos e procure em {folder}",
  "Every board in that folder is already here": "Todos os quadros dessa pasta já estão aqui",
  "{n} board brought back": "{n} quadro trazido de volta",
  "{n} boards brought back": "{n} quadros trazidos de volta",

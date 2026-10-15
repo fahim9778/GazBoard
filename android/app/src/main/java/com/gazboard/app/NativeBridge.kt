@@ -127,8 +127,8 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "assets:have" -> s.haveAssets(arg as? JsonArray ?: JsonArray(emptyList()))
       // a copy of the boards in a folder of the person's own, which outlives uninstalling (BoardMirror)
       "backup:state" -> app.mirror.state()
-      "backup:choose" -> activity.pickFolder()?.let { app.mirror.use(it) } ?: json("canceled" to true)
-      "backup:restore" -> activity.pickFolder()?.let { picked ->
+      "backup:choose" -> activity.pickFolder(app.mirror.pickerStart())?.let { app.mirror.use(it) } ?: json("canceled" to true)
+      "backup:restore" -> activity.pickFolder(app.mirror.pickerStart())?.let { picked ->
         val back = app.mirror.restore(picked, s)
         when {
           // nothing kept a copy yet (a fresh install): the folder the boards came back from goes on keeping it,
@@ -139,6 +139,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
         }
       } ?: json("canceled" to true)
       "backup:stop" -> app.mirror.stop()
+      "backup:open" -> app.mirror.folderLocation()?.let { activity.openFolder(it) } ?: false
       "backup:catalogue" -> app.mirror.catalogue(str())
       "sync:state" -> node.state().with("error" to app.identity.loadError)
       "sync:start" -> activity.startSharing()

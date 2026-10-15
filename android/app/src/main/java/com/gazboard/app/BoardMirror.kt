@@ -46,6 +46,8 @@ class BoardMirror(
     fun read(name: String): ByteArray
     fun write(name: String, mime: String, bytes: ByteArray)
     fun delete(name: String)
+    /** The folder itself, for showing it in the Files app. Null where there is no such thing (the tests' plain folders). */
+    val location: Uri? get() = null
   }
 
   private val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
@@ -95,6 +97,14 @@ class BoardMirror(
     worker.execute { copyEverything(dir, keepTheirs = joining) }
     return json("ok" to true, "folder" to label(root))
   }
+
+  /** Where the folder picker should open: the folder picked last time, or null for the usual Documents. */
+  fun pickerStart(): Uri? = tree?.takeIf { it.scheme == "content" }?.let {
+    runCatching { DocumentsContract.buildDocumentUriUsingTree(it, DocumentsContract.getTreeDocumentId(it)) }.getOrNull()
+  }
+
+  /** The GazBoard folder the copy is kept in, to open in the Files app. Null when no copy is kept or it cannot be reached. */
+  fun folderLocation(): Uri? = tree?.let { t -> runCatching { gazFolder(open(t), create = false)?.location }.getOrNull() }
 
   /** A folder picked and then not used: its permission is handed back (Android keeps only so many). */
   fun forget(picked: Uri) { if (picked != tree) release(picked) }
@@ -278,6 +288,7 @@ class SafFolder private constructor(private val context: Context, private val tr
   }
   private val resolver get() = context.contentResolver
   private val uri: Uri get() = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+  override val location: Uri get() = uri
   private fun docUri(docId: String) = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
   private data class Entry(val id: String, val dir: Boolean)
 

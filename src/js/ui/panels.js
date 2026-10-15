@@ -1480,12 +1480,15 @@ export function createPanels(app) {
           : on && st.copying ? line(t('Copying {done} of {total}…', { done: st.done || 0, total: st.total || 0 }))
           : on ? line(t('Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.', { folder: st.folder }))
           : line(t('Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.')),
-        full ? h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
-          on ? h('button', { class: 'btn', onclick: run(async () => {
+        full || on ? h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
+          on && window.board.backup.open ? h('button', { class: 'btn', onclick: run(async () => {
+            if (!(await window.board.backup.open())) app.toast(t('Open your Files app and look in {folder}', { folder: st.folder }), 'help', 6000);
+          }) }, t('Open folder')) : null,
+          full && on ? h('button', { class: 'btn', onclick: run(async () => {
             const r = await window.board.backup.choose();
             if (r && !r.canceled) app.queueCatalogue?.({ now: true });
           }) }, t('Change folder…')) : null,
-          h('button', { class: 'btn', onclick: run(() => bringBack()) }, t('Bring boards back from a folder…'))) : null
+          full ? h('button', { class: 'btn', onclick: run(() => bringBack()) }, t('Bring boards back from a folder…')) : null) : null
       ].filter(Boolean));
       // while it copies, keep the count moving
       if (st.copying) timer = setTimeout(() => { if (box.isConnected) draw().catch(() => {}); }, 700);

@@ -1109,6 +1109,7 @@
  "Copying {done} of {total}…": "কপি হচ্ছে {total}টির মধ্যে {done}টি…",
  "The copy could not be written: {error}": "কপিটা লেখা যায়নি: {error}",
  "Bring boards back from a folder…": "ফোল্ডার থেকে বোর্ড ফিরিয়ে আনুন…",
+ "Open your Files app and look in {folder}": "Files অ্যাপ খুলে {folder}-এ দেখুন",
  "Every board in that folder is already here": "ওই ফোল্ডারের সব বোর্ড এখানে আগেই আছে",
  "{n} board brought back": "{n}টি বোর্ড ফিরে এসেছে",
  "{n} boards brought back": "{n}টি বোর্ড ফিরে এসেছে",

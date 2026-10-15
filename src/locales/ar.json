@@ -1109,6 +1109,7 @@
  "Copying {done} of {total}…": "جارٍ النسخ {done} من {total}…",
  "The copy could not be written: {error}": "تعذّر حفظ النسخة: {error}",
  "Bring boards back from a folder…": "استرجاع اللوحات من مجلد…",
+ "Open your Files app and look in {folder}": "افتح تطبيق الملفات وابحث في {folder}",
  "Every board in that folder is already here": "كل لوحات ذلك المجلد موجودة هنا بالفعل",
  "{n} board brought back": "تم استرجاع {n} لوحة",
  "{n} boards brought back": "تم استرجاع {n} لوحات",

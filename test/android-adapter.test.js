@@ -275,7 +275,7 @@ test('Files dragged in from another app land on the board where they were let go
   delete global.window.app;
 });
 
-test('The folder copy is asked of Android itself: choose, bring back and stop each reach the native side', async () => {
+test('The folder copy is asked of Android itself: choose, bring back, stop and open each reach the native side', async () => {
   const { adapter, calls } = await setup(async (request) => {
     if (request.method === 'backup:state') return { folder: 'Documents/GazBoard', copying: false, error: null };
     if (request.method === 'backup:restore') return { ok: true, boards: 3, alreadyHere: 1, pictures: 2, folder: 'Documents/GazBoard' };
@@ -285,8 +285,9 @@ test('The folder copy is asked of Android itself: choose, bring back and stop ea
   const back = await adapter.backup.restore();
   await adapter.backup.choose();
   await adapter.backup.stop();
+  await adapter.backup.open();
   await adapter.backup.catalogue('{"version":1,"folders":[]}');
-  assert.deepEqual(calls.map((c) => c.method), ['backup:state', 'backup:restore', 'backup:choose', 'backup:stop', 'backup:catalogue'],
+  assert.deepEqual(calls.map((c) => c.method), ['backup:state', 'backup:restore', 'backup:choose', 'backup:stop', 'backup:open', 'backup:catalogue'],
     `asked Android: ${JSON.stringify(calls.map((c) => c.method))}`);
   assert.deepEqual({ folder: state.folder, boards: back.boards }, { folder: 'Documents/GazBoard', boards: 3 },
     `state ${JSON.stringify(state)}, restore ${JSON.stringify(back)}`);

@@ -1109,6 +1109,7 @@
  "Copying {done} of {total}…": "正在複製 {done} / {total}…",
  "The copy could not be written: {error}": "無法寫入副本：{error}",
  "Bring boards back from a folder…": "從資料夾找回白板…",
+ "Open your Files app and look in {folder}": "請開啟「檔案」應用程式，在 {folder} 中查看",
  "Every board in that folder is already here": "該資料夾中的白板都已在這裡",
  "{n} board brought back": "已找回 {n} 個白板",
  "{n} boards brought back": "已找回 {n} 個白板",

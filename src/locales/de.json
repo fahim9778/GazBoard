@@ -1114,6 +1114,7 @@
  "Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.": "Sicherheitskopie liegt in {folder}. Beim Deinstallieren von GazBoard wird sie nicht gelöscht.",
  "Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.": "Android löscht deine Whiteboards, wenn GazBoard deinstalliert wird. Behalte eine Kopie in einem eigenen Ordner, dann bleiben sie sicher.",
  "Bring boards back from a folder…": "Whiteboards aus einem Ordner zurückholen…",
+ "Open your Files app and look in {folder}": "Öffne die Dateien-App und sieh in {folder} nach",
  "Every board in that folder is already here": "Alle Whiteboards aus diesem Ordner sind bereits hier",
  "{n} board brought back": "{n} Whiteboard zurückgeholt",
  "{n} boards brought back": "{n} Whiteboards zurückgeholt",

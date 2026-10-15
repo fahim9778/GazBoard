@@ -10580,6 +10580,23 @@ async function run(win, app) {
   check('the trail fades quickly rather than trailing behind the pointer',
     laserPerf.life <= 600, `${laserPerf.life}ms`);
 
+  /* ---- Change folder opens where the boards are, not in Documents ---- */
+  {
+    const { pickerStart } = require(path.join(__dirname, '..', 'main.js'));
+    const chosen = path.join(OUT, 'picker-start', 'My Lessons');
+    await fs.rm(path.join(OUT, 'picker-start'), { recursive: true, force: true });
+    await fs.mkdir(path.join(chosen, 'GazBoard'), { recursive: true });
+    const inUse = pickerStart(path.join(chosen, 'GazBoard'));
+    const unplugged = pickerStart(path.join(OUT, 'picker-start', 'Gone Drive', 'Deeper', 'GazBoard'));
+    const usual = pickerStart(null);
+    check('Change folder opens in the folder that was picked, which holds the GazBoard folder',
+      inUse === chosen, `opened at ${inUse}, expected ${chosen}`);
+    check('a folder that has gone missing opens at the nearest folder still there',
+      unplugged === path.join(OUT, 'picker-start'), `opened at ${unplugged}`);
+    check('the usual place leaves the system to choose where the picker opens',
+      usual === undefined, String(usual));
+  }
+
   /* ---- a portable build keeps its boards beside the .exe ---- */
   const { portableUserData } = require(path.join(__dirname, '..', 'main.js'));
   const stick = path.join(OUT, 'fake-usb-stick');
