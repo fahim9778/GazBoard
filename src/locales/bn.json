@@ -1104,5 +1104,19 @@
  "Storage": "স্টোরেজ",
  "Move old copies to Trash…": "পুরোনো কপিগুলো ট্র্যাশে সরান…",
  "Old copies moved to Trash": "পুরোনো কপিগুলো ট্র্যাশে সরানো হয়েছে",
- "Could not remove old copies": "পুরোনো কপিগুলো সরানো যায়নি"
+ "Could not remove old copies": "পুরোনো কপিগুলো সরানো যায়নি",
+ "Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.": "GazBoard আনইনস্টল করলে Android আপনার বোর্ডগুলো মুছে ফেলে। নিজের একটা ফোল্ডারে একটা কপি রাখুন, তাহলে সেগুলো নিরাপদ থাকবে।",
+ "Copying {done} of {total}…": "কপি হচ্ছে {total}টির মধ্যে {done}টি…",
+ "The copy could not be written: {error}": "কপিটা লেখা যায়নি: {error}",
+ "Bring boards back from a folder…": "ফোল্ডার থেকে বোর্ড ফিরিয়ে আনুন…",
+ "Every board in that folder is already here": "ওই ফোল্ডারের সব বোর্ড এখানে আগেই আছে",
+ "{n} board brought back": "{n}টি বোর্ড ফিরে এসেছে",
+ "{n} boards brought back": "{n}টি বোর্ড ফিরে এসেছে",
+ "Could not use that folder: {error}": "ওই ফোল্ডারটা ব্যবহার করা যায়নি: {error}",
+ "Keep a safe copy in a folder": "একটা ফোল্ডারে নিরাপদ কপি রাখুন",
+ "Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.": "নিরাপদ কপি রাখা আছে {folder}-এ। GazBoard আনইনস্টল করলেও এটা মুছবে না।",
+ "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "GazBoard আনইনস্টল করলে এই বোর্ডগুলো মুছে যায়। নিজের একটা ফোল্ডারে নিরাপদ কপি রাখবেন?",
+ "Choose folder": "ফোল্ডার বেছে নিন",
+ "{store} keeps GazBoard up to date": "{store} GazBoard-কে আপডেট রাখে",
+ "Updates": "আপডেট"
 }

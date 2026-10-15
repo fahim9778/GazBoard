@@ -42,6 +42,7 @@ const PRECACHE_ASSETS = [
   './js/insert.js',
   './locales/ar.json',
   './locales/bn.json',
+  './locales/de.json',
   './locales/es.json',
   './locales/pt-BR.json',
   './locales/zh-Hans.json',

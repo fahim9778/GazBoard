@@ -9,6 +9,13 @@ import kotlinx.serialization.json.*
 
 /** Native durable storage. A failed save leaves the previous board readable. */
 class BoardStorage(context: Context) {
+  /** Told about every board written or removed and every new picture - the folder copy listens (BoardMirror). */
+  interface Listener {
+    fun boardSaved(id: String, bytes: ByteArray)
+    fun boardRemoved(id: String)
+    fun assetStored(name: String, bytes: ByteArray)
+  }
+  @Volatile var listener: Listener? = null
   private val root = File(context.filesDir, "boards").apply { mkdirs() }
   private val assets = File(context.filesDir, "assets").apply { mkdirs() }
   private val pointer = AtomicFile(File(context.filesDir, "last-board.json"))
@@ -38,14 +45,31 @@ class BoardStorage(context: Context) {
     val board = parse(text).obj()
     val id = payload.str("id")
     require(id == board.str("id")) { "Board id does not match its contents" }
-    writeAtomic(boardFile(id), text.toByteArray())
+    val bytes = text.toByteArray()
+    writeAtomic(boardFile(id), bytes)
     // Only point at a board after its file reached disk successfully.
     if (payload.bool("setLast", true)) setLast(id)
+    runCatching { listener?.boardSaved(id, bytes) }
     return true
   }
   @Synchronized fun remove(id: String): Boolean {
     boardFile(id).delete()
     if (last() == id) pointer.delete()
+    runCatching { listener?.boardRemoved(id) }
+    return true
+  }
+  @Synchronized fun has(id: String): Boolean = idPattern.matches(id) && File(root, "$id.json").exists()
+  @Synchronized fun hasAsset(name: String): Boolean = assetPattern.matches(name) && File(assets, name).exists()
+  /**
+   * Take a picture back from the folder copy. Its name is the SHA-256 of its
+   * bytes, so the bytes are checked against it: a damaged or swapped file is
+   * refused rather than shown in place of the real picture.
+   */
+  @Synchronized fun importAsset(name: String, bytes: ByteArray): Boolean {
+    if (!assetPattern.matches(name) || bytes.isEmpty()) return false
+    if (Protocol.hex(MessageDigest.getInstance("SHA-256").digest(bytes)) != name.substringBefore('.')) return false
+    val file = AtomicFile(File(assets, name))
+    if (!file.baseFile.exists()) writeAtomic(file, bytes)
     return true
   }
   @Synchronized fun last(): String? = runCatching {
@@ -72,7 +96,7 @@ class BoardStorage(context: Context) {
     require(bytes.isNotEmpty())
     val id = Protocol.hex(MessageDigest.getInstance("SHA-256").digest(bytes)) + "." + extension
     val file = AtomicFile(File(assets, id))
-    if (!file.baseFile.exists()) writeAtomic(file, bytes)
+    if (!file.baseFile.exists()) { writeAtomic(file, bytes); runCatching { listener?.assetStored(id, bytes) } }
     json("id" to id)
   }.getOrNull()
   @Synchronized fun getAsset(id: String): String? = runCatching {

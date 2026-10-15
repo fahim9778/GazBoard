@@ -11,7 +11,8 @@ import kotlinx.serialization.json.*
 class GazBoardApplication : Application() {
   val io = Executors.newFixedThreadPool(6)
   val main = Handler(Looper.getMainLooper())
-  val storage by lazy { BoardStorage(this) }
+  val mirror by lazy { BoardMirror(this) }
+  val storage by lazy { BoardStorage(this).also { it.listener = mirror } }
   val files by lazy { BridgeFiles(this) }
   val identity by lazy { DeviceIdentity(this) }
   @Volatile var events: ((String, JsonElement) -> Unit)? = null

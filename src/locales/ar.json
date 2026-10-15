@@ -1104,5 +1104,19 @@
  "Storage": "التخزين",
  "Move old copies to Trash…": "نقل النسخ القديمة إلى سلة المهملات…",
  "Old copies moved to Trash": "نُقلت النسخ القديمة إلى سلة المهملات",
- "Could not remove old copies": "تعذّرت إزالة النسخ القديمة"
+ "Could not remove old copies": "تعذّرت إزالة النسخ القديمة",
+ "Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.": "يحذف Android لوحاتك عند إلغاء تثبيت GazBoard. احتفظ بنسخة في مجلد خاص بك لتبقى في أمان.",
+ "Copying {done} of {total}…": "جارٍ النسخ {done} من {total}…",
+ "The copy could not be written: {error}": "تعذّر حفظ النسخة: {error}",
+ "Bring boards back from a folder…": "استرجاع اللوحات من مجلد…",
+ "Every board in that folder is already here": "كل لوحات ذلك المجلد موجودة هنا بالفعل",
+ "{n} board brought back": "تم استرجاع {n} لوحة",
+ "{n} boards brought back": "تم استرجاع {n} لوحات",
+ "Could not use that folder: {error}": "تعذّر استخدام ذلك المجلد: {error}",
+ "Keep a safe copy in a folder": "احتفظ بنسخة آمنة في مجلد",
+ "Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.": "النسخة الآمنة محفوظة في {folder}. لا يحذفها إلغاء تثبيت GazBoard.",
+ "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "إلغاء تثبيت GazBoard يحذف هذه اللوحات. هل تريد الاحتفاظ بنسخة آمنة في مجلد خاص بك؟",
+ "Choose folder": "اختر مجلدًا",
+ "{store} keeps GazBoard up to date": "يحافظ {store} على تحديث GazBoard",
+ "Updates": "التحديثات"
 }

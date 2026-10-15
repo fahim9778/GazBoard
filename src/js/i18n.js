@@ -15,14 +15,14 @@
 // is already in the right language.
 
 export const LANGUAGES = [
-  { code: 'ar', name: 'العربية', dir: 'rtl' },
-  { code: 'bn', name: 'বাংলা' },
-  { code: 'de', name: 'Deutsch' },
   { code: 'en', name: 'English' },
+  { code: 'bn', name: 'বাংলা' },
+  { code: 'zh-Hans', name: '简体中文' },
+  { code: 'zh-Hant', name: '繁體中文' },
+  { code: 'ar', name: 'العربية', dir: 'rtl' },
   { code: 'es', name: 'Español' },
   { code: 'pt-BR', name: 'Português (Brasil)' },
-  { code: 'zh-Hans', name: '简体中文' },
-  { code: 'zh-Hant', name: '繁體中文' }
+  { code: 'de', name: 'Deutsch' }
 ];
 
 let lang = 'en';

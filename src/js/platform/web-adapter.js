@@ -58,6 +58,8 @@ export function createWebAdapter() {
     },
 
     readFile: (p) => files.readVirtualFile(p),
+    // a dropped file gets the same stand-in path Add would have given it, so a dropped PDF imports like a picked one
+    pathForFile: (f) => files.registerSessionFile(f),
     fileOrigin: (p) => files.fileOrigin(p),
     writeFile: (filePath, data) => files.writeVirtualFile(filePath, data),
     openDialog: (opts) => files.openFileDialog(opts),

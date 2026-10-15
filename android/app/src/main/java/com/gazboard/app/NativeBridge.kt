@@ -88,7 +88,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "app:info" -> json("version" to BuildConfig.VERSION_NAME, "platform" to "android", "electron" to null,
         "chrome" to WebViewCompat.getCurrentWebViewPackage(activity)?.versionName, "libreoffice" to false,
         "userData" to "On this Android device", "smoke" to false, "isWeb" to false, "isAndroid" to true,
-        "pendingBoardFile" to activity.startupFilePending,
+        "pendingBoardFile" to activity.startupFilePending, "store" to activity.installStore(),
         "capabilities" to json("lan" to true, "nativeFiles" to true, "office" to listOf("docx", "pptx", "txt")))
       "blob:begin" -> json("token" to f.begin(obj().long("size", -1)))
       "blob:append" -> f.append(obj().str("token"), obj().long("offset", -1), obj().str("data"))
@@ -125,6 +125,21 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       "assets:put" -> s.putAsset(str())
       "assets:get" -> s.getAsset(str())
       "assets:have" -> s.haveAssets(arg as? JsonArray ?: JsonArray(emptyList()))
+      // a copy of the boards in a folder of the person's own, which outlives uninstalling (BoardMirror)
+      "backup:state" -> app.mirror.state()
+      "backup:choose" -> activity.pickFolder()?.let { app.mirror.use(it) } ?: json("canceled" to true)
+      "backup:restore" -> activity.pickFolder()?.let { picked ->
+        val back = app.mirror.restore(picked, s)
+        when {
+          // nothing kept a copy yet (a fresh install): the folder the boards came back from goes on keeping it,
+          // without anything in it being written over
+          back.bool("ok", false) && app.mirror.tree == null -> back.with("folder" to app.mirror.use(picked, joining = true).str("folder"))
+          // a copy is already kept somewhere: that stays as it is
+          else -> { app.mirror.forget(picked); back }
+        }
+      } ?: json("canceled" to true)
+      "backup:stop" -> app.mirror.stop()
+      "backup:catalogue" -> app.mirror.catalogue(str())
       "sync:state" -> node.state().with("error" to app.identity.loadError)
       "sync:start" -> activity.startSharing()
       "sync:stop" -> app.stopSharing()

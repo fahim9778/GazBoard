@@ -115,9 +115,23 @@ jobs:
             dist/*.exe
             dist/latest.yml
             dist/GazBoard-Setup-*.exe.blockmap
+          fail_on_unmatched_files: true
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
+
+      - name: Check the update files reached the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ON="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for f in dist/latest.yml dist/GazBoard-Setup-*.exe dist/GazBoard-Setup-*.exe.blockmap; do
+            n="$(basename "$f")"
+            echo "$ON" | grep -qxF "$n" || { echo "::error::$n is not on the release - Windows cannot update itself without it"; exit 1; }
+          done
 
   linux:
     needs: [validate-version]
@@ -295,9 +309,24 @@ jobs:
             dist/*.AppImage
             dist/*.AppImage.zsync
             dist/*.deb
+          fail_on_unmatched_files: true
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
+
+      # GazBoard's own updater reads the .zsync to fetch only what changed: it has to be there
+      - name: Check the update files reached the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ON="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for f in dist/*.AppImage dist/*.AppImage.zsync; do
+            n="$(basename "$f")"
+            echo "$ON" | grep -qxF "$n" || { echo "::error::$n is not on the release - AppImages cannot update themselves without it"; exit 1; }
+          done
 
   macos:
     needs: [validate-version]
@@ -329,7 +358,7 @@ jobs:
       - name: Check the app was actually produced, and is launchable
         run: |
           set -e
-          ls -la dist/*.dmg dist/*.zip
+          ls -la dist/*.dmg dist/*.zip dist/*.zip.blockmap
           # Every app in the build must carry a whole, valid signature. An app
           # whose signature is missing or broken is what macOS calls "damaged",
           # with no Open Anyway button - so a broken one fails the build here
@@ -358,6 +387,7 @@ jobs:
           path: |
             dist/*.dmg
             dist/*.zip
+            dist/*.zip.blockmap
             dist/latest-mac.yml
           if-no-files-found: error
 
@@ -385,13 +415,34 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # The .zip is what an installed Mac updates itself from, and its
+          # .blockmap lets the next update fetch only the parts that changed.
           files: |
             dist/*.dmg
             dist/*.zip
+            dist/*.zip.blockmap
             dist/latest-mac.yml
+          fail_on_unmatched_files: true
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: ${{ steps.notes.outputs.generate == 'true' }}
+
+      # v4.6.0 went out with its dmg and latest-mac.yml but without the two
+      # zips, and nothing failed. Read the release back: every file the Mac
+      # updater needs has to be on it, or this job goes red.
+      - name: Check the update files reached the release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ON="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          echo "$ON"
+          for f in dist/*.zip dist/*.zip.blockmap dist/latest-mac.yml; do
+            n="$(basename "$f")"
+            echo "$ON" | grep -qxF "$n" || { echo "::error::$n is not on the release - Macs cannot update themselves without it"; exit 1; }
+          done
 
   web:
     needs: [validate-version]

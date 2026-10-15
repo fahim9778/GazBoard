@@ -259,12 +259,22 @@ async function writeAtomic(file, text) {
   }
 }
 
-function storageInfo() {
+/*
+ * Where the boards are, for Settings and the page. `count` (how many boards the
+ * usual folder already holds, for the reset question) reads every board file,
+ * so only the Storage controls ask for it, and it is read without holding up
+ * anything else; app:info, asked for on every My boards, never counts.
+ */
+async function storageInfo({ count = false } = {}) {
   let defaultExistingBoards = 0;
-  try {
-    defaultExistingBoards = fs.readdirSync(defaultDataDir(), { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.json')).length;
-  } catch {}
+  if (count) {
+    try {
+      for (const name of await fsp.readdir(defaultDataDir())) {
+        if (!name.toLowerCase().endsWith('.json')) continue;
+        try { if (StorageLocation.isBoardFile(JSON.parse(await fsp.readFile(path.join(defaultDataDir(), name), 'utf8')))) defaultExistingBoards++; } catch {}
+      }
+    } catch {}
+  }
   return {
     current: dataDir(), default: defaultDataDir(), isCustom: !!storedStorageLocation,
     status: storageFallback ? 'fallback' : 'ok',
@@ -306,6 +316,8 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) original = parsed;
     } catch {}
     const fileId = path.basename(entry.name, path.extname(entry.name));
+    // somebody else's .json that found its way in: not ours to carry
+    if (original && !StorageLocation.isBoardFile(original)) continue;
     const oldId = typeof original?.id === 'string' ? original.id : fileId;
     const safeId = /^[A-Za-z0-9_-]{1,128}$/.test(oldId) ? oldId
       : (/^[A-Za-z0-9_-]{1,128}$/.test(fileId) ? fileId : crypto.randomUUID());
@@ -370,7 +382,7 @@ async function copyStorageContents(fromBoards, toBoards, { merge = false } = {})
     const st = await fsp.stat(item.file);
     if (st.size !== item.size) throw new Error(`Could not verify copied board ${path.basename(item.file)}.`);
   }
-  if (verify.length !== sourceFiles.length) throw new Error('Could not verify every copied board.');
+  if (verify.length !== sources.length) throw new Error('Could not verify every copied board.');
   if (verifyAssets.length !== assetsSeen) throw new Error('Could not verify every copied asset.');
   for (const item of verifyAssets) {
     const st = await fsp.stat(item.file);
@@ -411,6 +423,25 @@ async function trashOldStorageCopies(token) {
   for (const file of existing) await shell.trashItem(file);
   deletableStorageCopies.delete(token);
   return { ok: true, deleted: existing.length };
+}
+
+/**
+ * What picking this folder would mean, without touching it yet: the GazBoard
+ * folder inside it, and whether that already has boards (a second computer
+ * pointing at the same synced folder) or will start empty. Nothing is created
+ * until the person has said what to do - backing out of the question leaves
+ * no stray folder behind.
+ */
+function checkPickedFolder(selected) {
+  const target = StorageLocation.boardsFolderFor(selected);
+  if (path.resolve(target) === path.resolve(dataDir()))
+    return { ok: true, path: dataDir(), isEmpty: false, existingBoards: 0, unchanged: true };
+  const rules = { currentDir: dataDir(), protectedDir: defaultDataDir(), appPath: app.getAppPath(), create: false };
+  if (fs.existsSync(target)) return StorageLocation.validateBoardsDir(target, rules);
+  // only the folder it goes in exists so far: that one must be a writable folder outside the app
+  const parent = StorageLocation.validateBoardsDir(path.dirname(target), { appPath: app.getAppPath(), create: false });
+  if (!parent.ok) return parent;
+  return { ok: true, path: target, isEmpty: true, existingBoards: 0 };
 }
 
 async function applyStorageLocation(target, mode, reset = false) {
@@ -978,10 +1009,10 @@ function sync() {
  *  IPC
  * ------------------------------------------------------------------ */
 function ipc() {
-  ipcMain.handle('app:info', () => ({
+  ipcMain.handle('app:info', async () => ({
     version: app.getVersion(), platform: process.platform,
     electron: process.versions.electron, chrome: process.versions.chrome, boardsDir: dataDir(),
-    storage: storageInfo(),
+    storage: await storageInfo(),
     libreoffice: !!findSoffice(), sofficePath: findSoffice(), userData: app.getPath('userData'),
     // the suite drives the app headlessly; it must never be stopped by a
     // consent dialog, and it must never reach the network
@@ -993,22 +1024,44 @@ function ipc() {
     pendingBoardFile: openedFromFile
   }));
 
-  ipcMain.handle('storage:get', () => storageInfo());
+  ipcMain.handle('storage:get', () => storageInfo({ count: true }));
   ipcMain.handle('storage:choose', async () => {
     const r = await dialog.showOpenDialog(mainWindow, {
       title: 'Choose where GazBoard saves boards', properties: ['openDirectory', 'createDirectory']
     });
     if (r.canceled || !r.filePaths[0]) return { canceled: true };
-    const selected = r.filePaths[0];
-    if (path.resolve(selected) === path.resolve(dataDir()))
-      return { ok: true, path: dataDir(), isEmpty: false, existingBoards: 0, unchanged: true };
-    return StorageLocation.validateBoardsDir(selected, { currentDir: dataDir(), protectedDir: defaultDataDir(), appPath: app.getAppPath() });
+    return checkPickedFolder(r.filePaths[0]);
   });
   ipcMain.handle('storage:apply', async (_e, opts = {}) =>
     applyStorageLocation(opts.path, opts.mode));
   ipcMain.handle('storage:reset', async (_e, opts = {}) =>
     applyStorageLocation(defaultDataDir(), opts.mode, true));
   ipcMain.handle('storage:delete-old', async (_e, token) => trashOldStorageCopies(token));
+  /*
+   * The My boards folders, kept beside the boards in a chosen folder so they
+   * travel with them (see catalogueOf in src/js/core/folders.js). Only ever
+   * the one file, only in a chosen folder - the usual place keeps them in
+   * settings exactly as before - and only when it reads as a catalogue.
+   */
+  const catalogueFile = () => (activeDataDir ? path.join(dataDir(), 'folders.json') : null);
+  ipcMain.handle('storage:catalogue:read', async () => {
+    const file = catalogueFile();
+    if (!file) return null;
+    try {
+      const raw = JSON.parse(await fsp.readFile(file, 'utf8'));
+      return raw && typeof raw === 'object' && !Array.isArray(raw) && Array.isArray(raw.folders) ? raw : null;
+    } catch { return null; }
+  });
+  ipcMain.handle('storage:catalogue:write', async (_e, json) => {
+    const file = catalogueFile();
+    if (!file || typeof json !== 'string' || json.length > 4 * 1024 * 1024) return false;
+    try {
+      const raw = JSON.parse(json);
+      if (!raw || typeof raw !== 'object' || !Array.isArray(raw.folders)) return false;
+      await withStorageWrite(async () => { await ensureDataDir(); await writeAtomic(file, json); });
+      return true;
+    } catch { return false; }
+  });
   ipcMain.handle('storage:flush-ack', (_e, ticket, ok = true) => {
     const finish = storageFlushes.get(ticket);
     if (!finish) return false;
@@ -1139,6 +1192,7 @@ function ipc() {
       try {
         const st = await fsp.stat(path.join(dataDir(), f));
         const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), f), 'utf8'));
+        if (!StorageLocation.isBoardFile(raw)) continue;      // some other program's .json: not a board
         out.push({ id: raw.id || path.basename(f, '.json'), name: raw.name || 'Untitled board', modified: st.mtimeMs, objects: (raw.objects || []).length, thumb: raw.thumb || null, origin: raw.origin || null });
       } catch {}
     }
@@ -1146,7 +1200,10 @@ function ipc() {
   });
   ipcMain.handle('boards:load', async (_e, id) => {
     await ensureDataDir();
-    try { return JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8')); } catch { return null; }
+    try {
+      const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8'));
+      return StorageLocation.isBoardFile(raw) ? raw : null;
+    } catch { return null; }
   });
   ipcMain.handle('boards:save', async (_e, payload) => withStorageWrite(async () => {
     await ensureDataDir();
@@ -1326,7 +1383,10 @@ function ipc() {
   ipcMain.handle('boards:resume', async () => {
     await ensureDataDir();
     const read = async (id) => {
-      try { return JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8')); } catch { return null; }
+      try {
+        const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8'));
+        return StorageLocation.isBoardFile(raw) ? raw : null;
+      } catch { return null; }
     };
     const wanted = await getLastBoard();
     if (wanted) {
@@ -1355,7 +1415,15 @@ function ipc() {
   });
   ipcMain.handle('boards:delete', (_e, id) => withStorageWrite(async () => {
     let ok = false;
-    try { await fsp.unlink(path.join(dataDir(), id + '.json')); ok = true; } catch { ok = false; }
+    const file = path.join(dataDir(), String(id) + '.json');
+    /*
+     * Only ever a board. The folder may be one the person also uses for other
+     * things, and a file that is not a board - or an id that would reach
+     * outside the folder - is never removed, whatever the page asked for.
+     */
+    let isBoard = false;
+    try { isBoard = /^[A-Za-z0-9_-]{1,128}$/.test(String(id)) && StorageLocation.isBoardFile(JSON.parse(await fsp.readFile(file, 'utf8'))); } catch {}
+    if (isBoard) { try { await fsp.unlink(file); ok = true; } catch { ok = false; } }
     // The "last open" pointer must not go on naming a board that no longer
     // exists, or the next launch spends its first moments trying to open a
     // deleted file before falling back.
@@ -1455,7 +1523,7 @@ async function prepareConfiguredStorage() {
       title: 'Choose another boards folder', properties: ['openDirectory', 'createDirectory']
     });
     if (picked.canceled || !picked.filePaths[0]) continue;
-    const valid = StorageLocation.validateBoardsDir(picked.filePaths[0], {
+    const valid = StorageLocation.validateBoardsDir(StorageLocation.boardsFolderFor(picked.filePaths[0]), {
       currentDir: activeDataDir, protectedDir: defaultDataDir(), appPath: app.getAppPath()
     });
     if (!valid.ok) {

@@ -1156,9 +1156,11 @@ export function createPanels(app) {
       let storageDeleteToken = null;
       const drawStorage = async () => {
         if (!storage) return;
-        const [i, state] = await Promise.all([window.board.info(), window.board.storage.get()]);
+        // app:info already says where the boards are; storage.get() also counts the boards in the
+        // usual folder, which reads every one of them - only the Reset question needs that
+        const i = await window.board.info();
         if (!storage.isConnected) return;
-        const path = i.boardsDir || state.current || (i.userData ? i.userData + '/boards' : '');
+        const path = i.boardsDir || i.storage?.current || (i.userData ? i.userData + '/boards' : '');
         storage.replaceChildren(...[
           i.storage?.status === 'fallback' ? h('div', { style: 'padding:8px 10px;margin-bottom:8px;border:1px solid rgba(255,185,0,.4);border-radius:6px;background:rgba(255,185,0,.12);font-size:12px;line-height:1.5' }, t('The chosen boards folder is unavailable. GazBoard is using the default folder for this session.')) : null,
           h('code', { style: 'font-size:11px;display:block;word-break:break-all;margin-bottom:8px' }, path),
@@ -1224,6 +1226,8 @@ export function createPanels(app) {
         }, storageMessage));
       };
       drawStorage().catch(() => {});
+      // Android: the safe copy of the boards in a folder of the person's own (see safeCopy below)
+      const backup = !storage && window.board?.backup ? safeCopy({ full: true }) : null;
       window.board.info().then((i) => {
         const platformLines = i.electron
           ? `Electron ${i.electron} · Chromium ${i.chrome}<br>` +
@@ -1308,6 +1312,7 @@ export function createPanels(app) {
           row(t('Ruler snapping'), mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
         storage ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), storage) : null,
+        backup ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), backup) : null,
         h('div', { class: 'section' },
           h('h5', {}, t('Canvas')),
           row(t('Mouse wheel zooms'), mkToggle(() => s.wheelZoom, (v) => (s.wheelZoom = v)), t('Off: wheel and trackpad pan, Ctrl+wheel zooms.')),
@@ -1322,8 +1327,10 @@ export function createPanels(app) {
           }), t('A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.')),
           row(t('Right-drag pans the canvas'), mkToggle(() => s.rightDragPans !== false, (v) => (s.rightDragPans = v)),
             t('Hold the right mouse button and drag to move around — useful on a laptop with no pen and no middle button. A right click that does not move still opens the usual menu.')),
-          row(t('Check for updates'), mkToggle(() => s.updateCheck === true, (v) => { s.updateCheck = v; app.saveSettings(); if (v) app.checkForUpdates({ force: true }); }),
-            t('Asks GitHub at most twice a day whether a newer version exists, and tells you if so. Nothing is downloaded or installed automatically, and nothing about you or your boards is ever sent. Off means the app never touches the network.')),
+          app.storeName()
+            ? row(t('Updates'), null, t('{store} keeps GazBoard up to date', { store: app.storeName() }))
+            : row(t('Check for updates'), mkToggle(() => s.updateCheck === true, (v) => { s.updateCheck = v; app.saveSettings(); if (v) app.checkForUpdates({ force: true }); }),
+              t('Asks GitHub at most twice a day whether a newer version exists, and tells you if so. Nothing is downloaded or installed automatically, and nothing about you or your boards is ever sent. Off means the app never touches the network.')),
           row(t('Shortcut letters on the toolbar'), mkToggle(() => s.showToolKeys !== false, (v) => (s.showToolKeys = v)),
             t('Shows the key for each tool in the corner of its button — V, P, H, E and so on — so you can switch without stopping to look them up.')),
           row(t('Low-latency inking'), mkToggle(() => s.lowLatencyInk, (v) => { s.lowLatencyInk = v; app.toast(t('Takes effect next time GazBoard opens')); }),
@@ -1429,6 +1436,114 @@ export function createPanels(app) {
     });
   }
 
+  /*
+   * The safe copy, on Android.
+   *
+   * The app's private storage goes when GazBoard is uninstalled; a copy in a
+   * folder of the person's own does not. One switch turns it on - Android's
+   * folder picker asks which folder, once - and the same switch shows in My
+   * boards and in Settings, both reading the phone's own answer each time, so
+   * they can never disagree. No storage permission is ever asked for: the
+   * picker hands over that one folder and nothing else.
+   */
+  function safeCopy({ full = false } = {}) {
+    const box = h('div', { class: 'safe-copy' });
+    let timer = null;
+    const draw = async () => {
+      clearTimeout(timer);
+      let st = {};
+      try { st = await window.board.backup.state(); } catch (e) { st = { error: e.message || String(e) }; }
+      app.backupState = st;
+      const on = !!st.folder;
+      const sw = h('input', { type: 'checkbox' });
+      sw.checked = on;
+      sw.addEventListener('change', async () => {
+        sw.disabled = true;
+        try {
+          if (sw.checked) {
+            const r = await window.board.backup.choose();
+            if (r && !r.canceled) app.queueCatalogue?.({ now: true });
+          } else await window.board.backup.stop();
+        } catch (e) { app.toast(t('Could not use that folder: {error}', { error: e.message || String(e) }), 'help', 6000); }
+        await draw();
+      });
+      const run = (fn) => async () => {
+        try { await fn(); } catch (e) { app.toast(t('Could not use that folder: {error}', { error: e.message || String(e) }), 'help', 6000); }
+        await draw();
+      };
+      const line = (text, colour) => h('div', { style: `font-size:12px;line-height:1.6;margin-top:6px;color:${colour || 'var(--text-2)'}` }, text);
+      box.replaceChildren(...[
+        h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' },
+          h('span', { style: 'font-size:13px;color:var(--text)' }, t('Keep a safe copy in a folder')),
+          h('label', { class: 'toggle' }, sw)),
+        on && st.error ? line(t('The copy could not be written: {error}', { error: st.error }), 'var(--danger,#c50f1f)')
+          : on && st.copying ? line(t('Copying {done} of {total}…', { done: st.done || 0, total: st.total || 0 }))
+          : on ? line(t('Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.', { folder: st.folder }))
+          : line(t('Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.')),
+        full ? h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
+          on ? h('button', { class: 'btn', onclick: run(async () => {
+            const r = await window.board.backup.choose();
+            if (r && !r.canceled) app.queueCatalogue?.({ now: true });
+          }) }, t('Change folder…')) : null,
+          h('button', { class: 'btn', onclick: run(() => bringBack()) }, t('Bring boards back from a folder…'))) : null
+      ].filter(Boolean));
+      // while it copies, keep the count moving
+      if (st.copying) timer = setTimeout(() => { if (box.isConnected) draw().catch(() => {}); }, 700);
+    };
+    draw().catch(() => {});
+    return box;
+  }
+
+  /** After installing again: the boards (and their folders) from the safe copy. Nothing here is replaced. */
+  async function bringBack() {
+    const r = await window.board.backup.restore();
+    if (!r || r.canceled) return;
+    if (!r.ok) throw new Error(r.error || '');
+    if (r.catalogue) app.takeCatalogue(r.catalogue);
+    const n = r.boards || 0;
+    app.toast(n === 0 ? t('Every board in that folder is already here')
+      : n === 1 ? t('{n} board brought back', { n }) : t('{n} boards brought back', { n }), n ? 'check' : 'help');
+    await app.refreshBoardDirectory?.();
+    // a fresh install shows an empty board: put the newest one that came back in its place
+    if (n && app.unsavedNew && !app.store.objects.length) {
+      const r2 = await window.board.boards.resume();
+      if (r2?.board) await app.loadBoard(r2.board, { claimed: true });
+    }
+    boardsChanged();
+  }
+
+  /*
+   * Asked once, where the boards are: on Android, until a safe copy is kept,
+   * My boards offers it. "Later" puts it away; it asks one more time once
+   * there are a few boards worth keeping, and then never again - the switch
+   * at the foot of My boards and in Settings is always there.
+   */
+  async function offerSafeCopy(host, count) {
+    if (!window.board?.backup || !host) return;
+    const asked = Number(app.settings.safeCopyAsked) || 0;
+    if (asked >= 2 || (asked === 1 && count < 5)) return;
+    let st = {};
+    try { st = await window.board.backup.state(); } catch { return; }
+    if (st.folder || !host.isConnected || host.querySelector('.safe-copy-offer')) return;
+    const offer = h('div', { class: 'safe-copy-offer', role: 'note', style: 'margin:0 0 12px;padding:10px 12px;border:1px solid rgba(255,185,0,.45);border-radius:8px;background:rgba(255,185,0,.12);font-size:13px;line-height:1.5' },
+      h('div', {}, t('Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?')),
+      h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
+        h('button', { class: 'btn primary', onclick: async () => {
+          try {
+            const r = await window.board.backup.choose();
+            if (r && !r.canceled) { app.queueCatalogue?.({ now: true }); offer.remove(); boardsChanged(); }
+          } catch (e) { app.toast(t('Could not use that folder: {error}', { error: e.message || String(e) }), 'help', 6000); }
+        } }, t('Choose folder')),
+        // a fresh install, nothing here yet: the boards may be waiting in the folder chosen before
+        count <= 1 ? h('button', { class: 'btn', onclick: async () => {
+          try { await bringBack(); } catch (e) { app.toast(t('Could not use that folder: {error}', { error: e.message || String(e) }), 'help', 6000); }
+        } }, t('Bring boards back from a folder…')) : null,
+        h('button', { class: 'btn', onclick: () => {
+          app.settings.safeCopyAsked = asked + 1; app.saveSettings(); offer.remove();
+        } }, t('Later'))));
+    host.prepend(offer);
+  }
+
   /* ---------------- boards ---------------- */
   /*
    * My boards, with folders.
@@ -1464,7 +1579,8 @@ export function createPanels(app) {
     for (const b of all) if (b.id === app.store.doc.id) b.thumb = app.boardPictureFor?.() || b.thumb || null;
     const host = document.getElementById('boardList');
     if (!host) return;
-    if (F.pruneBoards(app.settings, all)) app.saveSettings();
+    // only in the usual folder, once that is known: while another is in use, boards filed from there are not "gone"
+    if (app.storageElsewhere === false && F.pruneBoards(app.settings, all)) app.saveSettings();
     const here = app.boardFolder && F.folderPath(app.settings, app.boardFolder).length ? app.boardFolder : null;
     app.boardFolder = here;
     const list = F.boardsIn(app.settings, all, here);
@@ -1667,13 +1783,15 @@ export function createPanels(app) {
           } }, t('Open that folder')));
         main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
       } else if (i.isAndroid) {
+        offerSafeCopy(main, all.length);
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, all.length === 1
             ? t('{n} board, saved in GazBoard’s private storage on this Android device.', { n: all.length })
             : t('{n} boards, saved in GazBoard’s private storage on this Android device.', { n: all.length })),
           h('p', {}, t('Boards and images save automatically and reopen here. Android’s Files app cannot browse this private folder.')),
           h('p', {}, t('Select boards above to export them with their images. Choose Downloads, Documents or another location in the Android file picker.')),
-          h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
+          window.board.backup ? h('div', { style: 'margin:8px 0 12px' }, safeCopy()) :
+            h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, t('Save current board…')));
         main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
       } else {
@@ -1888,7 +2006,8 @@ export function createPanels(app) {
     });
     const host = document.getElementById('boardList');
     if (!host) return;
-    if (F.pruneBoards(app.settings, all)) app.saveSettings();
+    // only in the usual folder, once that is known: while another is in use, boards filed from there are not "gone"
+    if (app.storageElsewhere === false && F.pruneBoards(app.settings, all)) app.saveSettings();
     const here = app.boardFolder && F.folderPath(app.settings, app.boardFolder).length ? app.boardFolder : null;
     app.boardFolder = here;
     const list = F.boardsIn(app.settings, all, here);
@@ -2049,13 +2168,15 @@ export function createPanels(app) {
           } }, t('Open that folder')));
         host.appendChild(foot);
       } else if (i.isAndroid) {
+        offerSafeCopy(host, all.length);
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, all.length === 1
             ? t('{n} board, saved in GazBoard’s private storage on this Android device.', { n: all.length })
             : t('{n} boards, saved in GazBoard’s private storage on this Android device.', { n: all.length })),
           h('p', {}, t('Boards and images save automatically and reopen here. Android’s Files app cannot browse this private folder.')),
           h('p', {}, t('Select boards above to export them with their images. Choose Downloads, Documents or another location in the Android file picker.')),
-          h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
+          window.board.backup ? h('div', { style: 'margin:8px 0 12px' }, safeCopy()) :
+            h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, t('Save current board…')));
         host.appendChild(foot);
       } else {

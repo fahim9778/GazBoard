@@ -96,6 +96,9 @@ export function deleteFolder(s, id) {
   const map = { ...(s.boardFolders || {}) };
   for (const [b, at] of Object.entries(map)) if (at === id) { if (up) map[b] = up; else delete map[b]; }
   s.boardFolders = map;
+  // remembered, so a copy of this catalogue elsewhere (another computer, the phone's folder copy) is not
+  // taken as a reason to bring the folder back
+  s.removedFolders = [...(Array.isArray(s.removedFolders) ? s.removedFolders : []).filter((x) => x !== id), id].slice(-500);
   return true;
 }
 
@@ -144,4 +147,80 @@ export function setFolderColour(s, id, colour) {
   if (!byId(s, id) || !/^#[0-9a-f]{6}$/i.test(String(colour || ''))) return false;
   s.folders = folderList(s).map((f) => (f.id === id ? { ...f, color: colour } : f));
   return true;
+}
+
+/*
+ * The catalogue travels with the boards.
+ *
+ * It is kept in this device's settings, which do not move when the boards do:
+ * choosing another boards folder, opening the same folder on a second
+ * computer, or bringing boards back on a reinstalled phone found every board
+ * but none of the folders they were filed in. So a copy is written beside the
+ * boards (folders.json), and read back in when boards arrive from there.
+ *
+ * Reading it back only ever ADDS: folders this device does not have, and
+ * filing for boards this device has not filed. What is already here wins, so
+ * nothing anyone sorted on this device is undone. A folder deleted elsewhere
+ * is deleted here the usual safe way - what was in it moves up a level - and
+ * one deleted here is not brought back by an older copy.
+ */
+export function catalogueOf(s) {
+  return {
+    version: 1,
+    folders: folderList(s),
+    boardFolders: s.boardFolders && typeof s.boardFolders === 'object' ? s.boardFolders : {},
+    deviceFolders: s.deviceFolders && typeof s.deviceFolders === 'object' ? s.deviceFolders : {},
+    removedFolders: Array.isArray(s.removedFolders) ? s.removedFolders : []
+  };
+}
+
+const isId = (x) => typeof x === 'string' && x.length > 0 && x.length <= 128;
+
+/** Fold a catalogue from elsewhere into this one. True when anything changed. */
+export function mergeCatalogue(s, inc) {
+  if (!inc || typeof inc !== 'object' || Array.isArray(inc)) return false;
+  let changed = false;
+  const removed = new Set((Array.isArray(s.removedFolders) ? s.removedFolders : []).filter(isId));
+  for (const id of Array.isArray(inc.removedFolders) ? inc.removedFolders : []) {
+    if (!isId(id)) continue;
+    if (byId(s, id)) { deleteFolder(s, id); changed = true; }
+    removed.add(id);
+  }
+  const have = new Set(folderList(s).map((f) => f.id));
+  const add = [];
+  for (const f of Array.isArray(inc.folders) ? inc.folders : []) {
+    if (!f || !isId(f.id) || have.has(f.id) || removed.has(f.id)) continue;
+    const name = cleanName(f.name);
+    if (!name) continue;
+    const g = { id: f.id, name, parent: isId(f.parent) ? f.parent : null };
+    if (typeof f.color === 'string' && /^#[0-9a-f]{6}$/i.test(f.color)) g.color = f.color;
+    add.push(g); have.add(g.id);
+  }
+  if (add.length) {
+    s.folders = [...folderList(s), ...add];
+    // a damaged copy could have two new folders inside each other; neither would ever show, so they go to the top
+    for (const g of add) {
+      const seen = new Set([g.id]);
+      for (let p = byId(s, g.parent); p; p = p.parent ? byId(s, p.parent) : null) {
+        if (seen.has(p.id)) { g.parent = null; break; }
+        seen.add(p.id);
+      }
+    }
+    changed = true;
+  }
+  const fill = (key, from) => {
+    if (!from || typeof from !== 'object' || Array.isArray(from)) return;
+    const map = { ...(s[key] && typeof s[key] === 'object' ? s[key] : {}) };
+    let touched = false;
+    for (const [k, folder] of Object.entries(from)) {
+      if (!isId(k) || !isId(folder) || !byId(s, folder)) continue;
+      if (map[k] && byId(s, map[k])) continue;          // this device's own filing wins
+      map[k] = folder; touched = true;
+    }
+    if (touched) { s[key] = map; changed = true; }
+  };
+  fill('boardFolders', inc.boardFolders);
+  fill('deviceFolders', inc.deviceFolders);
+  s.removedFolders = [...removed].slice(-500);
+  return changed;
 }

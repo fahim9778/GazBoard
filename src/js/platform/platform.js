@@ -51,6 +51,8 @@ export function initPlatform() {
   });
 
   window.addEventListener('drop', async (e) => {
+    // the board already took this one (it handles boards, pictures and documents); opening it again here would open it twice
+    if (e.defaultPrevented) return;
     e.preventDefault();
     if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
 

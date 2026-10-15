@@ -1104,5 +1104,19 @@
  "Storage": "存储",
  "Move old copies to Trash…": "将旧副本移至废纸篓…",
  "Old copies moved to Trash": "旧副本已移至废纸篓",
- "Could not remove old copies": "无法移除旧副本"
+ "Could not remove old copies": "无法移除旧副本",
+ "Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.": "卸载 GazBoard 时，Android 会删除你的白板。在你自己的文件夹里保留一份副本，它们就不会丢失。",
+ "Copying {done} of {total}…": "正在复制 {done} / {total}…",
+ "The copy could not be written: {error}": "无法写入副本：{error}",
+ "Bring boards back from a folder…": "从文件夹找回白板…",
+ "Every board in that folder is already here": "该文件夹中的白板都已在这里",
+ "{n} board brought back": "已找回 {n} 个白板",
+ "{n} boards brought back": "已找回 {n} 个白板",
+ "Could not use that folder: {error}": "无法使用该文件夹：{error}",
+ "Keep a safe copy in a folder": "在文件夹中保留安全副本",
+ "Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.": "安全副本保存在 {folder}。卸载 GazBoard 不会删除它。",
+ "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "卸载 GazBoard 会删除这些白板。要在你自己的文件夹中保留安全副本吗？",
+ "Choose folder": "选择文件夹",
+ "{store} keeps GazBoard up to date": "{store} 会让 GazBoard 保持最新",
+ "Updates": "更新"
 }

@@ -3,6 +3,7 @@ package com.gazboard.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -10,6 +11,8 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.*
+import android.view.DragAndDropPermissions
+import android.view.DragEvent
 import android.webkit.*
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -61,6 +64,18 @@ class MainActivity : ComponentActivity() {
   private val flushes = ConcurrentHashMap<String, CompletableFuture<Boolean>>()
   private val conversionSlot = Semaphore(1)
   private var conversion: DocumentConverter? = null
+  private val dropGrants = mutableListOf<DragAndDropPermissions>()
+  private var folderPicker: CompletableFuture<Uri?>? = null
+  private val folderLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    val waiting = folderPicker
+    folderPicker = null
+    val uri = if (result.resultCode == RESULT_OK) result.data?.data else null
+    // kept across restarts: the copy goes on being written there until the person says stop
+    if (uri != null) runCatching {
+      contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    }
+    waiting?.complete(uri)
+  }
   private val pickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     val waiting = picker
     picker = null
@@ -156,6 +171,7 @@ class MainActivity : ComponentActivity() {
         WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
       }
       isFocusableInTouchMode = true
+      setOnDragListener { _, event -> onFileDrag(event) }
       overScrollMode = android.view.View.OVER_SCROLL_NEVER
       WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
       webChromeClient = object : WebChromeClient() {
@@ -187,6 +203,46 @@ class MainActivity : ComponentActivity() {
       }
     }
   }
+  /*
+   * Files dragged across from another app: Files, Gallery, a browser's
+   * downloads, in split screen, from a tablet's taskbar or on DeX.
+   *
+   * A WebView does not hand files from other apps to the page, so they are
+   * caught here and sent the way an "Open with" file is: Android gives a
+   * content address, BridgeFiles turns it into a handle the page can read, and
+   * the page imports it exactly as Add or Open would. Only drags that carry
+   * something other than text are taken; selected text being dragged about
+   * stays the WebView's business, as before.
+   */
+  private fun carriesFiles(d: ClipDescription?): Boolean =
+    d != null && (0 until d.mimeTypeCount).any { !d.getMimeType(it).startsWith("text/") }
+
+  private fun onFileDrag(event: DragEvent): Boolean {
+    if (!carriesFiles(event.clipDescription)) return false
+    if (event.action != DragEvent.ACTION_DROP) return true
+    val clip = event.clipData ?: return true
+    // reading another app's file needs its say-so, granted only during the drop; it lasts until this screen closes
+    requestDragAndDropPermissions(event)?.let { dropGrants += it }
+    val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }.filter { it.scheme == "content" }
+    if (uris.isEmpty() || !ready) return true
+    val density = resources.displayMetrics.density
+    val x = event.x / density
+    val y = event.y / density
+    app.io.execute {
+      val handles = uris.mapNotNull { uri -> runCatching { app.files.register(uri) }.getOrNull() }
+      if (handles.isEmpty()) {
+        app.main.post { Toast.makeText(this, "Could not read the dropped file", Toast.LENGTH_LONG).show() }
+        return@execute
+      }
+      bridge.event("drop", buildJsonObject {
+        put("files", JsonArray(handles.map { JsonPrimitive(it) }))
+        put("x", x)
+        put("y", y)
+      })
+    }
+    return true
+  }
+
   fun editorReady() {
     app.main.post {
       ready = true
@@ -213,6 +269,23 @@ class MainActivity : ComponentActivity() {
       try { bridge.event("file", JsonPrimitive(app.files.register(uri, next.flags))) }
       catch (e: Exception) { app.main.post { Toast.makeText(this, e.message ?: "Could not open file", Toast.LENGTH_LONG).show() } }
     }
+  }
+  /** Android's own folder picker. Null when the person backed out. */
+  fun pickFolder(): Uri? {
+    val result = CompletableFuture<Uri?>()
+    onMain {
+      check(folderPicker == null) { "Finish choosing the folder first" }
+      folderPicker = result
+      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+      // open on Documents, the place people look for their own files; a suggestion only, any folder can be picked.
+      // No storage permission is involved: the picker hands over this one folder and nothing else.
+      runCatching { intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+        android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:Documents")) }
+      try { folderLauncher.launch(intent) } catch (e: Exception) { folderPicker = null; throw e }
+    }
+    return try { result.get(5, TimeUnit.MINUTES) }
+      finally { app.main.post { if (folderPicker === result) folderPicker = null } }
   }
   fun pickFiles(options: JsonObject, save: Boolean): List<String> {
     val result = CompletableFuture<List<String>>()
@@ -461,7 +534,27 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  /**
+   * Where this copy was installed from. A copy from Google Play (or F-Droid) is
+   * updated by that store, and Play's rules say it may update in no other way -
+   * so for those the page never looks at GitHub or offers a download. Anything
+   * else (the APK from GitHub, a file passed on by hand) is "github".
+   */
+  fun installStore(): String {
+    val installer = runCatching {
+      if (Build.VERSION.SDK_INT >= 30) packageManager.getInstallSourceInfo(packageName).installingPackageName
+      else @Suppress("DEPRECATION") packageManager.getInstallerPackageName(packageName)
+    }.getOrNull()
+    return when (installer) {
+      "com.android.vending", "com.google.android.feedback" -> "play"
+      "org.fdroid.fdroid", "org.fdroid.basic", "com.looker.droidify", "com.machiav3lli.fdroid", "in.sunilpaulmathew.izzyondroid" -> "fdroid"
+      else -> "github"
+    }
+  }
   fun checkForUpdate(): JsonObject {
+    // a store copy is the store's to update: report it as current, whatever GitHub has
+    if (installStore() != "github") return json("ok" to true, "version" to BuildConfig.VERSION_NAME, "name" to BuildConfig.VERSION_NAME,
+      "url" to "https://github.com/fahim9778/GazBoard/releases", "prerelease" to false)
     val connection = URL("https://api.github.com/repos/fahim9778/GazBoard/releases?per_page=30").openConnection() as HttpURLConnection
     try {
       connection.connectTimeout = 8000; connection.readTimeout = 8000
@@ -577,12 +670,14 @@ class MainActivity : ComponentActivity() {
     requestFlush().whenComplete { _, _ -> app.main.post { moveTaskToBack(true) } }
   }
   override fun onResume() { super.onResume(); app.visible = true; if (::web.isInitialized) web.onResume() }
-  override fun onPause() { requestFlush(); app.visible = false; super.onPause() }
+  override fun onPause() { requestFlush(); app.mirror.flushSoon(); app.visible = false; super.onPause() }
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     if (ready) bridge.event("resize", JsonNull)
   }
   override fun onDestroy() {
+    dropGrants.forEach { runCatching { it.release() } }
+    dropGrants.clear()
     app.events = null
     conversion?.failed("The editor closed during conversion")
     picker?.complete(emptyList()); picker = null

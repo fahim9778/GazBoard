@@ -9257,15 +9257,180 @@ async function run(win, app) {
       win.noteMissed && win.noteMissed.done === false && win.noteMissed.to === '99.0.0' && win.noteMissed.kind === 'mac' && win.noteDone && win.noteDone.done === true && win.noteGone === null,
       JSON.stringify({ missed: win.noteMissed, done: win.noteDone, gone: win.noteGone }));
 
+    // 4b. Linux AppImage: only the changed parts are downloaded (zsync), checked, and put in place under the same name
+    {
+      const Fx = require(path.join(FIX, 'appimage-update.js'));
+      const { old: oldImg, fresh: newImg } = Fx.pair();
+      const zsyncFile = fsSync.readFileSync(path.join(FIX, 'appimage-update.zsync'));
+      const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gb-appimage-'));
+      const imgPath = path.join(dir, 'GazBoard.AppImage');
+      fsSync.writeFileSync(imgPath, oldImg, { mode: 0o755 });
+      const lin = {
+        appimage: U.installMode({ platform: 'linux', env: { APPIMAGE: imgPath }, packaged: true, canWrite: yes }),
+        gone: U.installMode({ platform: 'linux', env: { APPIMAGE: path.join(dir, 'nowhere.AppImage') }, packaged: true }).reason,
+        locked: U.installMode({ platform: 'linux', env: { APPIMAGE: imgPath }, packaged: true, canWrite: no }).reason,
+        deb: U.installMode({ platform: 'linux', env: {}, packaged: true }).reason,
+        names: [U.appImageName('4.7.0', 'x64'), U.appImageName('4.7.0', 'arm64'), U.appImageName('4.7.0', 'ia32')]
+      };
+      let ranges = [], whole = 0, mangle = false;
+      const zs = http.createServer((req, res) => {
+        const u = req.url.split('?')[0];
+        if (u === '/v99.0.0/GazBoard-99.0.0.AppImage.zsync') { res.end(zsyncFile); return; }
+        if (u === '/v99.0.0/GazBoard-99.0.0.AppImage') {
+          // spoilt inside the part that changed, which is the part that has to be fetched
+          const body = mangle ? Buffer.from(newImg).fill(1, 300100, 300200) : newImg;
+          const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+          if (!m) { whole++; res.setHeader('content-length', body.length); res.end(body); return; }
+          const a = +m[1], b = Math.min(+m[2], body.length - 1);
+          ranges.push(b - a + 1);
+          res.writeHead(206, { 'content-range': `bytes ${a}-${b}/${body.length}`, 'content-length': b - a + 1 });
+          res.end(body.subarray(a, b + 1)); return;
+        }
+        res.statusCode = 404; res.end('');
+      });
+      await new Promise((r) => zs.listen(0, '127.0.0.1', r));
+      process.env.GAZBOARD_UPDATE_DOWNLOADS = `http://127.0.0.1:${zs.address().port}`;
+      process.env.GAZBOARD_UPDATE_TEST = '1';
+      let good = {}, bad = {}, placed = {};
+      try {
+        const env = { APPIMAGE: imgPath, GAZBOARD_UPDATE_TEST: '1' };
+        // a server that sends the wrong bytes: refused, and the AppImage on disk is not touched
+        mangle = true;
+        const ub = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'linux', arch: 'x64', env, canWrite: yes });
+        bad = await ub.download('99.0.0');
+        bad.untouched = fsSync.readFileSync(imgPath).equals(oldImg);
+        bad.leftovers = fsSync.readdirSync(dir).filter((n) => n !== 'GazBoard.AppImage');
+        mangle = false; ranges = []; whole = 0;
+        const ug = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'linux', arch: 'x64', env, canWrite: yes });
+        const progressLin = [];
+        good = await ug.download('99.0.0', (f) => progressLin.push(f));
+        good.ranges = ranges.length; good.fetched = ranges.reduce((x, y) => x + y, 0); good.whole = whole; good.progress = progressLin.length;
+        good.stillOld = fsSync.readFileSync(imgPath).equals(oldImg);
+        // "when I close GazBoard": put in place at once, under the same name, executable
+        placed = await ug.install({ now: false });
+        placed.isNew = fsSync.readFileSync(imgPath).equals(newImg);
+        placed.mode = (fsSync.statSync(imgPath).mode & 0o777).toString(8);
+        placed.files = fsSync.readdirSync(dir);
+        try { placed.note = JSON.parse(fsSync.readFileSync(notePath, 'utf8')); } catch (e) { placed.note = { error: e.message }; }
+        fsSync.rmSync(notePath, { force: true });
+      } finally {
+        if (envWas.d === undefined) delete process.env.GAZBOARD_UPDATE_DOWNLOADS; else process.env.GAZBOARD_UPDATE_DOWNLOADS = envWas.d;
+        if (envWas.t === undefined) delete process.env.GAZBOARD_UPDATE_TEST; else process.env.GAZBOARD_UPDATE_TEST = envWas.t;
+        await new Promise((r) => zs.close(r));
+      }
+      check('updater: an AppImage can update itself; a missing, locked or non-AppImage copy keeps the download page',
+        lin.appimage.mode === 'install' && lin.appimage.kind === 'appimage' && lin.appimage.file === fsSync.realpathSync(imgPath) && lin.gone === 'not-an-appimage' && lin.locked === 'read-only' && lin.deb === 'not-an-appimage'
+          && JSON.stringify(lin.names) === '["GazBoard-4.7.0.AppImage","GazBoard-4.7.0-arm64.AppImage",null]',
+        JSON.stringify(lin));
+      check('updater: an AppImage downloads only the parts that changed (read with the .zsync the real zsyncmake made), and checks the whole result',
+        good.ok === true && good.fetched > 0 && good.fetched < newImg.length * 0.05 && good.whole === 0 && good.stillOld && good.progress > 0,
+        `result ${JSON.stringify(good)}; fetched ${good.fetched} of ${newImg.length} bytes in ${good.ranges} parts`);
+      check('updater: if what arrives does not match the release, nothing is put in place and nothing is left behind',
+        bad.ok === false && /checksum/.test(bad.error || '') && bad.untouched && bad.leftovers.length === 0,
+        JSON.stringify(bad));
+      check('updater: the new AppImage takes the old one\'s place under the same name (menu entries keep working), ready for the next start',
+        placed.ok === true && placed.isNew && (process.platform === 'win32' || placed.mode === '755') && JSON.stringify(placed.files) === '["GazBoard.AppImage"]' && placed.note.to === '99.0.0' && placed.note.kind === 'appimage',
+        JSON.stringify(placed));
+      // restarting: the new AppImage starts only once this one has gone, with the running one's mount variables taken out
+      const cleaned = U.cleanAppImageEnv({ APPIMAGE: '/x/G.AppImage', APPDIR: '/tmp/.mount_GazBoXYZ', ARGV0: 'G', OWD: '/home', LD_LIBRARY_PATH: '/tmp/.mount_GazBoXYZ/usr/lib',
+        GSETTINGS_SCHEMA_DIR: '/tmp/.mount_GazBoXYZ/usr/share/glib-2.0/schemas', HOME: '/home/me', PATH: '/tmp/.mount_GazBoXYZ:/tmp/.mount_GazBoXYZ/usr/sbin:/usr/local/bin:/usr/bin',
+        XDG_DATA_DIRS: '/tmp/.mount_GazBoXYZ/usr/share:/usr/share' });
+      if (process.platform !== 'win32') {
+        const fake = path.join(dir, 'Pretend.AppImage');
+        const marker = path.join(dir, 'started');
+        fsSync.writeFileSync(fake, `#!/bin/sh\necho "$@" > "${marker}"\n`, { mode: 0o755 });
+        const sleeper = spawnProc(process.execPath, ['-e', 'setTimeout(() => {}, 600)'], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore' });
+        const t0 = Date.now();
+        spawnProc('/bin/sh', ['-c', U.APPIMAGE_RESTART, 'gazboard-restart', String(sleeper.pid), fake, '--no-sandbox'], { stdio: 'ignore', detached: true }).unref();
+        let early = null;
+        await new Promise((r) => setTimeout(r, 250));
+        early = fsSync.existsSync(marker);
+        for (let i = 0; i < 60 && !fsSync.existsSync(marker); i++) await new Promise((r) => setTimeout(r, 100));
+        const args = fsSync.existsSync(marker) ? fsSync.readFileSync(marker, 'utf8').trim() : null;
+        check('updater: after an AppImage update GazBoard starts again from the new file, only once the old one has quit, with the same options',
+          early === false && args === '--no-sandbox' && Date.now() - t0 >= 550
+            && JSON.stringify(cleaned) === '{"HOME":"/home/me","PATH":"/usr/local/bin:/usr/bin","XDG_DATA_DIRS":"/usr/share"}',
+          `started before the old one quit: ${early}; started with: ${args}; after ${Date.now() - t0} ms; environment it starts with: ${JSON.stringify(cleaned)}`);
+      }
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+
+    // 4c. the Mac: the next update is built from the zip kept last time, fetching only the chunks that changed
+    {
+      const { buildBlockMap } = require(path.join(__dirname, '..', 'node_modules', 'app-builder-lib', 'out', 'targets', 'blockmap', 'blockmap.js'));
+      const Fx = require(path.join(FIX, 'appimage-update.js'));
+      const here = eApp.getVersion();
+      const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'gb-macdelta-'));
+      const ud = path.join(dir, 'userData');
+      fsSync.mkdirSync(path.join(ud, 'update-cache'), { recursive: true });
+      const oldZip = Fx.bytes(21, 3_000_000);
+      const newZip = Buffer.concat([oldZip.subarray(0, 1_000_000), Fx.bytes(23, 40_000), oldZip.subarray(1_050_000)]);
+      const files = { [`/v${here}/GazBoard-${here}-arm64-mac.zip`]: oldZip, '/v99.0.0/GazBoard-99.0.0-arm64-mac.zip': newZip };
+      for (const [u, body] of Object.entries(files)) {
+        const f = path.join(dir, path.basename(u));
+        fsSync.writeFileSync(f, body);
+        await buildBlockMap(f, 'gzip', f + '.blockmap');
+        files[u + '.blockmap'] = fsSync.readFileSync(f + '.blockmap');
+      }
+      fsSync.writeFileSync(path.join(ud, 'update-cache', 'kept.zip'), oldZip);
+      fsSync.writeFileSync(path.join(ud, 'update-cache', 'kept.json'), JSON.stringify({ version: here, arch: 'arm64', name: `GazBoard-${here}-arm64-mac.zip` }));
+      const shaB = (b) => nodeCrypto.createHash('sha512').update(b).digest('base64');
+      let ranged = 0, wholeZip = 0, spoil = false;
+      const md = http.createServer((req, res) => {
+        const u = req.url.split('?')[0];
+        if (u === '/v99.0.0/latest-mac.yml') { res.end(`version: 99.0.0\nfiles:\n  - url: GazBoard-99.0.0-arm64-mac.zip\n    sha512: ${shaB(newZip)}\n    size: ${newZip.length}\n  - url: GazBoard-99.0.0-mac.zip\n    sha512: x\n    size: 1\n`); return; }
+        let body = files[u];
+        if (!body) { res.statusCode = 404; res.end(''); return; }
+        if (spoil && /99\.0\.0-arm64-mac\.zip$/.test(u)) body = Buffer.from(body).fill(7, 1_010_000, 1_010_100);
+        const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range || '');
+        if (m) { const a = +m[1], b = +m[2]; ranged += b - a + 1; res.writeHead(206, { 'content-length': b - a + 1, 'content-range': `bytes ${a}-${b}/${body.length}` }); res.end(body.subarray(a, b + 1)); return; }
+        if (/\.zip$/.test(u)) wholeZip++;
+        res.setHeader('content-length', body.length); res.end(body);
+      });
+      await new Promise((r) => md.listen(0, '127.0.0.1', r));
+      process.env.GAZBOARD_UPDATE_DOWNLOADS = `http://127.0.0.1:${md.address().port}`;
+      process.env.GAZBOARD_UPDATE_TEST = '1';
+      let delta = {}, spoilt = {};
+      try {
+        const mk = () => U.createUpdater({ app: eApp, net: eNet, notePath: path.join(ud, 'update-note.json'), platform: 'darwin', arch: 'arm64',
+          execPath: '/Applications/GazBoard.app/Contents/MacOS/GazBoard', canWrite: () => true });
+        delta = await mk().download('99.0.0');
+        delta.ranged = ranged; delta.wholeZip = wholeZip;
+        // the zip that arrived is the one for 99.0.0, byte for byte (on a Mac it is then unpacked and checked; here it stops at unpacking)
+        delta.keptStill = fsSync.readFileSync(path.join(ud, 'update-cache', 'kept.zip')).equals(oldZip);
+        spoil = true; ranged = 0; wholeZip = 0;
+        spoilt = await mk().download('99.0.0');
+        spoilt.ranged = ranged; spoilt.wholeZip = wholeZip;
+      } finally {
+        if (envWas.d === undefined) delete process.env.GAZBOARD_UPDATE_DOWNLOADS; else process.env.GAZBOARD_UPDATE_DOWNLOADS = envWas.d;
+        if (envWas.t === undefined) delete process.env.GAZBOARD_UPDATE_TEST; else process.env.GAZBOARD_UPDATE_TEST = envWas.t;
+        await new Promise((r) => md.close(r));
+        fsSync.rmSync(dir, { recursive: true, force: true });
+      }
+      const plan = U.deltaPlan({ sizes: [5, 5, 5], checksums: ['a', 'b', 'c'] }, { sizes: [5, 3, 5, 5], checksums: ['a', 'x', 'b', 'c'] });
+      // a few kept bytes between two fetches are fetched with them: one request, not two
+      const joinedPlan = U.deltaPlan({ sizes: [5], checksums: ['a'] }, { sizes: [3, 5, 3], checksums: ['x', 'a', 'y'] });
+      const onMac = process.platform === 'darwin';
+      check('updater: a Mac builds the new zip from the one it kept last time and fetches only the chunks that changed (blockmaps as electron-builder writes them)',
+        delta.ranged > 0 && delta.ranged < newZip.length * 0.1 && delta.wholeZip === 0 && delta.keptStill && (onMac ? !/checksum/.test(delta.error || '') : /ditto|ENOENT/.test(delta.error || ''))
+          && JSON.stringify(plan.steps) === '[{"copy":0,"size":5},{"start":5,"size":3},{"copy":5,"size":10}]' && plan.fetch === 3
+          && JSON.stringify(joinedPlan.steps) === '[{"start":0,"size":11}]' && joinedPlan.fetch === 11 && joinedPlan.requests === 1,
+        `fetched ${delta.ranged} of ${newZip.length} bytes, whole downloads ${delta.wholeZip}; result ${JSON.stringify(delta)}; plan ${JSON.stringify(plan)}; joined ${JSON.stringify(joinedPlan)}`);
+      check('updater: if the pieces do not add up to the release\'s zip, the whole zip is fetched instead - and a wrong one is still refused',
+        spoilt.wholeZip === 1 && /checksum/.test(spoilt.error || ''),
+        JSON.stringify(spoilt));
+    }
+
     // 5. the release ships what the updater reads, and the app ships the updater
     const pkgNow = JSON.parse(fsSync.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
     const wf = fsSync.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
     const ship = {
       publish: pkgNow.build && pkgNow.build.publish && pkgNow.build.publish.provider === 'github' && pkgNow.build.publish.owner === 'fahim9778' && pkgNow.build.publish.repo === 'GazBoard',
-      files: (pkgNow.build.files || []).includes('updater.js'),
+      files: (pkgNow.build.files || []).includes('updater.js') && (pkgNow.build.files || []).includes('zsync.js'),
+      linuxFiles: /dist\/\*\.AppImage\.zsync/.test(wf),
       dep: !!(pkgNow.dependencies && pkgNow.dependencies['electron-updater']),
       winFiles: /dist\/latest\.yml/.test(wf) && /GazBoard-Setup-\*\.exe\.blockmap/.test(wf),
-      macFiles: (wf.match(/dist\/latest-mac\.yml/g) || []).length >= 2
+      macFiles: (wf.match(/dist\/latest-mac\.yml/g) || []).length >= 2 && (wf.match(/dist\/\*\.zip\.blockmap/g) || []).length >= 2
     };
     check('updater: package.json makes electron-builder write latest.yml, packs updater.js and electron-updater, and the release uploads latest.yml, the blockmap and latest-mac.yml',
       Object.values(ship).every(Boolean), JSON.stringify(ship));
@@ -9487,6 +9652,30 @@ async function run(win, app) {
     upd.failureWasAttempted === true && upd.failureKeepsTheClock === true,
     `attempted: ${upd.failureWasAttempted}, clock left alone: ${upd.failureKeepsTheClock} ` +
     `— a failed attempt is not a look, so half a day must not be spent believing it was`);
+  // A copy installed from Google Play is Play's to update - its rules allow no other way - so it never looks at GitHub
+  const storeCopy = await js(`
+    const a = window.app, real = a._appInfo, fetchWas = a.fetchUpdate, toasts = [], toastWas = a.toast;
+    let asked = 0;
+    a.fetchUpdate = async () => { asked++; return { ok: true, version: '99.0.0', url: 'x' }; };
+    a.toast = (m) => { toasts.push(String(m)); };
+    try {
+      a._appInfo = { ...(real || {}), store: 'play' };
+      const was = a.settings.updateCheck; a.settings.updateCheck = true;
+      const r = await a.checkForUpdates({ force: true });
+      a.panels.settings(); await new Promise((res) => setTimeout(res, 150));
+      const settingsText = document.getElementById('panel')?.textContent || '';
+      a.panels.close();
+      a.settings.updateCheck = was;
+      a._appInfo = { ...(real || {}), store: 'github' };
+      const named = a.storeName();
+      return { asked, r, toasts, saysPlay: /Google Play keeps GazBoard up to date/.test(settingsText),
+        noToggle: !/Asks GitHub at most twice a day/.test(settingsText), githubIsNotAStore: named === null };
+    } finally { a._appInfo = real; a.fetchUpdate = fetchWas; a.toast = toastWas; }
+  `);
+  check('a copy from Google Play never looks at GitHub and never offers a download: Play keeps it up to date',
+    storeCopy.asked === 0 && storeCopy.r === null && /Google Play keeps GazBoard up to date/.test(storeCopy.toasts.join('|'))
+      && storeCopy.saysPlay && storeCopy.noToggle && storeCopy.githubIsNotAStore,
+    JSON.stringify(storeCopy));
   check('and the next launch tries again instead of sitting out the gap',
     upd.failureRetriesNextTime === true,
     `second attempt went out: ${upd.failureRetriesNextTime}`);
@@ -14767,7 +14956,7 @@ module.exports.run = async (win, app) => {
       strings.length > 800 && problems.length === 0,
       `${strings.length} sentences found; t() calls with nothing readable to translate: ` +
       `${problems.length ? problems.slice(0, 5).join(' | ') : 'none'}`);
-    const codes = ['bn', 'zh-Hans', 'zh-Hant', 'ar', 'es', 'pt-BR'];
+    const codes = ['bn', 'zh-Hans', 'zh-Hant', 'ar', 'es', 'pt-BR', 'de'];
     for (const code of codes) {
       const r = checkLanguage(code, strings);
       const miss = Array.isArray(r.missing) ? r.missing : [];
@@ -14794,7 +14983,7 @@ module.exports.run = async (win, app) => {
     r.detect = {
       tw: i.detectLanguage(['zh-TW']), hk: i.detectLanguage(['zh-HK']), cn: i.detectLanguage(['zh-CN']),
       hant: i.detectLanguage(['zh-Hant-SG']), pt: i.detectLanguage(['pt-PT']), bn: i.detectLanguage(['bn-BD']),
-      firstKnown: i.detectLanguage(['fr-FR', 'ar-EG']), none: i.detectLanguage(['fr-FR', 'de'])
+      firstKnown: i.detectLanguage(['fr-FR', 'ar-EG']), none: i.detectLanguage(['fr-FR', 'it']), de: i.detectLanguage(['de-AT', 'en'])
     };
     r.smokeIsEnglish = i.resolveLanguage('auto') === 'en' && i.currentLanguage() === 'en';
     r.englishIsKey = i.t('Export as PNG…') === 'Export as PNG…' && i.t('Page {n} of {total}', { n: 2, total: 5 }) === 'Page 2 of 5';
@@ -14821,7 +15010,7 @@ module.exports.run = async (win, app) => {
   check('the machine’s language is picked up, Chinese by region',
     lang.detect.tw === 'zh-Hant' && lang.detect.hk === 'zh-Hant' && lang.detect.hant === 'zh-Hant' &&
     lang.detect.cn === 'zh-Hans' && lang.detect.pt === 'pt-BR' && lang.detect.bn === 'bn' &&
-    lang.detect.firstKnown === 'ar' && lang.detect.none === 'en',
+    lang.detect.firstKnown === 'ar' && lang.detect.none === 'en' && lang.detect.de === 'de',
     JSON.stringify(lang.detect));
   check('the suite itself always runs in English, and English is the key',
     lang.smokeIsEnglish && lang.englishIsKey, `smoke in English: ${lang.smokeIsEnglish}, t() returns the English: ${lang.englishIsKey}`);
@@ -16503,10 +16692,108 @@ module.exports.run = async (win, app) => {
     !nestedRejected.ok && reset.ok && (await js(`return (await window.board.storage.get()).current;`)) === boardsDir
       && keptOldFolder.includes('Most recent copied board'),
     `nested: ${nestedRejected.error}; reset: ${JSON.stringify(reset)}`);
+  /*
+   * A folder somebody also uses for other things. Other programs' .json files
+   * are never boards: not listed, not deletable from My boards. And switching
+   * to a folder that already has boards shows one of THOSE, rather than going
+   * on with the board that was open (it would be saved there as a stray copy).
+   */
+  const sharedFolder = path.join(storageRoot, 'Documents', 'GazBoard');
+  await fs.mkdir(sharedFolder, { recursive: true });
+  const theirPackage = JSON.stringify({ name: 'my-project', version: '1.0.0' });
+  await fs.writeFile(path.join(sharedFolder, 'package.json'), theirPackage);
+  await fs.writeFile(path.join(sharedFolder, 'notes.json'), JSON.stringify({ title: 'Shopping', items: ['milk'] }));
+  await fs.writeFile(path.join(sharedFolder, 'bOtherPc1.json'), JSON.stringify({
+    id: 'bOtherPc1', name: 'From the other computer', objects: [{ id: 'o1', type: 'note', x: 0, y: 0, w: 100, h: 100, color: '#ffd94a', text: 'hi', rotation: 0 }]
+  }));
+  // the other computer filed its board in a Physics folder; that layout is kept beside its boards
+  await fs.writeFile(path.join(sharedFolder, 'folders.json'), JSON.stringify({ version: 1,
+    folders: [{ id: 'fPhysicsSmoke', name: 'Physics', parent: null }], boardFolders: { bOtherPc1: 'fPhysicsSmoke' }, deviceFolders: {}, removedFolders: [] }));
+  const beforeShared = await js(`const a = window.app; a.newBoard(true); a.store.rename('Open before the switch');
+    a.store.add({ id:'before-switch', type:'shape', kind:'rect', x:0, y:0, w:10, h:10, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+    await a.persist({ force:true });
+    const F = await import('app://board/js/core/folders.js');
+    const maths = F.createFolder(a.settings, 'Maths smoke'); F.moveBoard(a.settings, a.store.doc.id, maths); a.saveSettings();
+    return a.store.doc.id;`);
+  // the window loses focus in the middle of the switch, which saves the open board: that save must not land in the new folder
+  const toShared = await js(`const a = window.app;
+    // the moment GazBoard saves the open board for the switch, it is mid-switch: draw and save again then
+    const own = a.persist;
+    let midway = false, fired = false, saving = Promise.resolve();
+    a.persist = function (o = {}) {
+      const r = own.call(a, o);
+      if (o.storageFlush && !fired) {
+        fired = true;
+        midway = !!a._storageSwitching;
+        a.store.add({ id:'during-switch', type:'shape', kind:'rect', x:20, y:0, w:10, h:10, rotation:0, stroke:'#000', fill:'none', lineWidth:2 });
+        saving = own.call(a, { force: true });
+      }
+      return r;
+    };
+    try {
+      const r = await window.board.storage.apply({ path:${JSON.stringify(sharedFolder)}, mode:'use-as-is' });
+      await saving;
+      return { ...r, midway };
+    } finally { a.persist = own; }`);
+  let sharedOpen = '';
+  for (let i = 0; i < 40 && sharedOpen !== 'From the other computer'; i++) { await sleep(100); sharedOpen = await js(`return window.app.store.doc.name;`); }
+  const sharedList = await js(`return (await window.board.boards.list()).map((b) => b.id);`);
+  const deletedTheirs = await js(`return await window.board.boards.remove('package');`);
+  const strayCopy = await fs.stat(path.join(sharedFolder, beforeShared + '.json')).then(() => true, () => false);
+  const packageKept = await fs.readFile(path.join(sharedFolder, 'package.json'), 'utf8').catch(() => 'GONE');
+  check('other programs\' .json files in the boards folder are not boards: not listed, and never deleted',
+    toShared.ok && JSON.stringify(sharedList) === '["bOtherPc1"]' && deletedTheirs === false && packageKept === theirPackage,
+    `switch ${JSON.stringify(toShared)}; listed ${JSON.stringify(sharedList)} (wanted only bOtherPc1); delete answered ${deletedTheirs}; package.json now: ${packageKept}`);
+  check('switching to a folder that already has boards opens one of them, and leaves no stray copy of the old board there - not even from a save made mid-switch',
+    sharedOpen === 'From the other computer' && !strayCopy && toShared.midway,
+    `on screen: "${sharedOpen}"; stray copy of the old board in the new folder: ${strayCopy}; a save was made mid-switch: ${toShared.midway}`);
+  // My boards opened while the other folder is in use must not forget where this computer's boards are filed
+  const sharedFiling = await js(`const a = window.app; a.panels.boards(); await new Promise((r) => setTimeout(r, 400)); a.panels.close();
+    const F = await import('app://board/js/core/folders.js'); const s = a.settings;
+    const name = (id) => (F.folderList(s).find((f) => f.id === F.folderOf(s, id)) || {}).name || 'top';
+    return { theirs: name('bOtherPc1'), mine: name(${JSON.stringify(beforeShared)}) };`);
+  let sharedCatalogue = {};
+  for (let i = 0; i < 30 && !(sharedCatalogue.folders || []).some((f) => f.name === 'Maths smoke'); i++) {
+    await sleep(100);
+    sharedCatalogue = JSON.parse(await fs.readFile(path.join(sharedFolder, 'folders.json'), 'utf8').catch(() => '{}'));
+  }
+  check('the My boards folders travel with the boards: the other computer\'s Physics folder comes in, and this one\'s go out beside the boards',
+    sharedFiling.theirs === 'Physics' && sharedFiling.mine === 'Maths smoke'
+      && ['Maths smoke', 'Physics'].every((n) => (sharedCatalogue.folders || []).some((f) => f.name === n)),
+    `their board filed in: ${sharedFiling.theirs} (wanted Physics); this computer's board still in: ${sharedFiling.mine} (wanted Maths smoke); ` +
+    `folders.json beside the boards: ${JSON.stringify((sharedCatalogue.folders || []).map((f) => f.name))}`);
+  const backHome = await js(`return await window.board.storage.reset({ mode:'use-as-is' });`);
+  let homeOpen = '';
+  for (let i = 0; i < 40 && homeOpen !== 'Open before the switch'; i++) { await sleep(100); homeOpen = await js(`return window.app.store.doc.name;`); }
+  const homeFiling = await js(`const a = window.app; a.panels.boards(); await new Promise((r) => setTimeout(r, 400)); a.panels.close();
+    const F = await import('app://board/js/core/folders.js');
+    return (F.folderList(a.settings).find((f) => f.id === F.folderOf(a.settings, ${JSON.stringify(beforeShared)})) || {}).name || 'top';`);
+  const homeHasNoFile = !(await fs.stat(path.join(boardsDir, 'folders.json')).then(() => true, () => false));
+  check('and going back, the board that was left behind is there again, still in its folder',
+    backHome.ok && homeOpen === 'Open before the switch' && homeFiling === 'Maths smoke' && homeHasNoFile,
+    `reset ${JSON.stringify(backHome)}; on screen: "${homeOpen}"; filed in: ${homeFiling} (wanted Maths smoke); ` +
+    `the usual folder left exactly as before (no folders.json written there): ${homeHasNoFile}`);
+  const merges = await js(`
+    const F = await import('app://board/js/core/folders.js');
+    const here = { folders: [{ id: 'fA', name: 'Algebra', parent: null }, { id: 'fOld', name: 'Old', parent: null }], boardFolders: { b1: 'fA', b9: 'fOld' }, removedFolders: ['fGone'] };
+    const changed = F.mergeCatalogue(here, {
+      folders: [{ id: 'fA', name: 'Renamed elsewhere', parent: null }, { id: 'fB', name: 'Biology', parent: null }, { id: 'fGone', name: 'Deleted here', parent: null },
+        { id: 'fX', name: 'Loop one', parent: 'fY' }, { id: 'fY', name: 'Loop two', parent: 'fX' }, { id: 7, name: 'bad' }],
+      boardFolders: { b1: 'fB', b2: 'fB', b3: 'fNowhere' }, removedFolders: ['fOld'] });
+    const shownAtTop = F.childFolders(here, null).map((f) => f.name);
+    return { changed, names: F.folderList(here).map((f) => f.name), filing: here.boardFolders, shownAtTop, nothing: F.mergeCatalogue(here, null) };
+  `);
+  check('folders from elsewhere only ever add: this device\'s names and filing win, a folder deleted here stays deleted, one deleted there goes (its boards move up), and a damaged copy cannot hide folders',
+    merges.changed && JSON.stringify(merges.names) === '["Algebra","Biology","Loop one","Loop two"]'
+      && JSON.stringify(merges.filing) === '{"b1":"fA","b2":"fB"}' && merges.shownAtTop.includes('Loop one') && merges.nothing === false,
+    JSON.stringify(merges));
   await fs.rm(storageRoot, { recursive: true, force: true });
   const storageSettings = await js(`
-    const a = window.app; a.panels.settings(); await new Promise((r) => setTimeout(r, 150));
-    const section = [...document.querySelectorAll('.section')].find((e) => e.querySelector('h5')?.textContent === 'Storage');
+    const a = window.app; a.panels.settings();
+    const find = () => [...document.querySelectorAll('.section')].find((e) => e.querySelector('h5')?.textContent === 'Storage');
+    // the section fills in once GazBoard has said where the boards are: wait for it, up to a few seconds on a slow machine
+    for (let i = 0; i < 60 && !find()?.querySelector('button'); i++) await new Promise((r) => setTimeout(r, 50));
+    const section = find();
     return { exists:!!section, path:section?.querySelector('code')?.textContent, text:section?.textContent,
       buttons:[...(section?.querySelectorAll('button') || [])].map((b) => b.textContent.trim()),
       note:section?.querySelector('p')?.textContent || '' };

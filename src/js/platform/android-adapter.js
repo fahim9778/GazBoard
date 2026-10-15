@@ -118,6 +118,14 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     saveDialog: (opts) => call('dialog:save', opts),
     showItem: (p) => call('shell:showItem', p),
     openBoardsFolder: () => call('shell:openBoards'),
+    // a copy of the boards in a folder of the person's own, which stays when the app is uninstalled
+    backup: {
+      state: () => call('backup:state'),
+      choose: () => call('backup:choose'),
+      restore: () => call('backup:restore'),
+      stop: () => call('backup:stop'),
+      catalogue: (json) => call('backup:catalogue', json)
+    },
     openReleases: (url) => call('shell:openExternal', url),
     checkForUpdate: () => guarded('updates:check'),
     // The page may reach no website of its own (MainActivity refuses every
@@ -214,6 +222,15 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     // Native share/open intents use the same document and image import paths
     // as the toolbar. Wait for App's initialization before dispatching them.
     window.dispatchEvent(new CustomEvent('gazboard:import-file', { detail: p }));
+  });
+  // Files dragged in from another app (split screen, a tablet's taskbar, DeX).
+  // Android sends where on the view they were let go, in CSS pixels; the
+  // board turns that into a spot on the board, so a picture lands under the finger.
+  on('drop', async (d) => {
+    const app = window.app;
+    if (!app || !Array.isArray(d?.files) || !d.files.length) return;
+    const at = Number.isFinite(d.x) && Number.isFinite(d.y) ? app.surface.toWorld({ clientX: d.x, clientY: d.y }) : null;
+    await app.dropPaths(d.files, at);
   });
   on('back', () => window.dispatchEvent(new CustomEvent('gazboard:back')));
   on('showBoards', () => window.app?.panels.boards());

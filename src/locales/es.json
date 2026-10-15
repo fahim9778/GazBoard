@@ -1104,5 +1104,19 @@
  "Storage": "Almacenamiento",
  "Move old copies to Trash…": "Mover las copias antiguas a la Papelera…",
  "Old copies moved to Trash": "Copias antiguas movidas a la Papelera",
- "Could not remove old copies": "No se pudieron quitar las copias antiguas"
+ "Could not remove old copies": "No se pudieron quitar las copias antiguas",
+ "Android removes your boards when GazBoard is uninstalled. Keep a copy in a folder of your own, and they stay safe.": "Android borra tus pizarras al desinstalar GazBoard. Guarda una copia en una carpeta tuya y estarán a salvo.",
+ "Copying {done} of {total}…": "Copiando {done} de {total}…",
+ "The copy could not be written: {error}": "No se pudo guardar la copia: {error}",
+ "Bring boards back from a folder…": "Recuperar pizarras de una carpeta…",
+ "Every board in that folder is already here": "Todas las pizarras de esa carpeta ya están aquí",
+ "{n} board brought back": "{n} pizarra recuperada",
+ "{n} boards brought back": "{n} pizarras recuperadas",
+ "Could not use that folder: {error}": "No se pudo usar esa carpeta: {error}",
+ "Keep a safe copy in a folder": "Guardar una copia segura en una carpeta",
+ "Safe copy kept in {folder}. Uninstalling GazBoard does not delete it.": "Copia segura guardada en {folder}. Desinstalar GazBoard no la borra.",
+ "Uninstalling GazBoard deletes these boards. Keep a safe copy in a folder of your own?": "Desinstalar GazBoard borra estas pizarras. ¿Guardar una copia segura en una carpeta tuya?",
+ "Choose folder": "Elegir carpeta",
+ "{store} keeps GazBoard up to date": "{store} mantiene GazBoard actualizado",
+ "Updates": "Actualizaciones"
 }

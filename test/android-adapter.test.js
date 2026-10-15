@@ -259,3 +259,35 @@ test('A board that arrives as a file reaches the page, and one that cannot be re
     `reported: ${JSON.stringify(failed)}; answers sent to the sender: ${JSON.stringify(answered)}`);
   delete global.fetch;
 });
+
+test('Files dragged in from another app land on the board where they were let go', async () => {
+  const { native } = await setup(async () => true);
+  const dropped = [];
+  global.window.app = {
+    surface: { toWorld: (e) => ({ x: e.clientX * 2, y: e.clientY * 2 }) },
+    dropPaths: async (paths, at) => { dropped.push({ paths, at }); }
+  };
+  const handles = ['gazboard-file://' + 'c'.repeat(64) + '/Lecture 3.pdf', 'gazboard-file://' + 'd'.repeat(64) + '/photo.jpg'];
+  await native.onmessage({ data: JSON.stringify({ event: 'drop', result: { files: handles, x: 120, y: 80 } }) });
+  await native.onmessage({ data: JSON.stringify({ event: 'drop', result: { files: [] } }) });
+  assert.deepEqual(dropped, [{ paths: handles, at: { x: 240, y: 160 } }],
+    `the board was handed ${JSON.stringify(dropped)} - wanted both files once, at the spot under the finger (screen 120,80 = board 240,160), and nothing for an empty drop`);
+  delete global.window.app;
+});
+
+test('The folder copy is asked of Android itself: choose, bring back and stop each reach the native side', async () => {
+  const { adapter, calls } = await setup(async (request) => {
+    if (request.method === 'backup:state') return { folder: 'Documents/GazBoard', copying: false, error: null };
+    if (request.method === 'backup:restore') return { ok: true, boards: 3, alreadyHere: 1, pictures: 2, folder: 'Documents/GazBoard' };
+    return { ok: true };
+  });
+  const state = await adapter.backup.state();
+  const back = await adapter.backup.restore();
+  await adapter.backup.choose();
+  await adapter.backup.stop();
+  await adapter.backup.catalogue('{"version":1,"folders":[]}');
+  assert.deepEqual(calls.map((c) => c.method), ['backup:state', 'backup:restore', 'backup:choose', 'backup:stop', 'backup:catalogue'],
+    `asked Android: ${JSON.stringify(calls.map((c) => c.method))}`);
+  assert.deepEqual({ folder: state.folder, boards: back.boards }, { folder: 'Documents/GazBoard', boards: 3 },
+    `state ${JSON.stringify(state)}, restore ${JSON.stringify(back)}`);
+});

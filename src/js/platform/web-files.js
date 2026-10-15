@@ -7,7 +7,8 @@ let _tokenSeq = 0;
 
 /** Register a File/Blob into the session file store and return its virtual path. */
 export function registerSessionFile(file) {
-  const token = `virt://session-${++_tokenSeq}/${encodeURIComponent(file.name || 'file')}`;
+  // the name is kept readable - it is what the import messages show - with only a slash, which would split the path, swapped out
+  const token = `virt://session-${++_tokenSeq}/${String(file.name || 'file').replace(/[\\/]/g, '_')}`;
   _sessionFiles.set(token, file);
   return token;
 }

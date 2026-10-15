@@ -22,10 +22,19 @@
  * result is GazBoard, is the promised version and has an intact signature -
  * and only after GazBoard has quit, swap the folders and open the new one.
  * The old app is moved aside first and put back if anything goes wrong, so a
- * failed update leaves the version that worked.
+ * failed update leaves the version that worked. The zip is kept afterwards,
+ * so that the next update can be built from it, fetching only the parts the
+ * release's .blockmap files say have changed; a Mac that has none (it came
+ * from the disk image) downloads the whole zip once.
  *
- * Linux keeps the download page here; AppImage updates are a separate piece
- * of work.
+ * Linux, as an AppImage, downloads only what changed (zsync.js): the .zsync
+ * beside the release's AppImage shows which parts of the AppImage already on
+ * this computer can be kept, the rest is fetched, and the whole new file must
+ * match the SHA-1 the .zsync promises. It is written beside the old one and
+ * renamed over it - the same file name, so menu entries and shortcuts keep
+ * working - and GazBoard is started again from it once this copy has quit.
+ * The .deb and .rpm are updated by the system's own package manager, and
+ * keep the download page.
  */
 
 const path = require('path');
@@ -34,6 +43,7 @@ const fsp = fs.promises;
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, execFile } = require('child_process');
+const zlib = require('zlib');
 
 /** Where release files are downloaded from. Overridable so the suite can serve them from localhost. */
 const downloadBase = () => (process.env.GAZBOARD_UPDATE_DOWNLOADS || 'https://github.com/fahim9778/GazBoard/releases/download').replace(/\/+$/, '');
@@ -70,8 +80,51 @@ function installMode({ platform = process.platform, execPath = process.execPath,
     if (!canWrite(path.dirname(bundle))) return { mode: 'page', reason: 'read-only' };
     return { mode: 'install', kind: 'mac', bundle };
   }
+  if (platform === 'linux') {
+    // an AppImage says where it is; anything else (a .deb, a source checkout) has no file of its own to replace
+    let file = env.APPIMAGE;
+    if (!file || !path.isAbsolute(file) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return { mode: 'page', reason: 'not-an-appimage' };
+    // started through a link: the file to replace is the one it points at, so the link goes on working
+    try { file = fs.realpathSync(file); } catch { /* keep the name it was started by */ }
+    if (!canWrite(path.dirname(file))) return { mode: 'page', reason: 'read-only' };
+    return { mode: 'install', kind: 'appimage', file };
+  }
   return { mode: 'page', reason: 'platform' };
 }
+
+/** The release's AppImage for this machine. Only 64-bit Intel/AMD is built; anything else is the download page's business. */
+function appImageName(version, arch = process.arch) {
+  if (arch === 'x64') return `GazBoard-${version}.AppImage`;
+  if (arch === 'arm64') return `GazBoard-${version}-arm64.AppImage`;
+  return null;
+}
+
+/**
+ * The environment for starting the new AppImage: the running one's own
+ * variables taken out. They point into its mounted copy, which disappears the
+ * moment it quits, and the new AppImage sets its own.
+ */
+function cleanAppImageEnv(env) {
+  const out = { ...env };
+  const mount = env.APPDIR;
+  for (const k of ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD']) delete out[k];
+  if (mount) {
+    for (const [k, v] of Object.entries(out)) {
+      if (typeof v !== 'string' || !v.includes(mount)) continue;
+      // PATH and friends are lists the AppImage put its own folders in front of: only those come out
+      const kept = v.split(':').filter((part) => part && !part.includes(mount));
+      if (kept.length) out[k] = kept.join(':'); else delete out[k];
+    }
+  }
+  return out;
+}
+
+/*
+ * Runs after GazBoard has quit: wait for it to be gone (the new one would
+ * otherwise find it still running and hand itself over to it), then start
+ * the AppImage, which by now is the new version.
+ */
+const APPIMAGE_RESTART = 'pid="$1"; file="$2"; shift 2; i=0; while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 3000 ]; do sleep 0.1; i=$((i+1)); done; exec "$file" "$@"';
 
 /* ------------------------------------------------------------------ *
  *  latest-mac.yml
@@ -121,13 +174,37 @@ async function fetchText(net, url) {
   return res.text();
 }
 
+/**
+ * A file being written, where a failure (the disk is full, the folder went)
+ * comes back as an error from the next write instead of escaping as an
+ * uncaught exception and leaving the download stuck forever.
+ */
+function safeWriter(dest) {
+  const out = fs.createWriteStream(dest);
+  let failed = null;
+  const waiting = new Set();
+  out.on('error', (e) => { failed = e; for (const w of waiting) w(); waiting.clear(); });
+  const wait = (ev) => new Promise((r) => { const done = () => { waiting.delete(done); r(); }; waiting.add(done); out.once(ev, done); });
+  return {
+    async write(buf) {
+      if (failed) throw failed;
+      if (!out.write(buf)) await wait('drain');
+      if (failed) throw failed;
+    },
+    async end() {
+      if (!failed && !out.writableFinished) await new Promise((r) => { waiting.add(r); out.end(r); });
+      if (failed) throw failed;
+    }
+  };
+}
+
 /** Stream a file to disk, reporting progress and hashing as it goes. Resolves to the SHA-512 in base64. */
 async function downloadTo(net, url, dest, { size = 0, onProgress = () => {}, signal } = {}) {
   const res = await net.fetch(url, { redirect: 'follow', signal });
   if (!res.ok || !res.body) throw new Error(`download failed (${res.status})`);
   const total = Number(res.headers.get('content-length')) || size || 0;
   const hash = crypto.createHash('sha512');
-  const out = fs.createWriteStream(dest);
+  const out = safeWriter(dest);
   let got = 0;
   try {
     const reader = res.body.getReader();
@@ -136,13 +213,121 @@ async function downloadTo(net, url, dest, { size = 0, onProgress = () => {}, sig
       if (done) break;
       hash.update(value);
       got += value.length;
-      if (!out.write(Buffer.from(value))) await new Promise((r) => out.once('drain', r));
+      await out.write(Buffer.from(value));
       onProgress(total ? got / total : 0, got, total);
     }
   } finally {
-    await new Promise((r) => out.end(r));
+    await out.end();
   }
   return { sha512: hash.digest('base64'), bytes: got };
+}
+
+/* ------------------------------------------------------------------ *
+ *  The Mac: only the parts of the zip that changed
+ * ------------------------------------------------------------------ */
+
+/*
+ * electron-builder writes a .blockmap beside each Mac zip: the zip cut into
+ * chunks at places chosen by its content, with a fingerprint for each. Two
+ * releases' blockmaps side by side say which chunks of the new zip are the
+ * same as chunks of the old one - nearly all of them - and only the rest has
+ * to be fetched. The old zip is the one this Mac downloaded last time (kept
+ * for exactly this); a Mac that came to its version from the disk image has
+ * none, and downloads the whole zip once.
+ */
+
+/** A blockmap (gzipped JSON) as {sizes, checksums} for its one file. */
+async function fetchBlockmap(net, url) {
+  const res = await net.fetch(url, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`no blockmap (${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length > 32 * 1024 * 1024) throw new Error('the blockmap is far too big');
+  const map = JSON.parse(zlib.gunzipSync(buf).toString('utf8'));
+  const f = map && Array.isArray(map.files) && map.files[0];
+  if (!f || !Array.isArray(f.sizes) || !Array.isArray(f.checksums) || f.sizes.length !== f.checksums.length) throw new Error('not a blockmap');
+  return { sizes: f.sizes.map(Number), checksums: f.checksums.map(String) };
+}
+
+/**
+ * The new zip as a list of steps: copy this many bytes from here in the old
+ * zip, or fetch this range of the new one. Neighbouring steps are joined.
+ */
+function deltaPlan(oldMap, newMap) {
+  const where = new Map();
+  let off = 0;
+  for (let i = 0; i < oldMap.sizes.length; i++) {
+    const key = `${oldMap.checksums[i]}:${oldMap.sizes[i]}`;
+    if (!where.has(key)) where.set(key, off);
+    off += oldMap.sizes[i];
+  }
+  const steps = [];
+  let pos = 0, fetch = 0;
+  for (let i = 0; i < newMap.sizes.length; i++) {
+    const size = newMap.sizes[i];
+    if (!(size > 0)) throw new Error('bad blockmap');
+    const from = where.get(`${newMap.checksums[i]}:${size}`);
+    const last = steps[steps.length - 1];
+    if (from !== undefined) {
+      if (last && last.copy !== undefined && last.copy + last.size === from) last.size += size;
+      else steps.push({ copy: from, size });
+    } else {
+      fetch += size;
+      if (last && last.start !== undefined && last.start + last.size === pos) last.size += size;
+      else steps.push({ start: pos, size });
+    }
+    pos += size;
+  }
+  // A short run kept between two fetches costs a whole request to save a few kilobytes: fetch it with them.
+  const joined = [];
+  for (const st of steps) {
+    const prev = joined[joined.length - 1], before = joined[joined.length - 2];
+    if (st.start !== undefined && prev && prev.copy !== undefined && prev.size <= 65536 && before && before.start !== undefined) {
+      joined.pop();
+      before.size = st.start + st.size - before.start;
+      fetch += prev.size;
+      continue;
+    }
+    if (st.start !== undefined && prev && prev.start !== undefined) { prev.size = st.start + st.size - prev.start; continue; }
+    joined.push({ ...st });
+  }
+  const requests = joined.filter((x) => x.start !== undefined).length;
+  return { steps: joined, total: pos, fetch, oldTotal: off, requests };
+}
+
+/** Build the new zip from the old one and the fetched ranges, hashing as it goes. Resolves to the SHA-512 in base64. */
+async function assembleDelta(net, { oldFile, plan, url, dest, onProgress = () => {} }) {
+  const hash = crypto.createHash('sha512');
+  const fd = await fsp.open(oldFile, 'r');
+  const out = safeWriter(dest);
+  const write = async (buf) => { hash.update(buf); await out.write(buf); };
+  let got = 0;
+  try {
+    if ((await fd.stat()).size !== plan.oldTotal) throw new Error('the zip kept from last time is not the one its blockmap describes');
+    for (const step of plan.steps) {
+      if (step.copy !== undefined) {
+        for (let done = 0; done < step.size;) {
+          const n = Math.min(4 << 20, step.size - done);
+          const buf = Buffer.alloc(n);
+          const { bytesRead } = await fd.read(buf, 0, n, step.copy + done);
+          if (bytesRead !== n) throw new Error('the zip kept from last time is shorter than expected');
+          await write(buf);
+          done += n;
+        }
+      } else {
+        const res = await net.fetch(url, { redirect: 'follow', headers: { Range: `bytes=${step.start}-${step.start + step.size - 1}` } });
+        if (res.status !== 206) throw new Error(`the server would not send part of the file (${res.status})`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length !== step.size) throw new Error('the server sent a different part than asked for');
+        await write(buf);
+        got += buf.length;
+        onProgress(plan.fetch ? got / plan.fetch : 1, got, plan.fetch);
+      }
+    }
+  } finally {
+    await fd.close();
+    await out.end().catch(() => {});
+  }
+  return { sha512: hash.digest('base64'), bytes: plan.total, fetched: got };
 }
 
 const run = (cmd, args) => new Promise((resolve, reject) => {
@@ -203,11 +388,34 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
   /* A note left for the next start, so it can say "updated to 4.6.0" - or that it was not. */
   const writeNote = async (note) => { try { await fsp.writeFile(notePath, JSON.stringify(note)); } catch { /* best effort */ } };
   async function takeNote() {
+    // asked once at every start: a good moment to clear an AppImage update that was never put in place
+    try { const m = mode(); if (m.kind === 'appimage' && !ready) await removeStaleAppImageUpdates(m.file); } catch { /* only space */ }
     let note = null;
     try { note = JSON.parse(await fsp.readFile(notePath, 'utf8')); } catch { return null; }
     try { await fsp.unlink(notePath); } catch { /* gone already */ }
     if (!note || !VERSION_RE.test(note.to || '')) return null;
     return { to: note.to, from: note.from, done: app.getVersion() === note.to, kind: note.kind };
+  }
+
+  /* The Mac zip kept from the last update, for the next one to be built from. One at a time, never more. */
+  const keptDir = () => path.join(path.dirname(notePath), 'update-cache');
+  async function readKept() {
+    try {
+      const info = JSON.parse(await fsp.readFile(path.join(keptDir(), 'kept.json'), 'utf8'));
+      const file = path.join(keptDir(), 'kept.zip');
+      if (!info || !VERSION_RE.test(info.version || '') || !/^[\w.-]+\.zip$/.test(info.name || '') || !fs.existsSync(file)) return null;
+      return { ...info, file };
+    } catch { return null; }
+  }
+  async function keep(zip, info) {
+    try {
+      await fsp.mkdir(keptDir(), { recursive: true });
+      await fsp.rm(path.join(keptDir(), 'kept.json'), { force: true });
+      // the zip may be on another disk (the temp folder): a copy, then the original goes
+      await fsp.copyFile(zip, path.join(keptDir(), 'kept.zip'));
+      await fsp.writeFile(path.join(keptDir(), 'kept.json'), JSON.stringify(info));
+    } catch { /* only a smaller download next time is lost */ }
+    try { await fsp.unlink(zip); } catch { /* only space */ }
   }
 
   async function downloadWin(version, onProgress) {
@@ -261,7 +469,25 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
     if (!file) throw new Error(`the release has no Mac download for this ${arch === 'arm64' ? 'Apple chip' : 'Intel'} Mac`);
     const work = await fsp.mkdtemp(path.join(os.tmpdir(), 'gazboard-update-'));
     const zip = path.join(work, path.basename(file.url));
-    const got = await downloadTo(net, `${base}/${file.url.split('/').map(encodeURIComponent).join('/')}`, zip, { size: file.size, onProgress });
+    const zipUrl = `${base}/${file.url.split('/').map(encodeURIComponent).join('/')}`;
+    let got = null;
+    // the zip this Mac came to its present version with, if it was updated in place last time
+    const kept = await readKept();
+    if (kept && kept.version === app.getVersion() && kept.arch === arch) {
+      try {
+        const [oldMap, newMap] = await Promise.all([
+          fetchBlockmap(net, `${downloadBase()}/v${kept.version}/${encodeURIComponent(kept.name)}.blockmap`),
+          fetchBlockmap(net, `${zipUrl}.blockmap`)
+        ]);
+        const plan = deltaPlan(oldMap, newMap);
+        if (file.size && plan.total !== file.size) throw new Error('the blockmap does not describe this zip');
+        // so many scattered pieces that asking for each would be slower than one download: just download it
+        if (plan.requests > 400 || plan.fetch > file.size * 0.7) throw new Error('not worth it');
+        got = await assembleDelta(net, { oldFile: kept.file, plan, url: zipUrl, dest: zip, onProgress });
+        if (got.sha512 !== file.sha512) got = null;        // not right: fetch it whole instead
+      } catch { got = null; }
+    }
+    if (!got) got = await downloadTo(net, zipUrl, zip, { size: file.size, onProgress });
     if (got.sha512 !== file.sha512) throw new Error('the download does not match the release (checksum differs) - nothing was changed');
     if (file.size && got.bytes !== file.size) throw new Error('the download is incomplete - nothing was changed');
     const unpacked = path.join(work, 'new');
@@ -275,11 +501,65 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
     if (theirs !== id) throw new Error('the download is not GazBoard');
     if (have !== version) throw new Error(`the download is version ${have}, not ${version}`);
     await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', newApp]);
-    try { await fsp.unlink(zip); } catch { /* only space */ }
+    // kept for next time, in place of the last one: the zip the next update is built from
+    await keep(zip, { version, arch, name: path.basename(file.url) });
     // written now, so that putting it in place on quit needs nothing that can still be in flight
     const script = path.join(work, 'swap.sh');
     await fsp.writeFile(script, SWAP_SCRIPT, { mode: 0o755 });
     return { kind: 'mac', version, newApp, work, bundle, script };
+  }
+
+  async function downloadAppImage(version, onProgress, file) {
+    const name = appImageName(version, arch);
+    if (!name) throw new Error('there is no AppImage for this kind of computer');
+    const base = `${downloadBase()}/v${version}`;
+    const zres = await net.fetch(`${base}/${encodeURIComponent(name)}.zsync`, { redirect: 'follow' });
+    if (!zres.ok) throw new Error(`the release has no ${name}.zsync (${zres.status})`);
+    const zbuf = Buffer.from(await zres.arrayBuffer());
+    if (zbuf.length > 32 * 1024 * 1024) throw new Error('the .zsync is far too big');
+    const Z = require('./zsync.js');
+    const z = Z.parseZsync(zbuf);
+    if (z.filename && z.filename !== name) throw new Error(`the .zsync describes ${z.filename}, not ${name}`);
+    await removeStaleAppImageUpdates(file);
+    // read with room for zsync's padding after it, so the comparison needs no second copy of a 100 MB file
+    const size = (await fsp.stat(file)).size;
+    const padded = Buffer.alloc(size + 2 * z.blocksize);
+    const fh = await fsp.open(file, 'r');
+    try {
+      for (let at = 0; at < size;) {
+        const { bytesRead } = await fh.read(padded, at, size - at, at);
+        if (!bytesRead) throw new Error('could not read the AppImage that is running');
+        at += bytesRead;
+      }
+    } finally { await fh.close(); }
+    onProgress(0, 0, 0);
+    const got = await Z.assemble({ zsync: zbuf, local: padded.subarray(0, size), padded, url: `${base}/${encodeURIComponent(name)}`, fetch: (u, init) => net.fetch(u, init), onProgress });
+    // beside the old one, so the rename that puts it in place cannot cross from one disk to another
+    const temp = path.join(path.dirname(file), `.${path.basename(file)}.update-${version}`);
+    try {
+      await fsp.writeFile(temp, got.data, { mode: 0o755 });
+      if ((await fsp.stat(temp)).size !== z.length) throw new Error('short');
+      await fsp.chmod(temp, 0o755);
+    } catch (e) {
+      await fsp.unlink(temp).catch(() => {});
+      throw new Error(`the update could not be written beside GazBoard (${e.code || e.message}) - nothing was changed`);
+    }
+    return { kind: 'appimage', version, file, temp, downloaded: got.downloaded, whole: got.whole };
+  }
+
+  /** An update downloaded but never put in place (GazBoard was closed first, or a newer one came): it only takes space. */
+  async function removeStaleAppImageUpdates(file, except = null) {
+    const dir = path.dirname(file), prefix = `.${path.basename(file)}.update-`;
+    let names = [];
+    try { names = await fsp.readdir(dir); } catch { return; }
+    for (const n of names) if (n.startsWith(prefix) && path.join(dir, n) !== except) await fsp.unlink(path.join(dir, n)).catch(() => {});
+  }
+
+  /** Put the new AppImage where the old one is, under the same name. The running copy keeps going from the old one. */
+  async function placeAppImage() {
+    if (ready.placed) return;
+    await fsp.rename(ready.temp, ready.file);
+    ready.placed = true;
   }
 
   return {
@@ -293,7 +573,9 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
       if (busy) return { ok: false, error: 'already downloading' };
       const m = mode();
       if (m.mode !== 'install') return { ok: false, error: 'this copy of GazBoard cannot update itself', reason: m.reason };
-      busy = (m.kind === 'win' ? downloadWin(version, onProgress) : downloadMac(version, onProgress, m.bundle));
+      busy = (m.kind === 'win' ? downloadWin(version, onProgress)
+        : m.kind === 'appimage' ? downloadAppImage(version, onProgress, m.file)
+        : downloadMac(version, onProgress, m.bundle));
       try {
         ready = await busy;
         return { ok: true, version };
@@ -311,6 +593,17 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
     async install({ now = true } = {}) {
       if (!ready) return { ok: false, error: 'nothing downloaded' };
       await writeNote({ to: ready.version, from: app.getVersion(), kind: ready.kind, at: Date.now() });
+      if (ready.kind === 'appimage') {
+        try { await placeAppImage(); }
+        catch (e) { await fsp.unlink(notePath).catch(() => {}); return { ok: false, error: `the new version could not be put in place: ${e.message}` }; }
+        if (!now) return { ok: true, later: true };       // already in place: the next start is the new version
+        const flags = process.argv.slice(1).filter((a) => /^--/.test(a));
+        const child = spawn('/bin/sh', ['-c', APPIMAGE_RESTART, 'gazboard-restart', String(process.pid), ready.file, ...flags],
+          { detached: true, stdio: 'ignore', env: cleanAppImageEnv(env) });
+        child.unref();
+        app.quit();
+        return { ok: true };
+      }
       if (!now) {
         installOnQuit = true;
         if (ready.kind === 'win') { ready.updater.autoInstallOnAppQuit = true; ready.updater.addQuitHandler(); }
@@ -343,4 +636,4 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
   };
 }
 
-module.exports = { createUpdater, installMode, macBundle, parseLatestYml, pickMacZip, downloadTo, SWAP_SCRIPT };
+module.exports = { createUpdater, installMode, macBundle, parseLatestYml, pickMacZip, downloadTo, SWAP_SCRIPT, appImageName, cleanAppImageEnv, APPIMAGE_RESTART, fetchBlockmap, deltaPlan, assembleDelta };

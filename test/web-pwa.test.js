@@ -1009,6 +1009,31 @@ async function runTests() {
       ? PKG.version
       : '__APP_VERSION__';
     check('adapter.info() returns web runtime info', info.platform === 'browser' && info.isWeb === true && info.version === expectedVersion);
+
+    // A dropped file has no place on disk in a browser. The adapter gives it
+    // the same stand-in path Add would, so the board imports a dropped PDF
+    // (and opens a dropped board) the way it does a picked one.
+    const pdf = new global.Blob(['%PDF-1.4 dropped'], { type: 'application/pdf' });
+    pdf.name = 'Week 5 notes.pdf';
+    const dropPath = typeof adapter.pathForFile === 'function' ? adapter.pathForFile(pdf) : '';
+    const imported = dropPath ? await adapter.importToPdf(dropPath) : null;
+    const bytes = imported?.data ? new TextDecoder().decode(imported.data) : '';
+    check('a file dropped in the browser gets a readable path that keeps its name',
+      /\/Week 5 notes\.pdf$/.test(dropPath), `path: "${dropPath}"`);
+    check('and a dropped PDF imports through the same road as Add > Document',
+      imported?.ok === true && bytes === '%PDF-1.4 dropped' && imported.name === 'Week 5 notes.pdf',
+      `import answered ${JSON.stringify({ ok: imported?.ok, name: imported?.name, error: imported?.error, bytes })}`);
+    const sly = new global.Blob(['x'], { type: 'text/plain' });
+    sly.name = '../evil/name.gazboard';
+    const slyPath = adapter.pathForFile ? adapter.pathForFile(sly) : '';
+    check('a slash in a dropped file name cannot split the path',
+      slyPath.split('/').pop() === '.._evil_name.gazboard', `path: "${slyPath}"`);
+
+    // the platform-wide drop catcher must leave alone a drop the board already took, or a dropped board opens twice
+    const platformSrc = fs.readFileSync(path.join(SRC, 'js', 'platform', 'platform.js'), 'utf8');
+    check('a drop the board handled is not handled again by the page-wide catcher',
+      /addEventListener\('drop'[\s\S]{0,200}if \(e\.defaultPrevented\) return;/.test(platformSrc),
+      'platform.js drop listener should start with: if (e.defaultPrevented) return;');
   } catch (e) {
     check('web adapter contract parity failed', false, e.message);
   }

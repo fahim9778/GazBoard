@@ -18,7 +18,7 @@ import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRe
 import { isNewer } from './core/version.js';
 import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
-import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard } from './core/folders.js';
+import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard, catalogueOf, mergeCatalogue } from './core/folders.js';
 import { TextEditor } from './ui/textedit.js';
 import { MathEditor } from './ui/mathedit.js';
 import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './core/maths.js';
@@ -330,6 +330,34 @@ class App {
     try { localStorage.setItem('gazboard.settings', JSON.stringify(this.settings)); } catch {}
     this.applyTheme();
     this.syncUI();
+    this.queueCatalogue();
+  }
+
+  /**
+   * Keep the copy of the My boards folders that sits beside the boards up to
+   * date: in a chosen boards folder on the desktop, in the folder copy on
+   * Android. Written a moment after a change, and only when the folders
+   * actually changed. Where neither is in use the other side ignores it, and
+   * the folders stay in settings exactly as they always have.
+   */
+  queueCatalogue({ now = false } = {}) {
+    const send = window.board?.storage?.writeCatalogue || window.board?.backup?.catalogue;
+    if (!send) return;
+    let json;
+    try { json = JSON.stringify(catalogueOf(this.settings)); } catch { return; }
+    if (!now && json === this._catalogueSent) return;
+    this._catalogueSent = json;
+    clearTimeout(this._catalogueTimer);
+    this._catalogueTimer = setTimeout(() => {
+      Promise.resolve().then(() => send(json)).catch(() => { this._catalogueSent = null; });
+    }, now ? 0 : 400);
+  }
+
+  /** Folders that arrived with boards from elsewhere join the ones here. Nothing here is undone. */
+  takeCatalogue(inc) {
+    try {
+      if (mergeCatalogue(this.settings, inc)) { this.saveSettings(); this.panels?.boardsChanged?.(); }
+    } catch (e) { console.warn('[folders] could not read the folders that came with the boards:', e); }
   }
 
   /**
@@ -467,6 +495,12 @@ class App {
    * single launch. `force` is for an explicit "save" the user asked for.
    */
   persist(options = {}) {
+    /*
+     * A save asked for while the boards folder changes waits until the switch is over AND the
+     * board from the new folder is on screen (openFromNewStorage), and then saves whatever is on
+     * screen by then. Saving straight away would write the old folder's board into the new one.
+     */
+    if (this._storageSettling && !options.storageFlush) return this._storageSettled.then(() => this.persist(options));
     if (this._storageSwitching && !options.storageFlush) {
       this._unsaved = true;
       return (this._storageResume || Promise.resolve()).then(() => this.persist(options));
@@ -3519,6 +3553,9 @@ class App {
         this.showHint('panning',
           t('Moving around: drag with the <b>middle mouse button</b>, hold <b>Space</b> and drag, or pick the <b>Pan</b> tool (<b>G</b>) from the toolbar. The right button drags too, and the scroll wheel works as usual.'));
       }
+      // Installed from an app store, which keeps GazBoard up to date itself: no question, no
+      // looking at GitHub, no offer of a download - a store copy must only ever update through its store.
+      if (this.storeName(info)) return;
       if (this.settings.updateCheck === null || this.settings.updateCheck === undefined) {
         // Dismissing the question means "not now", and not now should last
         // longer than one launch. It used to come back every single time the app
@@ -3659,6 +3696,11 @@ class App {
    * @param {boolean} opts.force    ignore the twice-a-day limit and any skip
    */
   async checkForUpdates({ silent = false, force = false } = {}) {
+    const store = this.storeName(await this.appInfo().catch(() => null));
+    if (store) {
+      if (!silent) this.toast(t('{store} keeps GazBoard up to date', { store }), 'update', 5000);
+      return null;
+    }
     if (!force) {
       if (!this.settings.updateCheck) return null;
       if (Date.now() - (this.settings.lastUpdateCheck || 0) < App.UPDATE_INTERVAL) return null;
@@ -3732,6 +3774,12 @@ class App {
   async appInfo() {
     if (!this._appInfo) this._appInfo = await window.board.info();
     return this._appInfo;
+  }
+
+  /** The app store this copy came from and that updates it ("Google Play", "F-Droid"), or null for a download from GitHub. */
+  storeName(info = this._appInfo) {
+    const store = info && info.store;
+    return store === 'play' ? 'Google Play' : store === 'fdroid' ? 'F-Droid' : null;
   }
 
   showShortcuts() {
@@ -3979,6 +4027,7 @@ class App {
     // autosave debounce is still sitting on.
     const flushForStorageSwitch = async (ticket) => {
       if (ticket) {
+        this._docAtSwitch = this.store.doc.id;
         this._storageSwitching = true;
         this._storageResume = new Promise((resolve) => { this._resumeStorage = resolve; });
       }
@@ -3996,11 +4045,23 @@ class App {
     window.board.onFlush(() => flushForStorageSwitch());
     window.board.storage?.onFlush?.(flushForStorageSwitch);
     window.board.storage?.onResume?.(async ({ ok } = {}) => {
+      let settled = () => {};
+      // set before the waiting saves are let go, so that they wait for the new folder's board too
+      if (ok) { this._storageSettling = true; this._storageSettled = new Promise((r) => { settled = r; }); }
       this._storageSwitching = false;
       this._resumeStorage?.();
       this._resumeStorage = null;
       this._storageResume = null;
-      if (ok) await this.refreshBoardDirectory();
+      if (ok) {
+        clearTimeout(this._saveTimer);
+        try {
+          // the folders that were kept with the boards there come in, and this device's go out to it
+          try { this.takeCatalogue(await window.board.storage?.readCatalogue?.()); } catch {}
+          this.queueCatalogue({ now: true });
+          await this.refreshBoardDirectory();
+          await this.openFromNewStorage();
+        } finally { this._storageSettling = false; settled(); }
+      }
       if (this._unsaved) this.persist();
       this.refreshStorageStatus();
       this.panels?.refreshStorage?.();
@@ -4119,12 +4180,40 @@ class App {
     });
   }
 
+  /**
+   * After the boards folder changed, show what the NEW folder holds - never
+   * carry on with the copy in memory, which was already saved to the old
+   * folder before the switch.
+   *
+   * If the board came along it is opened from its new home. If it did not (the
+   * folder was used as it was, or started empty), the newest board there is
+   * shown instead: keeping the old one up would save a stray copy of it into
+   * somebody's other set of boards on the next stroke. And when "keep both"
+   * gave this board a new name because the folder had one with the same id,
+   * the one in the folder is what is shown - writing the screen's copy over it
+   * would undo the "both".
+   */
+  async openFromNewStorage() {
+    try {
+      // somebody opened or started another board while the folder changed: that one is theirs, it stays
+      if (this._docAtSwitch && this.store.doc.id !== this._docAtSwitch) return;
+      clearTimeout(this._saveTimer);
+      this._unsaved = false;
+      const here = await window.board.boards.load(this.store.doc.id);
+      const r = here ? { board: here } : await window.board.boards.resume();
+      if (r?.board) await this.loadBoard(r.board, { claimed: true });
+      else this.newBoard(true);
+    } catch (e) { console.warn('[storage] could not open a board from the new folder:', e); }
+  }
+
   async refreshStorageStatus() {
     const badge = document.getElementById('storageWarning');
     if (!badge || !window.board?.info) return;
     try {
       const info = await window.board.info();
       const fallback = info?.storage?.status === 'fallback';
+      // a chosen folder is (or should be) in use: My boards must not forget the filing of boards that live elsewhere
+      this.storageElsewhere = !!info?.storage?.isCustom;
       badge.hidden = !fallback;
       badge.textContent = t('Using default folder for this session');
       badge.title = t('Your chosen boards folder is unavailable. Open Settings to change it.');
@@ -4136,9 +4225,11 @@ class App {
    * page by page, a board file opened. Anything else is named, never silently
    * skipped.
    *
-   * The desktop app reads each file from where it lives on disk. A browser
-   * cannot know that, so the web version takes the pictures it is handed and
-   * points to Add for the rest.
+   * The desktop app reads each file from where it lives on disk; the web
+   * build gives each dropped file a stand-in path, the same kind Add hands
+   * out, so both go through dropPaths. Only a file with neither - a picture
+   * dragged off a web page into the desktop app - falls through to the
+   * pictures-only road below.
    */
   async dropFiles(files, at) {
     if (!files.length) return;
@@ -4146,20 +4237,34 @@ class App {
     const paths = files.map(pathOf);
     const name = (f) => f.name || '?';
     if (paths.every(Boolean)) {
-      const boardFile = paths.find((p) => /\.(gazboard|openboard)$/i.test(p));
-      const imgs = paths.filter(isImagePath);
-      const docs = paths.filter(isDocPath);
-      const other = files.filter((f, i) => !isImagePath(paths[i]) && !isDocPath(paths[i]) && paths[i] !== boardFile);
-      if (imgs.length) await insertImagesFromPaths(this, imgs, at);
-      for (const d of docs) await insertDocument(this, d);
-      if (boardFile) window.dispatchEvent(new CustomEvent('gazboard:import-file', { detail: boardFile }));
-      if (other.length) this.toast(t('Could not add {names} - drop a picture, a document or a board', { names: other.map(name).join(', ') }), 'help', 6000);
-      return;
+      // a picture whose name does not say so (.avif, .jfif, no extension at all) goes by what it is, as it always did
+      const byType = files.filter((f, i) => String(f.type || '').startsWith('image/') && !isImagePath(paths[i]) && !isDocPath(paths[i]) && !/\.(gazboard|openboard)$/i.test(paths[i]));
+      if (byType.length) await insertImageFiles(this, byType, at);
+      return this.dropPaths(paths.filter((p, i) => !byType.includes(files[i])), at);
     }
     const pictures = files.filter((f) => String(f.type || '').startsWith('image/'));
     const rest = files.filter((f) => !pictures.includes(f));
     if (pictures.length) await insertImageFiles(this, pictures, at);
     if (rest.length) this.toast(t('Only pictures can be dropped here - add {names} with Add > Document', { names: rest.map(name).join(', ') }), 'help', 6000);
+  }
+
+  /**
+   * Files that arrive with somewhere to read them from: dropped on the desktop
+   * app, dropped in a browser (the web build hands out a stand-in path for
+   * each), or dragged across from another app on an Android tablet or phone in
+   * split screen. Each goes down the same road Add and Open take.
+   */
+  async dropPaths(paths, at) {
+    if (!paths.length) return;
+    const base = (p) => String(p).split(/[\\/]/).pop() || '?';
+    const boardFile = paths.find((p) => /\.(gazboard|openboard)$/i.test(p));
+    const imgs = paths.filter(isImagePath);
+    const docs = paths.filter(isDocPath);
+    const other = paths.filter((p) => !isImagePath(p) && !isDocPath(p) && p !== boardFile);
+    if (imgs.length) await insertImagesFromPaths(this, imgs, at);
+    for (const d of docs) await insertDocument(this, d);
+    if (boardFile) window.dispatchEvent(new CustomEvent('gazboard:import-file', { detail: boardFile }));
+    if (other.length) this.toast(t('Could not add {names} - drop a picture, a document or a board', { names: other.map(base).join(', ') }), 'help', 6000);
   }
 
   onKeyDown(e) {
