@@ -12,8 +12,10 @@
  * with the tool GazBoard is built with. It fetches only the parts of the
  * installer that changed (the .blockmap files on the release, compared with
  * the copy of the installer it keeps in %LOCALAPPDATA%\gazboard-updater,
- * one part per request because that is all GitHub serves), checks the
- * whole file against the SHA-512 in latest.yml, and reinstalls silently over
+ * one part per request because that is all GitHub serves, and with a saved
+ * map of that copy only if it still fits it - see dropStaleMap), checks the
+ * whole file against the SHA-512 in latest.yml, writes what it did to
+ * updater.log beside GazBoard's settings, and reinstalls silently over
  * the top. The portable .exe cannot replace itself, so it keeps the download
  * page.
  *
@@ -27,7 +29,9 @@
  * failed update leaves the version that worked. The zip is kept afterwards,
  * so that the next update can be built from it, fetching only the parts the
  * release's .blockmap files say have changed; a Mac that has none (it came
- * from the disk image) downloads the whole zip once.
+ * from the disk image) downloads the whole zip once - and a kept zip that no longer
+ * matches its release's map (that version was rebuilt after it was kept) is
+ * noticed before anything is fetched, and the zip comes down whole instead.
  *
  * Linux, as an AppImage, downloads only what changed (zsync.js): the .zsync
  * beside the release's AppImage shows which parts of the AppImage already on
@@ -51,6 +55,137 @@ const zlib = require('zlib');
 const downloadBase = () => (process.env.GAZBOARD_UPDATE_DOWNLOADS || 'https://github.com/fahim9778/GazBoard/releases/download').replace(/\/+$/, '');
 
 const VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/* ------------------------------------------------------------------ *
+ *  Does the saved map still describe the saved installer? (Windows)
+ * ------------------------------------------------------------------ */
+
+/*
+ * BLAKE2b with a chosen digest length. electron-builder's .blockmap files
+ * fingerprint each part of the installer with an 18-byte BLAKE2b, and Node's
+ * crypto only offers the 64-byte one. Used on a few parts per update, so
+ * plain BigInt arithmetic is quick enough.
+ */
+const B2_IV = ['6a09e667f3bcc908', 'bb67ae8584caa73b', '3c6ef372fe94f82b', 'a54ff53a5f1d36f1', '510e527fade682d1', '9b05688c2b3e6c1f', '1f83d9abfb41bd6b', '5be0cd19137e2179'].map((h) => BigInt('0x' + h));
+const B2_SIGMA = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+  [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4], [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+  [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13], [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+  [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11], [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+  [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5], [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0]
+];
+const M64 = (1n << 64n) - 1n;
+const rotr64 = (x, n) => ((x >> n) | (x << (64n - n))) & M64;
+function blake2b(data, outLen = 64) {
+  const h = B2_IV.slice();
+  h[0] ^= 0x01010000n ^ BigInt(outLen);
+  let t = 0n;
+  const compress = (block, last) => {
+    const m = [];
+    for (let i = 0; i < 16; i++) m.push(block.readBigUInt64LE(i * 8));
+    const v = h.concat(B2_IV);
+    v[12] ^= t & M64; v[13] ^= t >> 64n;
+    if (last) v[14] ^= M64;
+    const G = (a, b, c, d, x, y) => {
+      v[a] = (v[a] + v[b] + x) & M64; v[d] = rotr64(v[d] ^ v[a], 32n);
+      v[c] = (v[c] + v[d]) & M64; v[b] = rotr64(v[b] ^ v[c], 24n);
+      v[a] = (v[a] + v[b] + y) & M64; v[d] = rotr64(v[d] ^ v[a], 16n);
+      v[c] = (v[c] + v[d]) & M64; v[b] = rotr64(v[b] ^ v[c], 63n);
+    };
+    for (let r = 0; r < 12; r++) {
+      const s = B2_SIGMA[r % 10];
+      G(0, 4, 8, 12, m[s[0]], m[s[1]]); G(1, 5, 9, 13, m[s[2]], m[s[3]]);
+      G(2, 6, 10, 14, m[s[4]], m[s[5]]); G(3, 7, 11, 15, m[s[6]], m[s[7]]);
+      G(0, 5, 10, 15, m[s[8]], m[s[9]]); G(1, 6, 11, 12, m[s[10]], m[s[11]]);
+      G(2, 7, 8, 13, m[s[12]], m[s[13]]); G(3, 4, 9, 14, m[s[14]], m[s[15]]);
+    }
+    for (let i = 0; i < 8; i++) h[i] ^= v[i] ^ v[i + 8];
+  };
+  let off = 0;
+  while (data.length - off > 128) { t += 128n; compress(data.subarray(off, off + 128), false); off += 128; }
+  const tail = Buffer.alloc(128);
+  data.copy(tail, 0, off);
+  t += BigInt(data.length - off);
+  compress(tail, true);
+  const out = Buffer.alloc(64);
+  h.forEach((x, i) => out.writeBigUInt64LE(x, i * 8));
+  return out.subarray(0, outLen);
+}
+
+/*
+ * electron-updater keeps two things in %LOCALAPPDATA%\gazboard-updater: a
+ * copy of the installer this computer was set up with (installer.exe, put
+ * there by the installer itself) and the map of that installer's parts
+ * (current.blockmap, saved by the last update). When a map is there it is
+ * trusted outright and the release's is never asked for. But uninstalling
+ * leaves the folder alone, and installing by hand replaces installer.exe
+ * and not the map - so after a reinstall from a different build the map
+ * describes a file that is no longer there, every part is looked for in
+ * the wrong place, the result fails its SHA-512 check, and the whole
+ * 102 MB comes down after all.
+ *
+ * So the map is checked against the installer first: the size it describes
+ * must be the installer's size, and the first, middle and last parts must
+ * have the fingerprints it lists. Anything else, and the map is removed;
+ * electron-updater then fetches the right one from the release.
+ */
+async function mapFitsInstaller(mapFile, installerFile) {
+  let map;
+  try { map = JSON.parse(zlib.gunzipSync(await fsp.readFile(mapFile)).toString()); } catch (e) { return { ok: false, why: `the map cannot be read (${e.message})` }; }
+  return partsFit(map && Array.isArray(map.files) && map.files[0], installerFile);
+}
+
+/**
+ * Does this file have the parts a map lists ({sizes, checksums, offset})?
+ * The same check guards the Mac's kept zip, which is matched against its
+ * release's map: a zip from a build that was later replaced would otherwise
+ * be patched into a file that fails its check, and downloaded whole after all.
+ */
+async function partsFit(f, file) {
+  if (!f || !Array.isArray(f.sizes) || !Array.isArray(f.checksums) || !f.sizes.length || f.sizes.length !== f.checksums.length) return { ok: false, why: 'the map has no parts listed' };
+  let size;
+  try { size = (await fsp.stat(file)).size; } catch { return { ok: false, why: 'there is no saved copy to build from' }; }
+  const starts = [];
+  let at = Number(f.offset) || 0;
+  for (const s of f.sizes) { starts.push(at); at += s; }
+  if (at !== size) return { ok: false, why: `the map describes ${at} bytes, the saved copy has ${size}` };
+  const fh = await fsp.open(file, 'r');
+  try {
+    for (const i of [...new Set([0, Math.floor(f.sizes.length / 2), f.sizes.length - 1])]) {
+      const buf = Buffer.alloc(f.sizes[i]);
+      await fh.read(buf, 0, buf.length, starts[i]);
+      const got = blake2b(buf, 18).toString('base64');
+      if (got !== f.checksums[i]) return { ok: false, why: `part ${i + 1} of ${f.sizes.length} differs from the map (${got}, map says ${f.checksums[i]})` };
+    }
+  } finally { await fh.close(); }
+  return { ok: true, why: `the map matches the saved copy (${size} bytes)` };
+}
+
+/** Remove a saved map that no longer fits the saved installer. Returns what was decided, for the log. */
+async function dropStaleMap(cacheDir) {
+  const mapFile = path.join(cacheDir, 'current.blockmap');
+  if (!fs.existsSync(mapFile)) return 'no saved map: the release\'s map will be used';
+  const fit = await mapFitsInstaller(mapFile, path.join(cacheDir, 'installer.exe'));
+  if (fit.ok) return `kept the saved map: ${fit.why}`;
+  await fsp.rm(mapFile, { force: true });
+  return `removed the saved map: ${fit.why}`;
+}
+
+/*
+ * updater.log, beside GazBoard's settings: what the last Windows update did,
+ * in electron-updater's own words. Started afresh by every update, so it
+ * never grows; if an update ever downloads the whole installer instead of
+ * the parts that changed, the reason is written here.
+ */
+function fileLogger(file) {
+  if (!file) return null;
+  try { fs.writeFileSync(file, `GazBoard update log, ${new Date().toISOString()}\n`); } catch { return null; }
+  const put = (level) => (...args) => {
+    const text = args.map((a) => (a instanceof Error ? (a.stack || a.message) : String(a))).join(' ');
+    try { fs.appendFileSync(file, `${new Date().toISOString()} ${level} ${text}\n`); } catch { /* best effort */ }
+  };
+  return { info: put('info'), warn: put('warn'), error: put('error'), debug: put('debug') };
+}
 
 /* ------------------------------------------------------------------ *
  *  Can this copy of GazBoard update itself?
@@ -384,6 +519,7 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
   let ready = null;          // the downloaded update, waiting for a restart
   let busy = null;
   let installOnQuit = false;
+  let log = null;            // updater.log, started afresh by each download
 
   const mode = () => installMode({ platform, execPath, env, packaged: app.isPackaged, ...(canWrite ? { canWrite } : {}) });
 
@@ -435,7 +571,7 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
      * exactly the trust a download from the release page gets.
      */
     u.verifyUpdateCodeSignature = () => Promise.resolve(null);
-    u.logger = null;
+    u.logger = log;
     /*
      * The installed build carries app-update.yml (written by electron-builder
      * from build.publish), which names the folder the installer keeps a copy
@@ -464,6 +600,11 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
      * had changed. electron-updater's own GitHub setting does exactly this.
      */
     u.setFeedURL({ provider: 'generic', url: `${downloadBase()}/v${version}`, useMultipleRangeRequest: false });
+    // a map left from an earlier installation would send the parts download astray - see dropStaleMap
+    try {
+      const said = await dropStaleMap((await u.getOrCreateDownloadHelper()).cacheDir);
+      if (log) log.info(said);
+    } catch (e) { if (log) log.warn(`could not check the saved map: ${e.message}`); }
     u.on('download-progress', (p) => onProgress((p.percent || 0) / 100, p.transferred || 0, p.total || 0));
     const found = await u.checkForUpdates();
     const info = found && found.updateInfo;
@@ -484,19 +625,29 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
     let got = null;
     // the zip this Mac came to its present version with, if it was updated in place last time
     const kept = await readKept();
-    if (kept && kept.version === app.getVersion() && kept.arch === arch) {
+    if (!kept) { if (log) log.info('no zip kept from the last update (this Mac came from the disk image): the zip is downloaded whole this once'); }
+    else if (kept.version !== app.getVersion() || kept.arch !== arch) { if (log) log.info(`the kept zip is ${kept.version} (${kept.arch}), this is ${app.getVersion()} (${arch}): the zip is downloaded whole`); }
+    else {
       try {
         const [oldMap, newMap] = await Promise.all([
           fetchBlockmap(net, `${downloadBase()}/v${kept.version}/${encodeURIComponent(kept.name)}.blockmap`),
           fetchBlockmap(net, `${zipUrl}.blockmap`)
         ]);
+        // the kept zip must still be the one its release's map describes - see partsFit
+        const fit = await partsFit(oldMap, kept.file);
+        if (!fit.ok) throw new Error(`the kept zip does not fit its release's map: ${fit.why}`);
+        if (log) log.info(`the kept zip fits its map: ${fit.why}`);
         const plan = deltaPlan(oldMap, newMap);
         if (file.size && plan.total !== file.size) throw new Error('the blockmap does not describe this zip');
         // so many scattered pieces that asking for each would be slower than one download: just download it
         if (plan.requests > 400 || plan.fetch > file.size * 0.7) throw new Error('not worth it');
         got = await assembleDelta(net, { oldFile: kept.file, plan, url: zipUrl, dest: zip, onProgress });
-        if (got.sha512 !== file.sha512) got = null;        // not right: fetch it whole instead
-      } catch { got = null; }
+        if (got.sha512 !== file.sha512) throw new Error('the zip built from the parts does not match the release (checksum differs)');
+        if (log) log.info(`only the changed parts were fetched: ${plan.fetch} of ${plan.total} bytes, in ${plan.requests} request(s)`);
+      } catch (e) {
+        got = null;
+        if (log) log.warn(`downloading the whole zip instead: ${e.message}`);
+      }
     }
     if (!got) got = await downloadTo(net, zipUrl, zip, { size: file.size, onProgress });
     if (got.sha512 !== file.sha512) throw new Error('the download does not match the release (checksum differs) - nothing was changed');
@@ -555,6 +706,7 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
       await fsp.unlink(temp).catch(() => {});
       throw new Error(`the update could not be written beside GazBoard (${e.code || e.message}) - nothing was changed`);
     }
+    if (log) log.info(got.whole ? `the server sent the whole AppImage (${got.downloaded} bytes)` : `only the changed parts were fetched: ${got.downloaded} bytes, ${got.reused} reused from the AppImage already here`);
     return { kind: 'appimage', version, file, temp, downloaded: got.downloaded, whole: got.whole };
   }
 
@@ -584,13 +736,17 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
       if (busy) return { ok: false, error: 'already downloading' };
       const m = mode();
       if (m.mode !== 'install') return { ok: false, error: 'this copy of GazBoard cannot update itself', reason: m.reason };
+      log = fileLogger(notePath ? path.join(path.dirname(notePath), 'updater.log') : null);
+      if (log) log.info(`GazBoard ${app.getVersion()} -> ${version} (${m.kind})`);
       busy = (m.kind === 'win' ? downloadWin(version, onProgress)
         : m.kind === 'appimage' ? downloadAppImage(version, onProgress, m.file)
         : downloadMac(version, onProgress, m.bundle));
       try {
         ready = await busy;
+        if (log) log.info(`${version} downloaded and checked, ready to install`);
         return { ok: true, version };
       } catch (e) {
+        if (log) log.error(`the update stopped: ${e && e.message ? e.message : e}`);
         return { ok: false, error: e && e.message ? e.message : String(e) };
       } finally { busy = null; }
     },
@@ -647,4 +803,4 @@ function createUpdater({ app, net, notePath, env = process.env, platform = proce
   };
 }
 
-module.exports = { createUpdater, installMode, macBundle, parseLatestYml, pickMacZip, downloadTo, SWAP_SCRIPT, appImageName, cleanAppImageEnv, APPIMAGE_RESTART, fetchBlockmap, deltaPlan, assembleDelta };
+module.exports = { createUpdater, blake2b, mapFitsInstaller, partsFit, dropStaleMap, installMode, macBundle, parseLatestYml, pickMacZip, downloadTo, SWAP_SCRIPT, appImageName, cleanAppImageEnv, APPIMAGE_RESTART, fetchBlockmap, deltaPlan, assembleDelta };

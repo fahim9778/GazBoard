@@ -9242,6 +9242,7 @@ async function run(win, app) {
       const cacheBase = process.platform === 'win32' ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
         : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches') : (process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'));
       fsSync.rmSync(path.join(cacheBase, 'gazboard-updater-test'), { recursive: true, force: true });
+      fsSync.rmSync(path.join(path.dirname(notePath), 'updater.log'), { force: true });   // the Windows downloads above wrote it beside the note
     }
     check('updater: Windows downloads the installer named in latest.yml through electron-updater, checks it, and has it ready',
       win.ok === true && win.ready === '99.0.0' && served.some((u) => u.startsWith('/v99.0.0/latest.yml')) && served.includes('/v99.0.0/GazBoard-Setup-99.0.0.exe') && progress.length > 0,
@@ -9294,6 +9295,7 @@ async function run(win, app) {
         if (u === `/v${newVersion}/latest.yml`) { res.end(`version: ${newVersion}\nfiles:\n  - url: GazBoard-Setup-${newVersion}.exe\n    sha512: ${sha512(newExe)}\n    size: ${newExe.length}\npath: GazBoard-Setup-${newVersion}.exe\nsha512: ${sha512(newExe)}\nreleaseDate: '2026-10-15T00:00:00.000Z'\n`); return; }
         const to = { [`/v${newVersion}/GazBoard-Setup-${newVersion}.exe`]: '/a/new.exe', [`/v${newVersion}/GazBoard-Setup-${newVersion}.exe.blockmap`]: '/a/new.exe.blockmap',
           [`/v${oldVersion}/GazBoard-Setup-${oldVersion}.exe.blockmap`]: '/a/old.exe.blockmap' }[u];
+        if (to === '/a/old.exe.blockmap') log.oldMap++;
         if (to) { log.redirected++; res.statusCode = 302; res.setHeader('location', assetBase + to); res.end(''); return; }
         res.statusCode = 404; res.end('');
       });
@@ -9302,36 +9304,68 @@ async function run(win, app) {
       const cacheBase = process.platform === 'win32' ? (process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'))
         : process.platform === 'darwin' ? path.join(os.homedir(), 'Library', 'Caches') : (process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'));
       const cacheDir = path.join(cacheBase, 'gazboard-updater-test');
-      fsSync.rmSync(cacheDir, { recursive: true, force: true });
-      fsSync.mkdirSync(cacheDir, { recursive: true });
-      fsSync.writeFileSync(path.join(cacheDir, 'installer.exe'), oldExe);
       const was = { d: process.env.GAZBOARD_UPDATE_DOWNLOADS, t: process.env.GAZBOARD_UPDATE_TEST, f: process.env.GAZBOARD_UPDATE_DIFF };
       process.env.GAZBOARD_UPDATE_DOWNLOADS = `http://127.0.0.1:${release.address().port}`;
       process.env.GAZBOARD_UPDATE_TEST = '1';
       process.env.GAZBOARD_UPDATE_DIFF = '1';
-      let delta = {}, got = null;
-      const seen = [];
-      try {
-        const w = U.createUpdater({ app: eApp, net: eNet, notePath: path.join(work, 'note.json'), platform: 'win32', execPath: 'C:\\GazBoard\\GazBoard.exe' });
-        delta = await w.download(newVersion, (f, done, total) => seen.push([done, total]));
-        delta.ready = w.ready;
+      // maps of other builds: what a reinstall by hand leaves behind. One a little longer, so every part
+      // it lists sits somewhere else in this installer (what happened on a real PC), one the same size
+      const shiftedPath = path.join(work, 'shifted.exe'), sameSizePath = path.join(work, 'same-size.exe');
+      fsSync.writeFileSync(shiftedPath, Buffer.concat([nodeCrypto.randomBytes(300), oldExe]));
+      fsSync.writeFileSync(sameSizePath, Buffer.concat([nodeCrypto.randomBytes(4096), oldExe.subarray(4096)]));
+      await buildBlockMap(shiftedPath, 'gzip', shiftedPath + '.blockmap');
+      await buildBlockMap(sameSizePath, 'gzip', sameSizePath + '.blockmap');
+      // one update from the installer GazBoard was installed with, where the Windows installer leaves a copy of itself
+      const run = async (savedMap) => {
+        fsSync.rmSync(cacheDir, { recursive: true, force: true });
+        fsSync.mkdirSync(cacheDir, { recursive: true });
+        fsSync.writeFileSync(path.join(cacheDir, 'installer.exe'), oldExe);
+        if (savedMap) fsSync.copyFileSync(savedMap, path.join(cacheDir, 'current.blockmap'));
+        Object.assign(log, { ranges: [], multi: 0, whole: 0, bytes: 0, redirected: 0, oldMap: 0 });
+        const r = { delta: {}, got: null, seen: [], mapAfter: null, logText: '' };
+        const notePath = path.join(work, 'note.json');
+        const w = U.createUpdater({ app: eApp, net: eNet, notePath, platform: 'win32', execPath: 'C:\\GazBoard\\GazBoard.exe' });
+        r.delta = await w.download(newVersion, (f, done, total) => r.seen.push([done, total]));
+        r.delta.ready = w.ready;
         const pending = path.join(cacheDir, 'pending');
         const exe = fsSync.existsSync(pending) ? fsSync.readdirSync(pending).find((n) => n.endsWith('.exe')) : null;
-        got = exe ? fsSync.readFileSync(path.join(pending, exe)) : null;
+        r.got = exe ? fsSync.readFileSync(path.join(pending, exe)) : null;
+        r.mapAfter = fsSync.existsSync(path.join(cacheDir, 'current.blockmap'));
+        try { r.logText = fsSync.readFileSync(path.join(work, 'updater.log'), 'utf8'); } catch { r.logText = '(no updater.log)'; }
+        r.log = { ...log, ranges: log.ranges.length };
+        return r;
+      };
+      let fresh = {}, stale = {}, sameSize = {}, kept = {};
+      try {
+        fresh = await run(null);
+        stale = await run(shiftedPath + '.blockmap');
+        sameSize = await run(sameSizePath + '.blockmap');
+        kept = await run(oldPath + '.blockmap');
       } finally {
         for (const [k, v] of [['GAZBOARD_UPDATE_DOWNLOADS', was.d], ['GAZBOARD_UPDATE_TEST', was.t], ['GAZBOARD_UPDATE_DIFF', was.f]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
         await new Promise((r) => release.close(r)); await new Promise((r) => assets.close(r));
         fsSync.rmSync(cacheDir, { recursive: true, force: true });
         fsSync.rmSync(work, { recursive: true, force: true });
       }
+      const partsOnly = (r) => r.delta.ok === true && r.delta.ready === newVersion && r.log.multi === 0 && r.log.whole === 0 && r.log.ranges > 0
+        && r.log.bytes < newExe.length / 4 && r.got && r.got.equals(newExe);
+      const told = (r) => `result ${JSON.stringify(r.delta)}; ${r.log.ranges} part request(s), ${r.log.multi} several-parts request(s) (GitHub refuses those), ${r.log.whole} whole download(s); ` +
+        `${(r.log.bytes / 1e6).toFixed(2)} MB fetched of ${(newExe.length / 1e6).toFixed(2)} MB; assembled file ${r.got ? (r.got.equals(newExe) ? 'matches' : `differs (${r.got.length} bytes)`) : 'missing'}; ` +
+        `redirects followed ${r.log.redirected}; old map fetched from the release ${r.log.oldMap} time(s); updater.log:\n${r.logText}`;
       check('updater: Windows fetches only the changed parts of the installer, one part per request as GitHub requires, and the result is exactly the new installer',
-        delta.ok === true && delta.ready === newVersion && log.multi === 0 && log.whole === 0 && log.ranges.length > 0
-          && log.bytes < newExe.length / 4 && got && got.equals(newExe),
-        `result ${JSON.stringify(delta)}; ${log.ranges.length} part request(s), ${log.multi} several-parts request(s) (GitHub refuses those), ${log.whole} whole download(s); ` +
-        `${(log.bytes / 1e6).toFixed(2)} MB fetched of ${(newExe.length / 1e6).toFixed(2)} MB; assembled file ${got ? (got.equals(newExe) ? 'matches' : `differs (${got.length} bytes)`) : 'missing'}; redirects followed ${log.redirected}`);
+        partsOnly(fresh) && fresh.log.oldMap === 1, told(fresh));
       check('updater: and the progress bar counts the parts being fetched, not the whole installer',
-        seen.length > 0 && seen[seen.length - 1][1] > 0 && seen[seen.length - 1][1] < newExe.length / 4,
-        `progress reports: ${seen.length}; last ${JSON.stringify(seen[seen.length - 1] || null)} (bytes done, bytes to fetch)`);
+        fresh.seen.length > 0 && fresh.seen[fresh.seen.length - 1][1] > 0 && fresh.seen[fresh.seen.length - 1][1] < newExe.length / 4,
+        `progress reports: ${fresh.seen.length}; last ${JSON.stringify(fresh.seen[fresh.seen.length - 1] || null)} (bytes done, bytes to fetch)`);
+      check('updater: a saved map left by a different build (a reinstall by hand) is removed, the release\'s map is used, and still only the changed parts are fetched',
+        partsOnly(stale) && stale.log.oldMap === 1 && /removed the saved map: the map describes \d+ bytes, the saved copy has \d+/.test(stale.logText), told(stale));
+      check('updater: and one from a build of exactly the same size is caught by its parts\' fingerprints',
+        partsOnly(sameSize) && sameSize.log.oldMap === 1 && /removed the saved map: part 1 of \d+ differs/.test(sameSize.logText), told(sameSize));
+      check('updater: a saved map that matches the saved installer is kept and used, without asking the release for it',
+        partsOnly(kept) && kept.log.oldMap === 0 && /kept the saved map/.test(kept.logText) && kept.mapAfter, told(kept));
+      check('updater: updater.log says what the update did, from the version it started at to the one it fetched',
+        new RegExp(`-> ${newVersion.replace(/\./g, '\\.')} \\(win\\)`).test(fresh.logText) && /no saved map: the release's map will be used/.test(fresh.logText)
+          && /Download block maps/.test(fresh.logText) && /ready to install/.test(fresh.logText), fresh.logText);
     }
 
     // 4b. Linux AppImage: only the changed parts are downloaded (zsync), checked, and put in place under the same name
@@ -9383,6 +9417,8 @@ async function run(win, app) {
         good = await ug.download('99.0.0', (f) => progressLin.push(f));
         good.ranges = ranges.length; good.fetched = ranges.reduce((x, y) => x + y, 0); good.whole = whole; good.progress = progressLin.length;
         good.stillOld = fsSync.readFileSync(imgPath).equals(oldImg);
+        try { good.log = fsSync.readFileSync(path.join(path.dirname(notePath), 'updater.log'), 'utf8'); } catch { good.log = '(no updater.log)'; }
+        fsSync.rmSync(path.join(path.dirname(notePath), 'updater.log'), { force: true });
         // "when I close GazBoard": put in place at once, under the same name, executable
         placed = await ug.install({ now: false });
         placed.isNew = fsSync.readFileSync(imgPath).equals(newImg);
@@ -9400,7 +9436,8 @@ async function run(win, app) {
           && JSON.stringify(lin.names) === '["GazBoard-4.7.0.AppImage","GazBoard-4.7.0-arm64.AppImage",null]',
         JSON.stringify(lin));
       check('updater: an AppImage downloads only the parts that changed (read with the .zsync the real zsyncmake made), and checks the whole result',
-        good.ok === true && good.fetched > 0 && good.fetched < newImg.length * 0.05 && good.whole === 0 && good.stillOld && good.progress > 0,
+        good.ok === true && good.fetched > 0 && good.fetched < newImg.length * 0.05 && good.whole === 0 && good.stillOld && good.progress > 0
+          && /\(appimage\)/.test(good.log) && /only the changed parts were fetched: \d+ bytes, \d+ reused/.test(good.log) && /ready to install/.test(good.log),
         `result ${JSON.stringify(good)}; fetched ${good.fetched} of ${newImg.length} bytes in ${good.ranges} parts`);
       check('updater: if what arrives does not match the release, nothing is put in place and nothing is left behind',
         bad.ok === false && /checksum/.test(bad.error || '') && bad.untouched && bad.leftovers.length === 0,
@@ -9467,7 +9504,7 @@ async function run(win, app) {
       await new Promise((r) => md.listen(0, '127.0.0.1', r));
       process.env.GAZBOARD_UPDATE_DOWNLOADS = `http://127.0.0.1:${md.address().port}`;
       process.env.GAZBOARD_UPDATE_TEST = '1';
-      let delta = {}, spoilt = {};
+      let delta = {}, spoilt = {}, otherBuild = {};
       try {
         const mk = () => U.createUpdater({ app: eApp, net: eNet, notePath: path.join(ud, 'update-note.json'), platform: 'darwin', arch: 'arm64',
           execPath: '/Applications/GazBoard.app/Contents/MacOS/GazBoard', canWrite: () => true });
@@ -9478,6 +9515,13 @@ async function run(win, app) {
         spoil = true; ranged = 0; wholeZip = 0;
         spoilt = await mk().download('99.0.0');
         spoilt.ranged = ranged; spoilt.wholeZip = wholeZip;
+        spoilt.log = fsSync.readFileSync(path.join(ud, 'updater.log'), 'utf8');
+        // the kept zip is from a different build of this version, the same size (one replaced on the release after it was kept)
+        spoil = false; ranged = 0; wholeZip = 0;
+        fsSync.writeFileSync(path.join(ud, 'update-cache', 'kept.zip'), Buffer.concat([Fx.bytes(29, 4096), oldZip.subarray(4096)]));
+        otherBuild = await mk().download('99.0.0');
+        otherBuild.ranged = ranged; otherBuild.wholeZip = wholeZip;
+        otherBuild.log = fsSync.readFileSync(path.join(ud, 'updater.log'), 'utf8');
       } finally {
         if (envWas.d === undefined) delete process.env.GAZBOARD_UPDATE_DOWNLOADS; else process.env.GAZBOARD_UPDATE_DOWNLOADS = envWas.d;
         if (envWas.t === undefined) delete process.env.GAZBOARD_UPDATE_TEST; else process.env.GAZBOARD_UPDATE_TEST = envWas.t;
@@ -9494,8 +9538,12 @@ async function run(win, app) {
           && JSON.stringify(joinedPlan.steps) === '[{"start":0,"size":11}]' && joinedPlan.fetch === 11 && joinedPlan.requests === 1,
         `fetched ${delta.ranged} of ${newZip.length} bytes, whole downloads ${delta.wholeZip}; result ${JSON.stringify(delta)}; plan ${JSON.stringify(plan)}; joined ${JSON.stringify(joinedPlan)}`);
       check('updater: if the pieces do not add up to the release\'s zip, the whole zip is fetched instead - and a wrong one is still refused',
-        spoilt.wholeZip === 1 && /checksum/.test(spoilt.error || ''),
+        spoilt.wholeZip === 1 && /checksum/.test(spoilt.error || '') && /downloading the whole zip instead: the zip built from the parts does not match/.test(spoilt.log),
         JSON.stringify(spoilt));
+      check('updater: a kept zip from another build of the same version is noticed before any part is fetched, and the zip comes down whole once',
+        otherBuild.ranged === 0 && otherBuild.wholeZip === 1 && (onMac ? !/checksum/.test(otherBuild.error || '') : /ditto|ENOENT/.test(otherBuild.error || ''))
+          && /the kept zip does not fit its release's map: part 1 of \d+ differs/.test(otherBuild.log),
+        JSON.stringify(otherBuild));
     }
 
     // 5. the release ships what the updater reads, and the app ships the updater
