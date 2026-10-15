@@ -16690,8 +16690,10 @@ module.exports.run = async (win, app) => {
   const seedBytes = await fs.readFile(seedPath);
   const appliedCopy = await js(`return await window.board.storage.apply({ path:${JSON.stringify(copiedFolder)}, mode:'copy' });`);
   const copyBytes = await fs.readFile(path.join(copiedFolder, storageSeed + '.json'));
-  // the app keeps the folder's real path: on a Mac the temp folder /var/... is really /private/var/...
-  const copiedReal = await fs.realpath(copiedFolder);
+  // the app keeps the folder's real path, worked out the way the app works it out (storage-location.js):
+  // on a Mac the temp folder /var/... is really /private/var/..., and on Windows the same call keeps
+  // a short name like RUNNER~1 as it is, where fs.promises.realpath would spell it out
+  const copiedReal = require('node:fs').realpathSync(copiedFolder);
   const activeAfterCopy = await js(`return (await window.board.storage.get()).current;`);
   check('copying changes the active folder only after preserving the source board byte for byte',
     appliedCopy.ok && copyBytes.equals(seedBytes) && activeAfterCopy === copiedReal,
