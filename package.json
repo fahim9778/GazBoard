@@ -11,6 +11,7 @@
     "smoke:builtin": "node scripts/smoke.js --builtin",
     "smoke:headless": "node scripts/smoke.js --builtin --headless",
     "test:restart": "sh test/restart-test.sh",
+    "test:storage": "node --test test/storage-location.test.js",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
@@ -58,6 +59,7 @@
     "productName": "GazBoard",
     "files": [
       "main.js",
+      "storage-location.js",
       "preload.js",
       "soffice.js",
       "msoffice.js",

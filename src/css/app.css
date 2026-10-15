@@ -363,6 +363,8 @@ input, textarea { font: inherit; }
 #linkedFrom { cursor: pointer; font: inherit; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
 #linkedFrom[hidden] { display: none; }
 #linkedFrom:hover { border-color: var(--accent); }
+#storageWarning { color: #8a4b08; background: #fff4ce; border-color: #e1b84b; cursor: pointer; }
+#storageWarning[hidden] { display: none; }
 .lf-pop { width: 280px; max-width: 80vw; }
 /* the boards that come along with an arriving board: each one seen, each one can be left out */
 #overlayCard .linked-note { min-width: 0; max-width: 100%; box-sizing: border-box; font-size: 13px; line-height: 1.5; padding: 10px 11px; border-radius: 8px; background: var(--accent-soft); margin: 0 0 12px; }
@@ -1017,7 +1019,8 @@ kbd {
   #topbar { gap: 2px; padding: 0 6px; }
   #boardTitle { min-width: 80px; max-width: 140px; font-size: 13.5px; padding: 4px 6px; }
   .board-path { max-width: 22vw; font-size: 12.5px; padding-left: 4px; }
-  .badge { display: none; }
+  .badge:not(#storageWarning) { display: none; }
+  #storageWarning { display: inline-flex; }
   .tb-btn { padding: 0 5px; }
   .panel { width: 100vw; border-left: none; }
   .card { max-width: calc(100vw - 20px); padding: 16px 14px; }

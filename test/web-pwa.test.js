@@ -990,6 +990,9 @@ async function runTests() {
     for (const m of requiredMethods) {
       check(`adapter has method: ${m}`, typeof adapter[m] === 'function');
     }
+    const panels = await fsp.readFile(path.join(SRC, 'js', 'ui', 'panels.js'), 'utf8');
+    check('web has no desktop storage bridge, so Settings hides the Storage section',
+      !('storage' in adapter) && /window\.board\?\.storage \? h\('div', \{\}\) : null/.test(panels));
 
     const requiredBoardMethods = ['list', 'load', 'save', 'remove', 'last', 'setLast', 'resume', 'migrate'];
     for (const m of requiredBoardMethods) {

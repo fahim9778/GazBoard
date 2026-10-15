@@ -242,9 +242,23 @@ which engine is active. Set `GAZBOARD_DISABLE_LIBREOFFICE=1` to force the built-
 - `.gazboard` document files (Save a copy / Open); `.openboard` files from earlier versions still open
 - Autosave to a local board library, browsable from **Boards**
 
-Boards live in `<userData>/boards` — on Windows that is `%APPDATA%\GazBoard\boards`, on
-Linux `~/.config/GazBoard/boards`. **Uninstalling does not remove them**, so reinstalling
-picks up exactly where you left off. The Boards panel shows the folder and can open it.
+By default, boards live in `<userData>/boards` — on Windows that is
+`%APPDATA%\GazBoard\boards`, on Linux `~/.config/GazBoard/boards`. In the desktop app,
+open **Settings → Storage → Change folder** to save them in another folder, including a
+Nextcloud, Syncthing or Dropbox folder. GazBoard copies boards there and leaves the originals
+in place unless you later choose **Move old copies to Trash**; images and imported pages
+are kept alongside them in an `assets` subfolder.
+**Uninstalling does not remove the default boards**, so reinstalling picks them up if the
+profile remains. A custom folder is outside GazBoard's profile and is left where you put it.
+The Boards panel shows the active folder and can open it.
+
+The location setting and the last-open-board pointer stay on this computer in `userData`;
+only the boards and their assets belong in the shared folder. If the chosen folder is
+unavailable at startup, GazBoard asks whether to retry, use the default for this session,
+or choose another folder. Using the default temporarily does not change the saved location.
+GazBoard does not watch for files changed by a sync client while it is running, so an open
+board can overwrite a newer synced copy on its next save. Sync clients may also leave
+conflicted-copy files in the folder. For now, edit a given board on one computer at a time.
 
 Boards are written atomically (temp file plus rename), and which board was open is
 recorded in a file by the main process rather than in browser storage — so a machine
@@ -384,9 +398,10 @@ edits, replays the log into a fresh `Store` and checks the two documents match.
 npm run smoke            # headless, uses LibreOffice if present
 npm run smoke:builtin    # forces the built-in Office converter
 npm run test:restart     # kills the app mid-session and checks the board comes back
+npm run test:storage     # storage path config and validation
 ```
 
-as of 02-Sep-2026, 368 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
+as of 13-Oct-2026, the smoke suite has 1193 assertions covering boot, ink, partial and whole-object erase, stylus/mouse device roles,
 pan-while-drawing and edge auto-pan, shape recognition, notes/text/shapes/tables, undo/redo,
 transforms, hit testing, the pen tray, click-away deselect, the zoom readout, the handwriting
 font, the pen-nib cursor, the About plate, the handwriting default and its settings migration,

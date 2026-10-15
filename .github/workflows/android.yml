@@ -2,9 +2,9 @@ name: Android
 on:
   push:
     branches: [main, 'android/**']
-    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', '.github/workflows/android.yml']
+    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', 'storage-location.js', '.github/workflows/android.yml']
   pull_request:
-    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', '.github/workflows/android.yml']
+    paths: ['android/**', 'src/**', 'sync/**', 'test/android*', 'package.json', 'storage-location.js', '.github/workflows/android.yml']
   workflow_dispatch:
 permissions:
   contents: read

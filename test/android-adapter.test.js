@@ -22,6 +22,13 @@ async function setup(handler) {
   return { adapter: createAndroidAdapter(native), calls, native };
 }
 
+test('Android does not expose the desktop-only storage location controls', async () => {
+  const { adapter } = await setup(async () => true);
+  const panels = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', 'js', 'ui', 'panels.js'), 'utf8');
+  assert.equal('storage' in adapter, false);
+  assert.match(panels, /window\.board\?\.storage \? h\('div', \{\}\) : null/);
+});
+
 test('The clipboard is read through the native side, not guessed at', async () => {
   const { adapter, calls } = await setup(async (request) => {
     if (request.method !== 'clipboard:read') throw new Error('unexpected ' + request.method);

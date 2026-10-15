@@ -236,3 +236,12 @@ So a code with a zero in it was misread, not mistyped by the other machine.
 **Discovery finds nothing but sending by address works** — the network blocks
 broadcast traffic between devices. Worth telling me, because it is exactly the
 case the manual-address fallback exists for.
+
+## GazBoard desktop app with a custom boards folder
+
+The commands above test the standalone transport demo. To check the app's own
+LAN receive path with custom storage, set **Settings → Storage** to a temporary
+folder on the receiving computer, pair the two desktop apps, and send a board
+from the other app. Accept it, then confirm the new board JSON and any `assets`
+are in the selected folder. Repeat with a folder that already contains boards
+to confirm the incoming board is added without replacing existing files.
