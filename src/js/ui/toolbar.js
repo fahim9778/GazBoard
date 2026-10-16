@@ -8,7 +8,7 @@ import {
   PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS
 } from './palettes.js';
 import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
-import { inkPaint } from '../core/render.js';
+import { inkPaint, isDarkBoard, isDarkColor } from '../core/render.js';
 import { t } from '../i18n.js';
 
 const TOOL_ICON = {
@@ -395,6 +395,8 @@ function swatchRow(colors, current, onPick, extra = []) {
      */
     const shown = inkPaint(c);
     b.style.background = shown;
+    // dark ink in the dark theme's dark menu (a light page keeps black ink black): a light edge keeps it findable
+    if (isDarkBoard() && isDarkColor(shown, 0.2)) b.classList.add('ink-edge');
     if (shown !== c) {
       b.classList.add('sw-adaptive');
       b.title = t('{c} — follows the board: light on dark, black on white and in exports', { c });
@@ -413,7 +415,7 @@ function sizeRow(sizes, current, onPick, color = '#201f1e') {
   for (const s of sizes) {
     const b = h('button', { class: 'size' + (s === current ? ' active' : ''), title: t('{s} px', { s }) });
     const dotSize = Math.max(4, Math.min(22, s));
-    b.innerHTML = `<i style="width:${dotSize}px;height:${dotSize}px;background:${dotColor}"></i>`;
+    b.innerHTML = `<i style="width:${dotSize}px;height:${dotSize}px;background:${dotColor}"${isDarkBoard() && isDarkColor(dotColor, 0.2) ? ' class="ink-edge"' : ''}></i>`;
     b.addEventListener('click', () => { markActive(wrap, b); onPick(s); });
     wrap.appendChild(b);
   }

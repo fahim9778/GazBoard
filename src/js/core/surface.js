@@ -1,7 +1,7 @@
 // The canvas view: sizing, the draw loop, culling, overlays.
 
 import { Camera } from './camera.js';
-import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint } from './render.js';
+import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint, setPageColor } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect } from './util.js';
@@ -130,7 +130,8 @@ export class Surface {
   freezeKey() {
     const cam = this.cam;
     const ed = this.editing ? `${this.editing.id}:${this.editing.cell || ''}` : '';
-    return `${this.store.rev}.${this._liveRev || 0}|${cam.x}|${cam.y}|${cam.z}|${this.width}|${this.height}|${this.dpr}|${ed}`;
+    const page = (this.store.doc.background && this.store.doc.background.color) || '';
+    return `${this.store.rev}.${this._liveRev || 0}|${cam.x}|${cam.y}|${cam.z}|${this.width}|${this.height}|${this.dpr}|${ed}|${page}`;
   }
 
   /**
@@ -542,6 +543,8 @@ export class Surface {
     const { ctx, cam } = this;
     const w = this.width, h = this.height;
     if (!w || !h) return;
+    // default ink asks the page whether it is dark, so the page has to be this board's
+    setPageColor(this.store.doc.background && this.store.doc.background.color);
 
     /*
      * The laser repaints on every single frame while it fades, and nothing

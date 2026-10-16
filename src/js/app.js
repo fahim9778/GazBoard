@@ -16,7 +16,7 @@ import { pick, ghost } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
 import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP, todayStamp } from './core/pages.js';
 import { isNewer } from './core/version.js';
-import { emojiAspect, forgetEmojiMetrics, setDarkBoard } from './core/render.js';
+import { emojiAspect, forgetEmojiMetrics, setDarkBoard, setPageColor } from './core/render.js';
 import { objectRuns, runsToHtml, htmlToRuns, normalizeRuns, AUTO_INK } from './core/richtext.js';
 import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard, catalogueOf, mergeCatalogue } from './core/folders.js';
 import * as Recent from './core/recent.js';
@@ -2692,6 +2692,8 @@ class App {
 
   /* ---------------- UI sync ---------------- */
   syncUI() {
+    // the toolbar's pen colours follow the page as the board does
+    setPageColor(this.store.doc.background && this.store.doc.background.color);
     setCurrentBoard(this.store.doc.id, this.store.doc.name);
     this.syncBoardPath();
     syncToolbar(this);

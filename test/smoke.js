@@ -6155,6 +6155,70 @@ async function run(win, app) {
     `page that prints black, and white ink on it is a page that looks blank); ` +
     `dark put back afterwards: ${dark.darkRestoredAfterExport}`);
 
+  /*
+   * Default ink asks the PAGE, not just the theme. A board in a light colour of
+   * its own (off-white, cream) stays light on a dark screen, and the black pen
+   * used to switch to light grey on it anyway: writing that could barely be seen.
+   */
+  const pageInk = await js(`
+    const a = window.app;
+    const { inkPaint } = await import('app://board/js/core/render.js');
+    const was = a.settings.theme;
+    const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+    const px = (x, y) => {
+      const d = a.surface.ctx.getImageData(Math.round(x * a.surface.dpr), Math.round(y * a.surface.dpr), 1, 1).data;
+      return '#' + [d[0], d[1], d[2]].map((n) => n.toString(16).padStart(2, '0')).join('');
+    };
+    const lum = (hex) => { const n = parseInt(hex.slice(1), 16); return Math.round((0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 2.55); };
+    const sw = a.surface.width, sh = a.surface.height, y = sh * 0.3;
+    const one = async (theme, page) => {
+      a.settings.theme = theme; a.saveSettings(); a.applyTheme();
+      a.newBoard(true); a.store.clear();
+      a.store.doc.background.color = page; a.store.rev++;
+      const p0 = a.surface.cam.toWorld(sw / 2 - 160, y), p1 = a.surface.cam.toWorld(sw / 2 + 160, y);
+      a.store.add({ id: 'pg-ink', type: 'stroke', tool: 'pen', color: '#201f1e', width: 26, effect: 'none', opacity: 1, rotation: 0,
+        points: [{ x: p0.x, y: p0.y, p: .6 }, { x: p1.x, y: p1.y, p: .6 }],
+        bbox: { x: p0.x, y: p0.y - 13, w: p1.x - p0.x, h: 26 } }, 'x');
+      a.syncUI(); a.surface.repaintAll(); a.surface.draw(); await frame(); a.surface.draw();
+      const ink = px(sw / 2, y), paper = px(sw / 2, y + 120);
+      // the pen's colour menu: black ink on the dark theme's dark menu needs an edge to be seen
+      const tb = await import('app://board/js/ui/toolbar.js');
+      a.setTool('pen'); a.syncUI();
+      tb.openToolPopover(a, document.querySelector('#toolbar .pen[data-pen="black"]'), 'pen');
+      await new Promise((res) => setTimeout(res, 160));
+      const first = document.querySelector('.pop .sw');
+      const dots = [...document.querySelectorAll('.pop .size i')];
+      const menu = { opened: !!first, swatchEdge: !!(first && first.classList.contains('ink-edge')), dotEdges: dots.filter((d) => d.classList.contains('ink-edge')).length, dots: dots.length,
+        redEdge: [...document.querySelectorAll('.pop .sw')].some((b) => b.title === '#e81123' && b.classList.contains('ink-edge')) };
+      a.hideMenus();
+      return { theme, page, ink, paper, inkLum: lum(ink), paperLum: lum(paper), swatch: inkPaint('#201f1e'), menu };
+    };
+    const r = {
+      offWhiteDark: await one('dark', '#faf9f8'),
+      creamDark: await one('dark', '#fdf6e3'),
+      whiteDark: await one('dark', '#ffffff'),
+      darkPageDark: await one('dark', '#2b2b2b'),
+      offWhiteLight: await one('light', '#faf9f8'),
+    };
+    a.settings.theme = was === undefined ? 'system' : was; a.saveSettings(); a.applyTheme();
+    a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+  const pi = (c) => `${c.theme} theme, ${c.page} page: ink pixel ${c.ink} (brightness ${c.inkLum}), page pixel ${c.paper} (brightness ${c.paperLum}), pen swatch ${c.swatch}`;
+  check('dark theme on a light page of its own (off-white, cream): the black pen writes black, not light grey on light paper',
+    [pageInk.offWhiteDark, pageInk.creamDark].every((c) => c.paperLum > 80 && c.inkLum < 35 && c.swatch === '#201f1e'),
+    `${pi(pageInk.offWhiteDark)}; ${pi(pageInk.creamDark)} — wanted dark ink (brightness < 35) on the light page and a black pen swatch`);
+  check('dark theme on the plain white page, or a dark page: the black pen still writes light',
+    [pageInk.whiteDark, pageInk.darkPageDark].every((c) => c.paperLum < 30 && c.inkLum > 80 && c.swatch === '#f3f2f1'),
+    `${pi(pageInk.whiteDark)}; ${pi(pageInk.darkPageDark)} — wanted light ink on the dark page and a light pen swatch`);
+  check('and the pen menu on a dark screen: black swatch and black thickness dots get a light edge, nothing else does',
+    pageInk.offWhiteDark.menu.opened && pageInk.offWhiteDark.menu.swatchEdge && pageInk.offWhiteDark.menu.dots > 0 && pageInk.offWhiteDark.menu.dotEdges === pageInk.offWhiteDark.menu.dots
+      && !pageInk.offWhiteDark.menu.redEdge && !pageInk.whiteDark.menu.swatchEdge && pageInk.whiteDark.menu.dotEdges === 0 && !pageInk.offWhiteLight.menu.swatchEdge,
+    `off-white/dark menu ${JSON.stringify(pageInk.offWhiteDark.menu)}; white/dark menu ${JSON.stringify(pageInk.whiteDark.menu)} (light ink, no edge needed); off-white/light menu ${JSON.stringify(pageInk.offWhiteLight.menu)} (light menu, no edge)`);
+  check('light theme on an off-white page: black stays black, as before',
+    pageInk.offWhiteLight.paperLum > 80 && pageInk.offWhiteLight.inkLum < 35 && pageInk.offWhiteLight.swatch === '#201f1e',
+    pi(pageInk.offWhiteLight));
+
   check('out of the box, setting up a canvas changes that board and nothing else',
     canvasMemory.offByDefault === true && canvasMemory.thisBoardTookIt === true &&
     canvasMemory.nextBoardStayedPlain === true,

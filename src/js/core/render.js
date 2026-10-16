@@ -317,6 +317,12 @@ export function drawRuling(ctx, bg, cam, w, h, pages = null) {
  *  is theirs and is painted as chosen; red stays red. Default black and the
  *  default black of text are the two that flip, because on a dark board they
  *  are the difference between writing and not.
+ *
+ *  And they flip only when the page under them is really painted dark. A
+ *  board in a colour of its own - off-white, cream, light blue - stays light
+ *  in the dark theme, and light ink on it was very nearly invisible: the
+ *  default pen wrote light grey on off-white. So the page colour is asked
+ *  first; on a light page black stays black, whatever the theme.
  * =================================================================== */
 
 const DEFAULT_INK = '#201f1e';
@@ -324,6 +330,26 @@ const DARK_INK = '#f3f2f1';
 const DARK_BOARD = '#1f1e1d';
 
 let darkBoard = false;
+let pageColor = '#ffffff';
+
+/** The colour of the board being painted, so default ink can tell whether the page under it is dark. */
+export function setPageColor(color) { pageColor = color || '#ffffff'; }
+
+/** true for a dark colour (brightness under `below`, 0-1), false for a light one, null when it cannot be read. */
+export function isDarkColor(color, below = 0.5) {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(color || '').trim());
+  if (!m) return null;
+  const hex = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b < below;
+}
+
+/** Does default ink paint light right now? Only on a dark screen, and only over a page that is painted dark. */
+function lightInk() {
+  if (!darkBoard) return false;
+  const dark = isDarkColor(boardPaint(pageColor));
+  return dark === null ? true : dark;
+}
 
 /**
  * Paint the board dark from here on - screen only.
@@ -338,7 +364,7 @@ export function isDarkBoard() { return darkBoard; }
 /** The colour to actually paint with, once the theme has had its say. */
 export function inkPaint(color, fallback = DEFAULT_INK) {
   const c = color || fallback;
-  if (!darkBoard) return c;
+  if (!lightInk()) return c;
   return String(c).toLowerCase() === DEFAULT_INK ? DARK_INK : c;
 }
 

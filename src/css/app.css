@@ -482,6 +482,9 @@ input, textarea { font: inherit; }
  * difference: white is white everywhere, this one changes.
  */
 .sw.sw-adaptive { box-shadow: inset 0 0 0 2px var(--surface), inset 0 0 0 3.5px var(--text-2); }
+/* dark ink shown on the dark theme's dark menus: a thin light edge so it does not vanish */
+.sw.ink-edge:not(.active) { box-shadow: inset 0 0 0 1.5px rgba(255,255,255,.45); }
+.size i.ink-edge { box-shadow: 0 0 0 1.5px rgba(255,255,255,.6); }
 
 /* the custom picker, dressed as one more swatch; the input itself is the
    whole hit area so a thumb finds it as easily as any other colour */
