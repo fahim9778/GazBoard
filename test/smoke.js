@@ -26,6 +26,13 @@ async function shot(win, name) {
 async function run(win, app) {
   await fs.mkdir(OUT, { recursive: true });
   const js = (code) => win.webContents.executeJavaScript(`(async () => { ${code} })()`, true);
+  // The suite moves its own pretend mouse (sendInputEvent). The real mouse must not join in: on a PC
+  // where the window sits under the real pointer, Windows reports that pointer whenever the window
+  // moves or resizes beneath it, or the person nudges it, and a hover test then sees the real pointer's
+  // spot instead of its own. Letting real mouse events pass through the window keeps them out; the
+  // suite's own events go straight to the page and are not affected.
+  let realMouseOut = true;
+  try { win.setIgnoreMouseEvents(true); } catch { realMouseOut = false; }
 
   await sleep(900);
   // Pixel checks below assume white paper and a light canvas. The smoke
@@ -40,6 +47,7 @@ async function run(win, app) {
 
   /* ---- boot ---- */
   check('app boots', await js(`return !!window.app && !!window.app.store;`));
+  check('the real mouse is kept out of the suite, so moving it while the tests run changes nothing', realMouseOut, `setIgnoreMouseEvents worked: ${realMouseOut} on ${process.platform}`);
   check('canvas sized', (await js(`return window.app.surface.width;`)) > 100);
 
   /* ---- ink ---- */
@@ -6239,12 +6247,19 @@ async function run(win, app) {
         bbox: { x: p0.x, y: p0.y - 40, w: p1.x - p0.x, h: 80 } };
     };
     // a row of pixels along a line: how dark on average, and how much it varies (grain)
+    // five rows across the middle of the line, so one lucky or unlucky row of grain (which row lands there
+    // depends on the window size and pixel ratio) cannot decide it
     const along = (y) => {
-      const d = sf.ctx.getImageData(Math.round(W * 0.3 * sf.dpr), Math.round(y * sf.dpr), Math.round(W * 0.4 * sf.dpr), 1).data;
-      const v = []; for (let i = 0; i < d.length; i += 4) v.push(lum(d, i));
-      const mean = v.reduce((x, y) => x + y, 0) / v.length;
-      const sd = Math.sqrt(v.reduce((x, y) => x + (y - mean) ** 2, 0) / v.length);
-      return { mean: Math.round(mean), sd: +sd.toFixed(1) };
+      const rows = [], means = [];
+      for (const k of [-2, -1, 0, 1, 2]) {
+        const d = sf.ctx.getImageData(Math.round(W * 0.3 * sf.dpr), Math.round(y * sf.dpr) + k, Math.round(W * 0.4 * sf.dpr), 1).data;
+        const v = []; for (let i = 0; i < d.length; i += 4) v.push(lum(d, i));
+        const m = v.reduce((x, y) => x + y, 0) / v.length;
+        means.push(m); rows.push(Math.sqrt(v.reduce((x, y) => x + (y - m) ** 2, 0) / v.length));
+      }
+      const mean = means.reduce((x, y) => x + y, 0) / means.length;
+      const sd = rows.reduce((x, y) => x + y, 0) / rows.length;
+      return { mean: Math.round(mean), sd: +sd.toFixed(1), rows: rows.map((x) => +x.toFixed(1)) };
     };
     // how many pixels high a line is at the middle
     const thick = (y) => { let n = 0; for (let k = -40; k <= 40; k++) { const d = sf.ctx.getImageData(Math.round(W / 2 * sf.dpr), Math.round((y + k) * sf.dpr), 1, 1).data; if (lum(d, 0) < 92) n++; } return n; };
@@ -6255,7 +6270,7 @@ async function run(win, app) {
     ].filter((o) => o.id !== 'upright'), 'x');
     sf.repaintAll(); sf.draw(); await frame(); sf.draw();
     r.light = along(ys.light); r.firm = along(ys.firm); r.pen = along(ys.pen); r.once = along(ys.once); r.twice = along(ys.twice);
-    r.tiltThick = thick(ys.tilt); r.onceThick = thick(ys.once);
+    r.tiltThick = thick(ys.tilt); r.onceThick = thick(ys.once); r.dpr = sf.dpr;
 
     // the tray and its number
     const tray = document.querySelector('#toolbar .pen[data-pen="pencil"]');
@@ -6353,8 +6368,8 @@ async function run(win, app) {
     pencil.trayPencil && pencil.trayKey === '7' && pencil.soundDefault === true,
     `pencil in the tray: ${pencil.trayPencil}, its number: ${pencil.trayKey} (wanted 7); sound by default: ${pencil.soundDefault}`);
   check('pencil looks like graphite: grainy where a pen of the same colour is solid',
-    pencil.once.sd > 6 && pencil.pen.sd < 3,
-    `variation along the line - pencil ${JSON.stringify(pencil.once)}, solid pen ${JSON.stringify(pencil.pen)} (wanted pencil > 6, pen < 3)`);
+    pencil.once.sd >= 4 && pencil.pen.sd < 2 && pencil.once.sd > pencil.pen.sd + 3,
+    `variation along the line (average of 5 rows) - pencil ${JSON.stringify(pencil.once)}, solid pen ${JSON.stringify(pencil.pen)} (wanted pencil at least 4 and 3 more than the pen, pen under 2; dpr ${pencil.dpr})`);
   check('pressing harder draws darker, and going over a line again darkens it, as on paper',
     pencil.firm.mean < pencil.light.mean - 8 && pencil.twice.mean < pencil.once.mean - 6,
     `brightness - light press ${pencil.light.mean}, firm press ${pencil.firm.mean}; one pass ${pencil.once.mean}, two passes ${pencil.twice.mean} (lower is darker)`);
