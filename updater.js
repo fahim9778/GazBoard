@@ -304,9 +304,28 @@ function pickMacZip(files, arch = process.arch) {
  *  Downloading
  * ------------------------------------------------------------------ */
 
+/** Hosts GitHub is allowed to redirect release downloads to; anything else is rejected. */
+const TRUSTED_REDIRECT_HOSTS = /(^|\.)github\.com$|(^|\.)githubusercontent\.com$/i;
+
+/** Follow redirects by hand so a hijacked/attacker response can't send us to an untrusted host. */
+async function fetchTrusted(net, url, init = {}, maxRedirects = 5) {
+  let current = url;
+  for (let i = 0; i <= maxRedirects; i++) {
+    const res = await net.fetch(current, { ...init, redirect: 'manual' });
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null;
+    if (!location) return res;
+    const next = new URL(location, current);
+    if (next.protocol !== 'https:' || !TRUSTED_REDIRECT_HOSTS.test(next.hostname)) {
+      throw new Error(`refusing to follow redirect to untrusted host: ${next.hostname}`);
+    }
+    current = next.toString();
+  }
+  throw new Error('too many redirects');
+}
+
 /** A small text file (latest-mac.yml), following GitHub's redirect to its file store. */
 async function fetchText(net, url) {
-  const res = await net.fetch(url, { redirect: 'follow' });
+  const res = await fetchTrusted(net, url);
   if (!res.ok) throw new Error(`the release has no ${path.basename(new URL(url).pathname)} (${res.status})`);
   return res.text();
 }
@@ -337,7 +356,7 @@ function safeWriter(dest) {
 
 /** Stream a file to disk, reporting progress and hashing as it goes. Resolves to the SHA-512 in base64. */
 async function downloadTo(net, url, dest, { size = 0, onProgress = () => {}, signal } = {}) {
-  const res = await net.fetch(url, { redirect: 'follow', signal });
+  const res = await fetchTrusted(net, url, { signal });
   if (!res.ok || !res.body) throw new Error(`download failed (${res.status})`);
   const total = Number(res.headers.get('content-length')) || size || 0;
   const hash = crypto.createHash('sha512');
