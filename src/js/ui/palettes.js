@@ -8,8 +8,12 @@ export const PEN_COLORS = [
 export const PEN_EFFECTS = [
   { id: 'none', label: t('Solid') },
   { id: 'rainbow', label: t('Rainbow') },
-  { id: 'galaxy', label: t('Galaxy') }
+  { id: 'galaxy', label: t('Galaxy') },
+  { id: 'pencil', label: t('Pencil') }
 ];
+
+/* The pencil's own grey: graphite. On a dark page it is painted light, as default ink is. */
+export const PENCIL_GRAPHITE = '#4b4a48';
 
 export const HIGHLIGHTER_COLORS = ['#fff100', '#b0ff57', '#00e5ff', '#ff8ad8', '#ffa64d', '#c9a0ff'];
 
@@ -51,7 +55,8 @@ export const PENS = [
   { id: 'blue',    color: '#0078d4', effect: 'none',    label: t('Blue pen') },
   { id: 'green',   color: '#107c10', effect: 'none',    label: t('Green pen') },
   { id: 'rainbow', color: '#e81123', effect: 'rainbow', label: t('Rainbow pen') },
-  { id: 'galaxy',  color: '#8764b8', effect: 'galaxy',  label: t('Galaxy pen') }
+  { id: 'galaxy',  color: '#8764b8', effect: 'galaxy',  label: t('Galaxy pen') },
+  { id: 'pencil',  color: '#4b4a48', effect: 'pencil',  label: t('Pencil') }
 ];
 
 /**
@@ -134,6 +139,16 @@ export function penIcon(color, effect, kind = 'pen') {
     fill = `url(#${uid})`;
   }
 
+  if (effect === 'pencil' && kind === 'pen') {
+    // a wooden pencil: painted barrel, bare wood cone, a point in the lead's own colour
+    return `<svg viewBox="0 0 26 44" width="26" height="44" aria-hidden="true">
+    <path d="M7 15h12v22.5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 7 37.5z" fill="#f2c230"/>
+    <path d="M11 15h4v25h-4z" fill="#e0ad1c"/>
+    <path d="M7 36h12v1.5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 7 37.5z" fill="#f4a6b8"/>
+    <rect x="7" y="33.5" width="12" height="2.5" fill="#b9b6b0"/>
+    <path d="M13 2 19 15H7z" fill="#e9c99a" stroke="#c9a46c" stroke-width=".8" stroke-linejoin="round"/>
+    <path d="M13 2 15.3 7h-4.6z" fill="${color}"/></svg>`;
+  }
   if (kind === 'highlighter') {
     return `<svg viewBox="0 0 26 44" width="26" height="44" aria-hidden="true">
       <path d="M6 15h14v22a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z" fill="${fill}"/>

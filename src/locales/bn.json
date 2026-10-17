@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "বোর্ড আর ফোল্ডার খুঁজুন…",
  "Search boards and folders": "বোর্ড আর ফোল্ডার খুঁজুন",
  "Nothing called “{words}”": "“{words}” নামে কিছু নেই",
- "Keep typing to narrow it down": "আরও লিখুন, তালিকা ছোট হবে"
+ "Keep typing to narrow it down": "আরও লিখুন, তালিকা ছোট হবে",
+ "Pencil": "পেনসিল",
+ "Pencil sound": "পেনসিলের শব্দ",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "পেনসিলে আঁকার সময় হালকা খসখস শব্দ। আপনি যত দ্রুত আঁকবেন, শব্দও সেভাবে বদলাবে।",
+ "Erase pencil marks": "পেনসিলের দাগ মুছুন",
+ "Removes every pencil line on this board and keeps the ink": "এই বোর্ডের সব পেনসিলের দাগ মুছে দেয়, কালি থেকে যায়",
+ "No pencil marks on this board": "এই বোর্ডে পেনসিলের কোনো দাগ নেই",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "পেনসিলের দাগ মোছা হয়েছে — আনডু (Ctrl+Z) করলে ফিরে আসবে"
 }

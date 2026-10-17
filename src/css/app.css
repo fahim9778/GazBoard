@@ -858,9 +858,10 @@ kbd {
  *  where people reach for them, and moving them is more disruptive than the
  *  overlap they were moved to avoid.
  *
- *  The toolbar is a centred row about 825px wide; the readouts are about
- *  230px. Centred against right-anchored, they start to collide at roughly
- *  1310px. So instead of lifting the readouts, the toolbar stops centring on
+ *  The toolbar is a centred row about 945px wide (seven pens since the
+ *  pencil, and a little wider again with Windows' fonts); the readouts are
+ *  about 230px. Centred against right-anchored, they start to collide at
+ *  roughly 1460px, so the switch happens with room to spare. So instead of lifting the readouts, the toolbar stops centring on
  *  the window and centres on the space to the LEFT of them. It shifts a
  *  little left of true centre, and it never reaches the corner.
  *
@@ -868,7 +869,7 @@ kbd {
  *  pointer, or on touch tablets) does the toolbar take the full width and the
  *  readouts step up out of its way.
  * ================================================================= */
-@media (max-width: 1340px) {
+@media (max-width: 1520px) {
   #toolbar {
     left: 12px; right: 252px;
     transform: none;
@@ -1383,7 +1384,7 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 [dir="rtl"] #pagebar [data-page="next"] svg,
 [dir="rtl"] #presentbar [data-present="prev"] svg,
 [dir="rtl"] #presentbar [data-present="next"] svg { transform: scaleX(-1); }
-@media (max-width: 1340px) {
+@media (max-width: 1520px) {
   [dir="rtl"] #toolbar { left: 252px; right: 12px; }
 }
 @media (max-width: 860px) {

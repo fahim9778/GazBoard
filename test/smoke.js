@@ -754,8 +754,8 @@ async function run(win, app) {
       hasImage: has('[data-cmd="insert.image"]'), penCount: PENS.length
     };
   `);
-  check('the toolbar has a pen tray', toolbar.pens === toolbar.penCount && toolbar.pens === 6,
-    toolbar.pens + ' pens');
+  check('the toolbar has a pen tray', toolbar.pens === toolbar.penCount && toolbar.pens === 7,
+    toolbar.pens + ' pens (wanted 7: six pens and the pencil)');
   check('picking a pen sets its colour', toolbar.afterRed.tool === 'pen' && toolbar.afterRed.color === '#e81123');
   check('the pen in hand is the raised one, and only it',
     toolbar.afterGalaxy.raised && toolbar.raisedCount === 1 && toolbar.afterGalaxy.effect === 'galaxy');
@@ -6219,6 +6219,172 @@ async function run(win, app) {
     pageInk.offWhiteLight.paperLum > 80 && pageInk.offWhiteLight.inkLum < 35 && pageInk.offWhiteLight.swatch === '#201f1e',
     pi(pageInk.offWhiteLight));
 
+  /* ---- the pencil: graphite that layers, darkens with pressure, shades on its side, and can be wiped on its own ---- */
+  const pencil = await js(`
+    const a = window.app;
+    const R = await import('app://board/js/core/render.js');
+    const PS = await import('app://board/js/core/pencilsound.js');
+    const was = { theme: a.settings.theme, sound: a.settings.pencilSound, shape: a.settings.inkToShape, pen: a.settings.activePen, color: a.settings.penColor, effect: a.settings.penEffect };
+    const r = {};
+    const frame = () => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+    const lum = (d, i) => Math.round((0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 2.55);
+    a.settings.theme = 'light'; a.saveSettings(); a.applyTheme();
+    a.newBoard(true); a.store.clear();
+    const sf = a.surface, cam = sf.cam, W = sf.width, H = sf.height;
+    const line = (id, y, opts) => {
+      const p0 = cam.toWorld(W * 0.2, y), p1 = cam.toWorld(W * 0.8, y);
+      return { id, type: 'stroke', tool: 'pen', color: opts.color || '#4b4a48', width: opts.width || 10, effect: opts.effect || 'pencil', opacity: 1, rotation: 0,
+        ...(opts.tilt ? { tilt: opts.tilt } : {}),
+        points: [{ x: p0.x, y: p0.y, p: opts.p ?? 0.5 }, { x: (p0.x + p1.x) / 2, y: p0.y, p: opts.p ?? 0.5 }, { x: p1.x, y: p1.y, p: opts.p ?? 0.5 }],
+        bbox: { x: p0.x, y: p0.y - 40, w: p1.x - p0.x, h: 80 } };
+    };
+    // a row of pixels along a line: how dark on average, and how much it varies (grain)
+    const along = (y) => {
+      const d = sf.ctx.getImageData(Math.round(W * 0.3 * sf.dpr), Math.round(y * sf.dpr), Math.round(W * 0.4 * sf.dpr), 1).data;
+      const v = []; for (let i = 0; i < d.length; i += 4) v.push(lum(d, i));
+      const mean = v.reduce((x, y) => x + y, 0) / v.length;
+      const sd = Math.sqrt(v.reduce((x, y) => x + (y - mean) ** 2, 0) / v.length);
+      return { mean: Math.round(mean), sd: +sd.toFixed(1) };
+    };
+    // how many pixels high a line is at the middle
+    const thick = (y) => { let n = 0; for (let k = -40; k <= 40; k++) { const d = sf.ctx.getImageData(Math.round(W / 2 * sf.dpr), Math.round((y + k) * sf.dpr), 1, 1).data; if (lum(d, 0) < 92) n++; } return n; };
+    const ys = { light: H * 0.15, firm: H * 0.25, pen: H * 0.35, once: H * 0.45, twice: H * 0.55, tilt: H * 0.7 };
+    a.store.addMany([
+      line('light', ys.light, { p: 0.15 }), line('firm', ys.firm, { p: 0.95 }), line('pen', ys.pen, { effect: 'none', color: '#4b4a48' }),
+      line('once', ys.once, {}), line('twice-a', ys.twice, {}), line('twice-b', ys.twice, {}), line('tilt', ys.tilt, { tilt: 0.9, width: 8 }), line('upright', ys.tilt + 0, { width: 8 })
+    ].filter((o) => o.id !== 'upright'), 'x');
+    sf.repaintAll(); sf.draw(); await frame(); sf.draw();
+    r.light = along(ys.light); r.firm = along(ys.firm); r.pen = along(ys.pen); r.once = along(ys.once); r.twice = along(ys.twice);
+    r.tiltThick = thick(ys.tilt); r.onceThick = thick(ys.once);
+
+    // the tray and its number
+    const tray = document.querySelector('#toolbar .pen[data-pen="pencil"]');
+    r.trayPencil = !!tray; r.trayKey = tray ? (tray.querySelector('.kbd') || {}).textContent : null;
+    r.soundDefault = a.settings.pencilSound;
+
+    // dark page: graphite turns to soft chalk grey; on a light page of its own it stays graphite
+    a.settings.theme = 'dark'; a.saveSettings(); a.applyTheme(); a.syncUI();
+    r.graphiteOnDark = R.inkPaint('#4b4a48');
+    a.store.doc.background.color = '#faf9f8'; a.store.rev++; a.syncUI();
+    r.graphiteOnLightPageDark = R.inkPaint('#4b4a48');
+    r.redOnDark = (() => { a.store.doc.background.color = '#ffffff'; a.store.rev++; a.syncUI(); return R.inkPaint('#e81123'); })();
+    a.settings.theme = 'light'; a.saveSettings(); a.applyTheme(); a.syncUI();
+
+    // a coloured pencil is still a pencil
+    const tb = await import('app://board/js/ui/toolbar.js');
+    a.settings.activePen = 'pencil'; a.settings.penColor = '#4b4a48'; a.settings.penEffect = 'pencil';
+    tb.pickPenInk(a, '#0078d4');
+    r.colouredEffect = a.settings.penEffect; r.colouredColor = a.settings.penColor;
+    tb.openToolPopover(a, document.querySelector('#toolbar .pen[data-pen="pencil"]'), 'pen');
+    await new Promise((res) => setTimeout(res, 160));
+    r.popGraphiteFirst = (document.querySelector('.pop .sw') || {}).title || null;
+    r.popSound = [...document.querySelectorAll('.pop label, .pop .row')].some((e) => /Pencil sound/.test(e.textContent));
+    r.popErase = !!document.querySelector('.pop [data-erase-pencil]');
+    a.hideMenus();
+
+    // the sound starts with a pencil stroke and stops when it lifts; off means silent
+    const it = a.interaction;
+    a.settings.inkToShape = true;
+    const fake = (x, y) => ({ pointerType: 'mouse', clientX: x, clientY: y, pressure: 0.5, button: 0, buttons: 1 });
+    a.settings.pencilSound = true;
+    it.startStroke(fake(100, 100), cam.toWorld(300, 300), 'pen');
+    r.soundWhileDrawing = PS.playing();
+    // a rough circle in pencil, with "straighten shapes" on: a sketch stays a sketch
+    const act = it.action;
+    for (let i = 1; i <= 40; i++) { const t = i / 40 * Math.PI * 2; act.obj.points.push({ ...cam.toWorld(300 + Math.cos(t) * 90, 300 + Math.sin(t) * 90), p: 0.5 }); }
+    it.finishStroke(act); it.action = null;
+    r.soundAfterLift = PS.playing();
+    r.circleStayedPencil = a.store.objects.some((o) => o.type === 'stroke' && o.effect === 'pencil' && o.id === act.obj.id) && !a.store.objects.some((o) => o.type === 'shape');
+    a.settings.pencilSound = false;
+    it.startStroke(fake(100, 100), cam.toWorld(320, 320), 'pen');
+    r.soundWhenOff = PS.playing();
+    it.action.obj.points.push({ ...cam.toWorld(400, 330), p: 0.5 });
+    it.finishStroke(it.action); it.action = null;
+
+    // the sound itself, worked out offline with the same code: how it answers speed, pressure, tilt and stopping
+    const off = async (parts) => {
+      const strokes = parts.map(({ from, to, speed, p, tilt }) => { const ev = []; for (let t = from; t <= to; t += 8) ev.push({ t, x: (t - from) * speed, y: 0, p, tilt: tilt || 0 }); return ev; });
+      const b = await PS.renderOffline(strokes, 1.6, 22050);
+      if (!b) return null;
+      const d = b.getChannelData(0), sr = 22050;
+      const win = (a0, a1) => {
+        let sum = 0, zc = 0, n = 0; for (let i = Math.floor(a0 * sr); i < Math.floor(a1 * sr); i++) { sum += d[i] * d[i]; if (i && (d[i] > 0) !== (d[i - 1] > 0)) zc++; n++; }
+        // grain: how spiky the loudness is from one millisecond to the next (a steady hiss is about 3, a real pencil 10 or more)
+        const env = []; for (let i = Math.floor(a0 * sr); i < Math.floor(a1 * sr) - 22; i += 22) { let e = 0; for (let k = 0; k < 22; k++) e += d[i + k] * d[i + k]; env.push(Math.sqrt(e / 22)); }
+        const m = env.reduce((x, y) => x + y, 0) / env.length, v2 = env.reduce((x, y) => x + (y - m) ** 2, 0) / env.length;
+        const kurt = env.reduce((x, y) => x + (y - m) ** 4, 0) / env.length / (v2 * v2 || 1);
+        return { rms: +(Math.sqrt(sum / n) * 1000).toFixed(2), zcr: +(zc / n).toFixed(3), grain: +kurt.toFixed(1) };
+      };
+      return win;
+    };
+    const one = async (o) => (await off([{ from: 0, to: 700, ...o }]))?.(0.15, 0.65);
+    r.snd = {
+      light: await one({ speed: 0.5, p: 0.2 }), firm: await one({ speed: 0.5, p: 0.9 }),
+      slow: await one({ speed: 0.15, p: 0.6 }), fast: await one({ speed: 2, p: 0.6 }),
+      upright: await one({ speed: 1, p: 0.6 }), side: await one({ speed: 1, p: 0.6, tilt: 0.9 }),
+    };
+    // moving, then holding still (no pointer samples arrive while the hand is still), then moving again
+    const held = await off([{ from: 0, to: 300, speed: 1, p: 0.6 }]);
+    const pausedWin = await (async () => {
+      const ev = []; for (let t = 0; t <= 300; t += 8) ev.push({ t, x: t, y: 0, p: 0.6 }); for (let t = 1000; t <= 1300; t += 8) ev.push({ t, x: t - 700, y: 0, p: 0.6 });
+      const b = await PS.renderOffline([ev], 1.6, 22050); const d = b.getChannelData(0);
+      const rms = (a0, a1) => { let s = 0, n = 0; for (let i = Math.floor(a0 * 22050); i < Math.floor(a1 * 22050); i++) { s += d[i] * d[i]; n++; } return +(Math.sqrt(s / n) * 1000).toFixed(2); };
+      return { moving: rms(0.1, 0.3), still: rms(0.55, 0.95), again: rms(1.1, 1.3) };
+    })();
+    r.snd.paused = pausedWin; r.snd.offline = !!held;
+    // a dot: the pencil touches down and lifts almost at once - heard as the tick of lead meeting paper
+    const dot = async (p) => { const b = await PS.renderOffline([[{ t: 100, x: 0, y: 0, p }, { t: 140, x: 0.5, y: 0, p }]], 0.5, 22050); const d = b.getChannelData(0); let pk = 0; for (const x of d) pk = Math.max(pk, Math.abs(x)); return +(pk * 1000).toFixed(1); };
+    r.snd.dotFirm = await dot(0.9); r.snd.dotLight = await dot(0.15);
+
+    // erase pencil marks: the pencil goes, the ink stays, and one undo brings the pencil back
+    const before = a.store.objects.filter((o) => o.type === 'stroke');
+    r.beforePencil = before.filter((o) => o.effect === 'pencil').length; r.beforeInk = before.filter((o) => o.effect !== 'pencil').length;
+    a.command('edit.erasePencil');
+    const after = a.store.objects.filter((o) => o.type === 'stroke');
+    r.afterPencil = after.filter((o) => o.effect === 'pencil').length; r.afterInk = after.filter((o) => o.effect !== 'pencil').length;
+    a.store.undo();
+    r.undoPencil = a.store.objects.filter((o) => o.type === 'stroke' && o.effect === 'pencil').length;
+
+    Object.assign(a.settings, { theme: was.theme === undefined ? 'system' : was.theme, pencilSound: was.sound, inkToShape: was.shape, activePen: was.pen, penColor: was.color, penEffect: was.effect });
+    a.saveSettings(); a.applyTheme(); a.store.clear(); a.newBoard(true);
+    return r;
+  `);
+  check('the pencil sits in the tray as pen 7, with its sound on out of the box',
+    pencil.trayPencil && pencil.trayKey === '7' && pencil.soundDefault === true,
+    `pencil in the tray: ${pencil.trayPencil}, its number: ${pencil.trayKey} (wanted 7); sound by default: ${pencil.soundDefault}`);
+  check('pencil looks like graphite: grainy where a pen of the same colour is solid',
+    pencil.once.sd > 6 && pencil.pen.sd < 3,
+    `variation along the line - pencil ${JSON.stringify(pencil.once)}, solid pen ${JSON.stringify(pencil.pen)} (wanted pencil > 6, pen < 3)`);
+  check('pressing harder draws darker, and going over a line again darkens it, as on paper',
+    pencil.firm.mean < pencil.light.mean - 8 && pencil.twice.mean < pencil.once.mean - 6,
+    `brightness - light press ${pencil.light.mean}, firm press ${pencil.firm.mean}; one pass ${pencil.once.mean}, two passes ${pencil.twice.mean} (lower is darker)`);
+  check('a pencil on its side shades: a much wider line',
+    pencil.tiltThick > pencil.onceThick * 1.6,
+    `line height - tilted ${pencil.tiltThick}px, upright ${pencil.onceThick}px`);
+  check('in the dark theme graphite turns to soft chalk grey on a dark page, stays graphite on a light page, and a chosen colour stays itself',
+    pencil.graphiteOnDark === '#cfccc6' && pencil.graphiteOnLightPageDark === '#4b4a48' && pencil.redOnDark === '#e81123',
+    `graphite on a dark page paints ${pencil.graphiteOnDark}, on an off-white page in the dark theme ${pencil.graphiteOnLightPageDark}, red pencil ${pencil.redOnDark}`);
+  check('a pencil given a colour is a coloured pencil; its menu offers graphite first, the sound switch and Erase pencil marks',
+    pencil.colouredEffect === 'pencil' && pencil.colouredColor === '#0078d4' && pencil.popGraphiteFirst === '#4b4a48' && pencil.popSound && pencil.popErase,
+    JSON.stringify({ effect: pencil.colouredEffect, color: pencil.colouredColor, firstSwatch: pencil.popGraphiteFirst, soundSwitch: pencil.popSound, eraseButton: pencil.popErase }));
+  check('the pencil scratches while it draws and goes quiet when it lifts; switched off it is silent',
+    pencil.soundWhileDrawing === true && pencil.soundAfterLift === false && pencil.soundWhenOff === false,
+    `while drawing: ${pencil.soundWhileDrawing}, after lifting: ${pencil.soundAfterLift}, with the sound off: ${pencil.soundWhenOff}`);
+  check('the pencil sound is a real pencil, grainy rather than a hiss, and follows the hand gently: firmer and faster are louder but hurrying never blares, on its side is softer and lower, holding still goes quiet',
+    pencil.snd.offline && pencil.snd.firm.rms > pencil.snd.light.rms * 1.3 && pencil.snd.fast.rms > pencil.snd.slow.rms * 1.5
+      && pencil.snd.side.rms < pencil.snd.upright.rms && pencil.snd.side.zcr < pencil.snd.upright.zcr
+      && pencil.snd.paused.still < pencil.snd.paused.moving * 0.1 && pencil.snd.paused.again > pencil.snd.paused.moving * 0.5
+      && pencil.snd.light.grain > 3.5 && pencil.snd.upright.grain > 3.5 && pencil.snd.fast.rms < pencil.snd.upright.rms * 1.6,
+    `loudness x1000 (zero-crossings per sample = brightness): ${JSON.stringify(pencil.snd)}`);
+  check('a pencil dot is heard: a tick as the lead meets the paper, softer for a light touch',
+    pencil.snd.dotFirm > 60 && pencil.snd.dotLight < pencil.snd.dotFirm * 0.7 && pencil.snd.dotLight > 10,
+    `peak x1000 - firm dot ${pencil.snd.dotFirm}, light dot ${pencil.snd.dotLight}`);
+  check('a pencil sketch is not straightened into a shape',
+    pencil.circleStayedPencil === true, `a pencil circle with "Straighten shapes" on stayed a pencil stroke: ${pencil.circleStayedPencil}`);
+  check('Erase pencil marks takes only the pencil, keeps the ink, and undo brings the pencil back',
+    pencil.beforePencil > 0 && pencil.beforeInk > 0 && pencil.afterPencil === 0 && pencil.afterInk === pencil.beforeInk && pencil.undoPencil === pencil.beforePencil,
+    `pencil ${pencil.beforePencil} -> ${pencil.afterPencil} -> undo ${pencil.undoPencil}; ink ${pencil.beforeInk} -> ${pencil.afterInk}`);
+
   check('out of the box, setting up a canvas changes that board and nothing else',
     canvasMemory.offByDefault === true && canvasMemory.thisBoardTookIt === true &&
     canvasMemory.nextBoardStayedPlain === true,
@@ -8673,13 +8839,14 @@ async function run(win, app) {
     await js(`window.app.newBoard(true); await window.app.setPageSize('a4','portrait'); window.app.addPage();`);
     const clashes = [];
     for (const h of [1000, 800, 620, 520]) {
-      for (const w of [1700, 1440, 1340, 1310, 1200, 1050, 900, 861, 860, 700, 560, 470]) {
+      for (const w of [1700, 1560, 1500, 1460, 1440, 1340, 1310, 1200, 1050, 900, 861, 860, 700, 560, 470]) {
         win.setSize(w, h);
         await sleep(60);
         const r = await js(`
           window.app.surface.resize(true);
           const R = (id) => { const e = document.getElementById(id); if (!e || e.hidden) return null; return e.getBoundingClientRect(); };
-          const hit = (a, b) => !!a && !!b && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+          // 4px of air on every side: fonts run narrower here than on Windows, so a toolbar that only just clears here would touch there
+          const hit = (a, b) => !!a && !!b && a.left < b.right + 4 && b.left < a.right + 4 && a.top < b.bottom + 4 && b.top < a.bottom + 4;
           const tb = R('toolbar'), zb = R('zoombar'), pb = R('pagebar');
           return { tz: hit(tb, zb), tp: hit(tb, pb), zp: hit(zb, pb),
                    spills: !!tb && (tb.bottom > window.innerHeight + 1) };
@@ -8691,7 +8858,7 @@ async function run(win, app) {
     await sleep(120);
     await js(`window.app.surface.resize(true); window.app.newBoard(true); window.app.store.clear();`);
     check('the toolbar, zoom and page controls never overlap at any window size',
-      clashes.length === 0, clashes.slice(0, 6).join(', ') || 'clean at 48 sizes');
+      clashes.length === 0, clashes.slice(0, 6).join(', ') || 'clean at 60 sizes');
 
     // and the readouts stay where people reach for them until the window is
     // genuinely too narrow to keep them there
@@ -8761,7 +8928,7 @@ async function run(win, app) {
       && keys.hl === 'H' && keys.eraser === 'E' && keys.text === 'T' && keys.note === 'N' && keys.shape === 'S',
     JSON.stringify(keys));
   check('each pen wears its own number', keys.pen === '1' && keys.red === '2' && keys.galaxy === '6'
-    && keys.pensWithKeys === 6, JSON.stringify(keys));
+    && keys.pensWithKeys === 7, JSON.stringify(keys));
   check('a digit switches straight to that pen',
     keys.afterThree.tool === 'pen' && keys.afterThree.color === keys.afterThree.want,
     JSON.stringify(keys.afterThree));

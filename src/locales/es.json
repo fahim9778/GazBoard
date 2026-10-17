@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "Buscar pizarras y carpetas…",
  "Search boards and folders": "Buscar pizarras y carpetas",
  "Nothing called “{words}”": "Nada se llama «{words}»",
- "Keep typing to narrow it down": "Sigue escribiendo para afinar"
+ "Keep typing to narrow it down": "Sigue escribiendo para afinar",
+ "Pencil": "Lápiz de grafito",
+ "Pencil sound": "Sonido del grafito",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "Un suave rasgueo mientras dibujas con el lápiz de grafito. Sigue la velocidad con que te mueves.",
+ "Erase pencil marks": "Borrar trazos de grafito",
+ "Removes every pencil line on this board and keeps the ink": "Quita todas las líneas de grafito de esta pizarra y conserva la tinta",
+ "No pencil marks on this board": "No hay trazos de grafito en esta pizarra",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Trazos de grafito borrados — deshacer (Ctrl+Z) los recupera"
 }

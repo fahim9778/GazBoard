@@ -63,6 +63,8 @@ export const DEFAULT_SETTINGS = {
   // makes Reset to defaults put every pen back to the colour it shipped with.
   highlighterColor: '#fff100', highlighterWidth: 20,
   eraserSize: 30, eraserMode: 'partial',
+  // the pencil's scratch while it draws: on, so the pencil is heard to be a pencil; Settings or its own menu turn it off
+  pencilSound: true,
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,
   noteColor: '#ffd94a', noteSize: 200, noteFont: 'hand',
   emojiChar: '\u2705', emojiSize: 96, emojiRecent: [], recentBoards: [],
@@ -2181,6 +2183,15 @@ class App {
       case 'edit.group': this.groupSelection(); break;
       case 'edit.ungroup': this.ungroupSelection(); break;
       case 'edit.nameGroup': this.nameGroup(); break;
+      case 'edit.erasePencil': {
+        // sketch in pencil, ink over it, then this: the guide lines go and the ink stays
+        const ids = s.objects.filter((o) => o.type === 'stroke' && o.effect === 'pencil' && !o.locked).map((o) => o.id);
+        if (!ids.length) { this.toast(t('No pencil marks on this board'), 'pen'); break; }
+        s.remove(ids, 'erase pencil');
+        for (const i of ids) sf.selection.delete(i);
+        this.toast(t('Pencil marks erased — undo (Ctrl+Z) brings them back'), 'eraser');
+        break;
+      }
       case 'edit.clear':
         this.confirm(t('Clear canvas?'), t('Everything on this board will be removed. You can undo this.'), t('Clear'))
           .then((ok) => { if (ok) { s.clear(); sf.selection.clear(); } });

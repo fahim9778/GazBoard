@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "搜尋白板和資料夾…",
  "Search boards and folders": "搜尋白板和資料夾",
  "Nothing called “{words}”": "沒有名為「{words}」的內容",
- "Keep typing to narrow it down": "繼續輸入以縮小範圍"
+ "Keep typing to narrow it down": "繼續輸入以縮小範圍",
+ "Pencil": "鉛筆",
+ "Pencil sound": "鉛筆聲音",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "用鉛筆畫畫時發出輕微的沙沙聲，隨你移動的快慢而變化。",
+ "Erase pencil marks": "擦除鉛筆痕跡",
+ "Removes every pencil line on this board and keeps the ink": "移除此白板上的所有鉛筆線條，保留墨跡",
+ "No pencil marks on this board": "此白板上沒有鉛筆痕跡",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "已擦除鉛筆痕跡 — 復原（Ctrl+Z）可恢復"
 }

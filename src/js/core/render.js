@@ -327,6 +327,9 @@ export function drawRuling(ctx, bg, cam, w, h, pages = null) {
 
 const DEFAULT_INK = '#201f1e';
 const DARK_INK = '#f3f2f1';
+// the pencil's graphite, and what it turns into on a dark page: soft grey, like chalk
+const PENCIL_INK = '#4b4a48';
+const DARK_PENCIL = '#cfccc6';
 const DARK_BOARD = '#1f1e1d';
 
 let darkBoard = false;
@@ -365,7 +368,9 @@ export function isDarkBoard() { return darkBoard; }
 export function inkPaint(color, fallback = DEFAULT_INK) {
   const c = color || fallback;
   if (!lightInk()) return c;
-  return String(c).toLowerCase() === DEFAULT_INK ? DARK_INK : c;
+  const lc = String(c).toLowerCase();
+  if (lc === PENCIL_INK) return DARK_PENCIL;
+  return lc === DEFAULT_INK ? DARK_INK : c;
 }
 
 /** The board's own colour, once the theme has had its say. */
@@ -402,12 +407,110 @@ function inkStyle(ctx, o) {
   return g;
 }
 
+/* =================================================================== *
+ *  Pencil
+ *
+ *  A pencil is a pen whose ink is graphite: grainy, a little see-through, so
+ *  going over a line again makes it darker, the way shading works on paper.
+ *  How hard the pen pressed sets how dark the whole line is (a light touch
+ *  sketches, a firm one draws), and a stylus held on its side lays down a
+ *  wide, soft stroke. None of it changes what is stored: a pencil line is an
+ *  ordinary stroke with effect 'pencil', so every board that has one still
+ *  opens in an older GazBoard, as a plain line.
+ * =================================================================== */
+const GRAIN = 96;
+let grainMask = null;
+const grainCache = new Map();
+
+/** The paper tooth: which bits of the line the graphite catches on. Made once, the same every time. */
+function pencilGrainMask() {
+  if (grainMask !== null) return grainMask;
+  let c = null;
+  try {
+    if (typeof OffscreenCanvas === 'function') c = new OffscreenCanvas(GRAIN, GRAIN);
+    else if (typeof document !== 'undefined') { c = document.createElement('canvas'); c.width = c.height = GRAIN; }
+  } catch { c = null; }
+  if (!c) { grainMask = false; return false; }
+  const g = c.getContext('2d');
+  const img = g.createImageData(GRAIN, GRAIN);
+  let seed = 0x9e3779b9;
+  const rnd = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return ((seed >>> 0) % 10000) / 10000; };
+  // a coarse layer for the tooth of the paper, a fine one for the specks of lead
+  const coarse = Array.from({ length: (GRAIN / 4) * (GRAIN / 4) }, rnd);
+  for (let y = 0; y < GRAIN; y++) {
+    for (let x = 0; x < GRAIN; x++) {
+      const tooth = coarse[((y >> 2) % (GRAIN / 4)) * (GRAIN / 4) + ((x >> 2) % (GRAIN / 4))];
+      const speck = rnd();
+      // diagonal fibres, faintly, as paper has
+      const fibre = 0.5 + 0.5 * Math.sin((x + y * 0.6) * 0.9);
+      const a = Math.max(0, Math.min(1, 0.32 + tooth * 0.38 + speck * 0.42 - fibre * 0.12));
+      const i = (y * GRAIN + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = 0;
+      img.data[i + 3] = Math.round(a * 255);
+    }
+  }
+  g.putImageData(img, 0, 0);
+  grainMask = c;
+  return c;
+}
+
+/** The graphite as a fill, in this colour. Falls back to the plain colour where there is no canvas to make it on. */
+function pencilStyle(ctx, color) {
+  const mask = pencilGrainMask();
+  if (!mask || typeof ctx.createPattern !== 'function') return color;
+  let tile = grainCache.get(color);
+  if (!tile) {
+    let c;
+    try {
+      c = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(GRAIN, GRAIN) : document.createElement('canvas');
+      c.width = c.height = GRAIN;
+    } catch { return color; }
+    const g = c.getContext('2d');
+    g.fillStyle = color; g.fillRect(0, 0, GRAIN, GRAIN);
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(mask, 0, 0);
+    tile = c;
+    if (grainCache.size > 40) grainCache.clear();
+    grainCache.set(color, tile);
+  }
+  try { return ctx.createPattern(tile, 'repeat') || color; } catch { return color; }
+}
+
+/** How dark a pencil line is (0-1): set by how hard it was pressed, lighter when the pencil lay on its side. */
+export function pencilDarkness(o) {
+  const pts = o.points || [];
+  let sum = 0;
+  for (const q of pts) sum += q.p ?? 0.5;
+  const p = pts.length ? sum / pts.length : 0.5;
+  const tilt = Math.max(0, Math.min(1, o.tilt || 0));
+  return Math.max(0.3, Math.min(1, 0.42 + p * 0.62)) * (1 - tilt * 0.35);
+}
+
+/** A pencil on its side lays down a wider line. */
+export function pencilWidth(o) {
+  const tilt = Math.max(0, Math.min(1, o.tilt || 0));
+  return (o.width || 4) * (1 + tilt * 2.4);
+}
+
 export function drawStroke(ctx, o) {
   const pts = o.points;
   if (!pts || !pts.length) return;
   const path = inkPath(o);
   if (!path) return;
   const highlighter = o.tool === 'highlighter';
+  if (o.effect === 'pencil' && !highlighter) {
+    ctx.save();
+    // on a dark page a pencil works like chalk: more of it shows, so colours stay bright rather than sinking into the dark
+    const d = pencilDarkness(o);
+    ctx.globalAlpha = (o.opacity ?? 1) * (lightInk() ? Math.min(1, 0.3 + d * 0.85) : d);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = pencilStyle(ctx, inkPaint(o.color));
+    ctx.lineWidth = pencilWidth(o);
+    ctx.stroke(path);                     // one call: a line does not darken itself, only a second line over it does
+    ctx.restore();
+    return;
+  }
 
   ctx.save();
   if (highlighter) {

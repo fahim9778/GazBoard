@@ -534,15 +534,27 @@ async function applyStorageLocation(target, mode, reset = false) {
 async function readLastBoard() {
   try { const raw = JSON.parse(await fsp.readFile(lastBoardFile(), 'utf8')); return raw && typeof raw === 'object' ? raw : {}; } catch { return {}; }
 }
-async function setLastBoard(id) {
-  try {
-    const was = await readLastBoard();
-    const byFolder = was.byFolder && typeof was.byFolder === 'object' ? { ...was.byFolder } : {};
-    if (id) byFolder[dataDir()] = id; else delete byFolder[dataDir()];
-    // a handful of folders is plenty; the oldest entries go first
-    const keys = Object.keys(byFolder); for (const k of keys.slice(0, Math.max(0, keys.length - 20))) delete byFolder[k];
-    await writeAtomic(lastBoardFile(), JSON.stringify({ id, at: Date.now(), byFolder }));
-  } catch {}
+/*
+ * The pointer file is read, changed and written back, so two saves at once
+ * could each read the old file and the second write would undo the first -
+ * and a save made just as the boards folder changes would be filed under the
+ * new folder. So the folder is taken at the moment of the call, and updates
+ * go through one at a time.
+ */
+let lastBoardQueue = Promise.resolve();
+function setLastBoard(id, dir = dataDir()) {
+  const run = lastBoardQueue.then(async () => {
+    try {
+      const was = await readLastBoard();
+      const byFolder = was.byFolder && typeof was.byFolder === 'object' ? { ...was.byFolder } : {};
+      if (id) byFolder[dir] = id; else delete byFolder[dir];
+      // a handful of folders is plenty; the oldest entries go first
+      const keys = Object.keys(byFolder); for (const k of keys.slice(0, Math.max(0, keys.length - 20))) delete byFolder[k];
+      await writeAtomic(lastBoardFile(), JSON.stringify({ id, at: Date.now(), byFolder }));
+    } catch {}
+  });
+  lastBoardQueue = run;
+  return run;
 }
 async function getLastBoard() {
   const raw = await readLastBoard();
@@ -1267,9 +1279,10 @@ function ipc() {
     // the board and the "last open" pointer are two separate files; there is no
     // ordering between them, so they go out together rather than one after the
     // other
+    const dir = dataDir();
     await Promise.all([
-      writeAtomic(path.join(dataDir(), board.id + '.json'), board.json),
-      moveLast ? setLastBoard(board.id) : Promise.resolve()
+      writeAtomic(path.join(dir, board.id + '.json'), board.json),
+      moveLast ? setLastBoard(board.id, dir) : Promise.resolve()
     ]);
     return true;
   }));

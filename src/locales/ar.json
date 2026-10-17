@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "ابحث في اللوحات والمجلدات…",
  "Search boards and folders": "ابحث في اللوحات والمجلدات",
  "Nothing called “{words}”": "لا شيء باسم «{words}»",
- "Keep typing to narrow it down": "واصل الكتابة لتضييق النتائج"
+ "Keep typing to narrow it down": "واصل الكتابة لتضييق النتائج",
+ "Pencil": "قلم رصاص",
+ "Pencil sound": "صوت قلم الرصاص",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "خربشة خفيفة أثناء الرسم بقلم الرصاص، تتبع سرعة حركتك.",
+ "Erase pencil marks": "امسح خطوط قلم الرصاص",
+ "Removes every pencil line on this board and keeps the ink": "يزيل كل خطوط قلم الرصاص من هذه اللوحة ويُبقي الحبر",
+ "No pencil marks on this board": "لا توجد خطوط بقلم الرصاص في هذه اللوحة",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "مُسحت خطوط قلم الرصاص — التراجع (Ctrl+Z) يعيدها"
 }

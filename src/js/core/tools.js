@@ -12,6 +12,7 @@ import { pageRects, pageIndexAt, pageIndexForBox, nearestPageIndex, offsetIntoRe
 import { Surface } from './surface.js';
 import { t, currentLanguage } from '../i18n.js';
 import { SHAPE_LABELS } from '../ui/palettes.js';
+import * as PencilSound from './pencilsound.js';
 import { route as connectorRoute, midPoint, bendThrough, targetAt, sameTarget, dotsFor, drawConnector, endBox } from './connectors.js';
 
 const TAP_SLOP = 4;
@@ -184,6 +185,19 @@ export class Interaction {
         && (this.tool === 'pen' || this.tool === 'highlighter'))
       return 'mousePointer';
     return this.tool;
+  }
+
+  /**
+   * How far over a stylus is lying, 0 (held upright, or not a stylus) to 1
+   * (flat on its side). Writing is usually done some way over already, so only
+   * a pencil tipped further than that counts: that is shading.
+   */
+  tilt(e) {
+    if (!e || e.pointerType !== 'pen') return 0;
+    let lying = 0;
+    if (typeof e.altitudeAngle === 'number' && e.altitudeAngle > 0 && e.altitudeAngle < Math.PI / 2 - 0.01) lying = 1 - e.altitudeAngle / (Math.PI / 2);
+    else if (e.tiltX || e.tiltY) lying = Math.min(1, Math.hypot(e.tiltX || 0, e.tiltY || 0) / 90);
+    return clamp((lying - 0.45) / 0.4, 0, 1);
   }
 
   pressure(e) {
@@ -726,6 +740,13 @@ export class Interaction {
         } else offer({ ...wp, p: pressure });
 
         if (added) a.obj.bbox = bboxOfPoints(a.obj.points);
+        if (a.obj.effect === 'pencil' && e) {
+          a.tiltSum = (a.tiltSum || 0) + this.tilt(e); a.tiltN = (a.tiltN || 0) + 1;
+          PencilSound.move(e.clientX || 0, e.clientY || 0, undefined, this.pressure(e), this.tilt(e));
+          // the line widens as it is drawn, not only when the pencil lifts
+          const lying = a.tiltSum / a.tiltN;
+          if (lying > 0.05) a.obj.tilt = +lying.toFixed(2); else delete a.obj.tilt;
+        }
         this.sendInkTrail(e, a, wp, pressure);
         break;
       }
@@ -952,6 +973,7 @@ export class Interaction {
     switch (a.type) {
       case 'laser': break;            // the trail fades on its own
       case 'draw':
+        PencilSound.stop();
         // A tap can dismiss a selection, or pick something up with a finger.
         // Neither should become ink or an undo entry. See tappedAnObject().
         if (!this.tappedAnObject(a, e)) this.finishStroke(a);
@@ -1554,6 +1576,10 @@ export class Interaction {
     const act = { type: 'draw', obj, snapAxis: null, sheet,
       ruled: startEdge !== null, ruledEdge: startEdge || 0 };
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
+    if (obj.effect === 'pencil') {
+      act.tiltSum = this.tilt(e); act.tiltN = 1;
+      if (s.pencilSound !== false && PencilSound.start(this.pressure(e))) PencilSound.move(e.clientX || 0, e.clientY || 0);
+    }
     this.surface.wet = obj;
     this.action = act;
   }
@@ -1695,6 +1721,12 @@ export class Interaction {
 
   finishStroke(a) {
     const obj = a.obj;
+    PencilSound.stop();
+    // a pencil held on its side all the way through shades: kept on the stroke, so it draws that way everywhere
+    if (obj.effect === 'pencil' && a.tiltN) {
+      const tilt = +(a.tiltSum / a.tiltN).toFixed(2);
+      if (tilt > 0.05) obj.tilt = tilt;
+    }
     this.surface.wet = null;
     this.surface.wetPieces = null;
     /*
@@ -1753,7 +1785,8 @@ export class Interaction {
      */
     this.surface.extendFreeze?.(obj);
 
-    if (this.app.settings.inkToShape && obj.tool === 'pen') {
+    // a pencil sketch stays a sketch: guide lines are meant to be rough
+    if (this.app.settings.inkToShape && obj.tool === 'pen' && obj.effect !== 'pencil') {
       const r = recognize(obj.points);
       // classified AND actually shaped like the thing it was classified as
       const fit = r ? fitError(obj.points, r.kind, r) : 1;

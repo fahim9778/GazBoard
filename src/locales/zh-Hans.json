@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "搜索白板和文件夹…",
  "Search boards and folders": "搜索白板和文件夹",
  "Nothing called “{words}”": "没有名为“{words}”的内容",
- "Keep typing to narrow it down": "继续输入以缩小范围"
+ "Keep typing to narrow it down": "继续输入以缩小范围",
+ "Pencil": "铅笔",
+ "Pencil sound": "铅笔声音",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "用铅笔画画时发出轻微的沙沙声，随你移动的快慢而变化。",
+ "Erase pencil marks": "擦除铅笔痕迹",
+ "Removes every pencil line on this board and keeps the ink": "移除此白板上的所有铅笔线条，保留墨迹",
+ "No pencil marks on this board": "此白板上没有铅笔痕迹",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "已擦除铅笔痕迹 — 撤销（Ctrl+Z）可恢复"
 }

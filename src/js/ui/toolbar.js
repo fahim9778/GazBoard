@@ -5,7 +5,7 @@ import { openPopover, closePopover, h, isOpen } from './popover.js';
 import {
   PEN_COLORS, PEN_EFFECTS, HIGHLIGHTER_COLORS, NOTE_COLORS, TEXT_COLORS,
   SHAPE_STROKES, SHAPE_FILLS, SHAPES, SHAPE_LABELS, shapeIcon,
-  PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS
+  PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS, PENCIL_GRAPHITE
 } from './palettes.js';
 import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
 import { inkPaint, isDarkBoard, isDarkColor } from '../core/render.js';
@@ -544,9 +544,11 @@ function emojiPicker(app) {
  */
 export function pickPenInk(app, c) {
   const s = app.settings;
-  s.penColor = c; s.penEffect = 'none';
+  // a pencil given a new colour is a coloured pencil, still a pencil
+  const effect = s.penEffect === 'pencil' ? 'pencil' : 'none';
+  s.penColor = c; s.penEffect = effect;
   const held = heldPenId(s);
-  if (held) rememberPen(s, held, { color: c, effect: 'none' });
+  if (held) rememberPen(s, held, { color: c, effect });
   app.saveSettings(); app.syncUI();
 }
 
@@ -592,7 +594,8 @@ export function openToolPopover(app, anchor, tool) {
 
     body = h('div', {},
       h('h4', {}, t('Ink colour')),
-      swatchRow(PEN_COLORS, s.penEffect === 'none' ? s.penColor : null, (c) => {
+      // a pencil offers its own graphite first, so a coloured pencil can always go back to plain lead
+      swatchRow(s.penEffect === 'pencil' ? [PENCIL_GRAPHITE, ...PEN_COLORS] : PEN_COLORS, s.penEffect === 'none' || s.penEffect === 'pencil' ? s.penColor : null, (c) => {
         pickInk(c); closePopover();
       }, [customInk]),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('label', {}, t('Effect'))),
@@ -606,7 +609,17 @@ export function openToolPopover(app, anchor, tool) {
           app.toast(v ? t('Hand-drawn shapes will be straightened') : t('Ink is left exactly as drawn'), 'pen');
         })),
       h('div', { class: 'row' },
-        toggle(t('Ruler snapping'), app.ruler.snap, (v) => { app.ruler.snap = v; }))
+        toggle(t('Ruler snapping'), app.ruler.snap, (v) => { app.ruler.snap = v; })),
+      ...(s.penEffect === 'pencil' ? [
+        h('div', { class: 'row' },
+          toggle(t('Pencil sound'), s.pencilSound !== false, (v) => { s.pencilSound = v; app.saveSettings(); })),
+        h('div', { class: 'row', style: 'margin-top:6px' }, (() => {
+          const b = h('button', { class: 'btn', 'data-erase-pencil': '' }, t('Erase pencil marks'));
+          b.title = t('Removes every pencil line on this board and keeps the ink');
+          b.addEventListener('click', () => { closePopover(); app.command('edit.erasePencil'); });
+          return b;
+        })())
+      ] : [])
     );
   } else if (tool === 'highlighter') {
     body = h('div', {},
@@ -636,7 +649,16 @@ export function openToolPopover(app, anchor, tool) {
       h('div', { class: 'menu', style: 'padding:0' },
         mkMode('partial', t('Erase parts of ink'), t('Rubs strokes out where you drag')),
         mkMode('object', t('Erase whole strokes'), t('Removes a whole stroke in one touch')),
-        mkMode('all', t('Erase everything'), t('Clears the canvas')))
+        mkMode('all', t('Erase everything'), t('Clears the canvas')),
+        (() => {
+          const b = h('button', { class: 'menu-item', 'data-erase-pencil': '' },
+            h('span', { style: 'display:flex;flex-direction:column;gap:2px;text-align:left' },
+              h('span', {}, t('Erase pencil marks')),
+              h('small', { style: 'color:var(--text-2);font-size:11.5px' }, t('Removes every pencil line on this board and keeps the ink'))));
+          b.style.alignItems = 'flex-start';
+          b.addEventListener('click', () => { closePopover(); app.command('edit.erasePencil'); });
+          return b;
+        })())
     );
   } else if (tool === 'note') {
     body = h('div', {},

@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "Buscar quadros e pastas…",
  "Search boards and folders": "Buscar quadros e pastas",
  "Nothing called “{words}”": "Nada se chama “{words}”",
- "Keep typing to narrow it down": "Continue digitando para filtrar"
+ "Keep typing to narrow it down": "Continue digitando para filtrar",
+ "Pencil": "Lápis",
+ "Pencil sound": "Som do lápis",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "Um leve arranhar enquanto você desenha com o lápis. Acompanha a velocidade do seu movimento.",
+ "Erase pencil marks": "Apagar traços de lápis",
+ "Removes every pencil line on this board and keeps the ink": "Remove todas as linhas de lápis deste quadro e mantém a tinta",
+ "No pencil marks on this board": "Não há traços de lápis neste quadro",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Traços de lápis apagados — desfazer (Ctrl+Z) os traz de volta"
 }

@@ -1267,6 +1267,8 @@ export function createPanels(app) {
             t('Off by default: ink is kept exactly as you drew it. Switch on and a hand-drawn circle, box or arrow snaps to a clean shape when you lift the pen — one undo returns your ink.')),
           row(t('Pressure sensitivity'), mkToggle(() => s.pressure, (v) => (s.pressure = v)),
             t('Vary ink width with how hard you press - within a stroke, not just between strokes. Works with a graphics tablet, a Surface pen or an S Pen; a mouse or a finger reports no pressure and draws at one width.')),
+          row(t('Pencil sound'), mkToggle(() => s.pencilSound !== false, (v) => (s.pencilSound = v)),
+            t('A soft scratch while you draw with the pencil. It follows how fast you move.')),
           row(t('Pen side button rubs out'), mkToggle(() => s.penButtonErases !== false,
             (v) => (s.penButtonErases = v)),
             t('Hold the button on the side of your stylus while you draw and it erases instead, the way it does in Samsung\u2019s own apps. Turning a pen over to use its blunt end always erases and is not affected by this. Switch off if you would rather that button opened the right-click menu.')),

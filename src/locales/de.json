@@ -1128,5 +1128,12 @@
  "Search boards and folders…": "Whiteboards und Ordner durchsuchen…",
  "Search boards and folders": "Whiteboards und Ordner durchsuchen",
  "Nothing called “{words}”": "Nichts heißt „{words}“",
- "Keep typing to narrow it down": "Weiter tippen, um einzugrenzen"
+ "Keep typing to narrow it down": "Weiter tippen, um einzugrenzen",
+ "Pencil": "Bleistift",
+ "Pencil sound": "Bleistift-Geräusch",
+ "A soft scratch while you draw with the pencil. It follows how fast you move.": "Ein leises Kratzen, während du mit dem Bleistift zeichnest. Es folgt deinem Tempo.",
+ "Erase pencil marks": "Bleistiftstriche löschen",
+ "Removes every pencil line on this board and keeps the ink": "Entfernt alle Bleistiftlinien auf diesem Whiteboard und behält die Tinte",
+ "No pencil marks on this board": "Keine Bleistiftstriche auf diesem Whiteboard",
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Bleistiftstriche gelöscht — Rückgängig (Strg+Z) holt sie zurück"
 }
