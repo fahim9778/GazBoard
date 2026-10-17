@@ -588,8 +588,10 @@ export function openToolPopover(app, anchor, tool) {
     const customInk = h('label', { class: 'sw sw-custom', title: t('Any colour — used exactly as picked, whatever the theme') });
     const customInput = h('input', { type: 'color' });
     customInput.value = s.penColor || '#201f1e';
-    customInput.addEventListener('input', () => { customInk.style.background = customInput.value; pickInk(customInput.value); });
-    customInk.style.background = s.penColor || '#201f1e';
+    // a colour wheel with the ink in hand at its middle: it reads as "pick any colour", not as one
+    // more swatch that happens to match the first (graphite twice in the pencil's menu, black twice in a pen's)
+    customInput.addEventListener('input', () => { customInk.style.setProperty('--ink', customInput.value); pickInk(customInput.value); });
+    customInk.style.setProperty('--ink', s.penColor || '#201f1e');
     customInk.appendChild(customInput);
 
     body = h('div', {},

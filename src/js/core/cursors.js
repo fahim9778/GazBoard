@@ -35,7 +35,29 @@ function markerSvg(color) {
 }
 
 /**
- * @param {'pen'|'highlighter'} kind
+ * A pencil, at the same tilt: a point in the lead's colour, a cone of bare
+ * wood, a yellow barrel and a pink eraser on the end - the pencil in the tray,
+ * so the hand and the tray agree on what is being held.
+ */
+function pencilSvg(color) {
+  const outline = 'M0 0 L3.6 7.6 V27.4 A1.6 1.6 0 0 1 2 29 H-2 A1.6 1.6 0 0 1 -3.6 27.4 V7.6 Z';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
+    <g transform="translate(2 2) rotate(-45)">
+      <path d="${outline}" stroke="#ffffff" stroke-width="2.6" stroke-linejoin="round" fill="#ffffff"/>
+      <path d="M-3.6 7.6 H3.6 V24.6 H-3.6 Z" fill="#f2c230"/>
+      <path d="M-1.1 7.6 H1.1 V24.6 H-1.1 Z" fill="#e0ad1c"/>
+      <path d="M-3.6 24.6 H3.6 V26 H-3.6 Z" fill="#b9b6b0"/>
+      <path d="M-3.6 26 H3.6 V27.4 A1.6 1.6 0 0 1 2 29 H-2 A1.6 1.6 0 0 1 -3.6 27.4 Z" fill="#f4a6b8"/>
+      <path d="M0 0 L3.6 7.6 H-3.6 Z" fill="#e9c99a" stroke="#c9a46c" stroke-width=".6" stroke-linejoin="round"/>
+      <path d="M0 0 L1.6 3.4 H-1.6 Z" fill="${color}"/>
+    </g>
+  </svg>`;
+}
+
+const glyph = (kind, color) => (kind === 'highlighter' ? markerSvg(color) : kind === 'pencil' ? pencilSvg(color) : penSvg(color));
+
+/**
+ * @param {'pen'|'pencil'|'highlighter'} kind
  * @param {string} color  the colour loaded in the tool
  * @param {string} fallback used when the browser refuses the image
  */
@@ -43,8 +65,8 @@ export function inkCursor(kind, color, fallback = 'crosshair') {
   const key = kind + color;
   let c = cache.get(key);
   if (!c) {
-    const svg = kind === 'highlighter' ? markerSvg(color) : penSvg(color);
-    // hotspot: the nib point. The pen tips at 2,2; the chisel meets the board at 2,5.
+    const svg = glyph(kind, color);
+    // hotspot: the nib point. The pen and the pencil tip at 2,2; the chisel meets the board at 2,5.
     const hot = kind === 'highlighter' ? '2 5' : '2 2';
     c = `url("data:image/svg+xml,${esc(svg)}") ${hot}, ${fallback}`;
     cache.set(key, c);
@@ -72,7 +94,7 @@ export function inkGlyphUrl(kind, color) {
   const key = 'img' + kind + color;
   let u = cache.get(key);
   if (!u) {
-    const svg = kind === 'highlighter' ? markerSvg(color) : penSvg(color);
+    const svg = glyph(kind, color);
     u = `url("data:image/svg+xml,${esc(svg)}")`;
     cache.set(key, u);
   }

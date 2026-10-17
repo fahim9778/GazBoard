@@ -2350,20 +2350,24 @@ export class Interaction {
   placeNib(el, sp, t) {
     const s = this.app.settings;
     const hl = t === 'highlighter';
-    const url = inkGlyphUrl(hl ? 'highlighter' : 'pen', hl ? s.highlighterColor : s.penColor);
+    const kind = hl ? 'highlighter' : this.penKind();
+    const url = inkGlyphUrl(kind, hl ? s.highlighterColor : s.penColor);
     if (this._nibUrl !== url) { this._nibUrl = url; el.style.backgroundImage = url; }
-    const hot = inkGlyphHotspot(hl ? 'highlighter' : 'pen');
+    const hot = inkGlyphHotspot(kind);
     el.style.transform = 'translate3d(' + Math.round(sp.x - hot.x) + 'px,'
       + Math.round(sp.y - hot.y) + 'px,0)';
   }
 
-  /** The pen/highlighter cursor, tinted with the colour the tool is loaded with. */
+  /** Which glyph the pen tool shows: a pencil when the pencil is in hand, else a pen. */
+  penKind() { return this.app.settings.penEffect === 'pencil' ? 'pencil' : 'pen'; }
+
+  /** The pen/pencil/highlighter cursor, tinted with the colour the tool is loaded with. */
   inkCursor(tool) {
     const s = this.app.settings;
     // The nib shows the ink. On a dark board the default ink is light, so a
     // black nib is the same small lie the tray and the swatches were telling:
     // it says one thing and the pen does another.
-    return inkCursor(tool === 'highlighter' ? 'highlighter' : 'pen',
+    return inkCursor(tool === 'highlighter' ? 'highlighter' : this.penKind(),
       tool === 'highlighter' ? s.highlighterColor : inkPaint(s.penColor));
   }
 

@@ -6367,6 +6367,32 @@ async function run(win, app) {
   check('the pencil sits in the tray as pen 7, with its sound on out of the box',
     pencil.trayPencil && pencil.trayKey === '7' && pencil.soundDefault === true,
     `pencil in the tray: ${pencil.trayPencil}, its number: ${pencil.trayKey} (wanted 7); sound by default: ${pencil.soundDefault}`);
+  // the pointer is a pencil while the pencil is in hand, and a pen again with a pen; the "any colour" swatch is a colour wheel
+  const pencilLook = await js(String.raw`
+    const a = window.app, s = a.settings, I = await import('app://board/js/ui/toolbar.js');
+    const was = { pen: s.activePen, color: s.penColor, effect: s.penEffect, theme: s.theme };
+    s.theme = 'light'; a.applyTheme();
+    const cur = () => decodeURIComponent(a.interaction.inkCursor('pen'));
+    const r = {};
+    I.choosePen(a, 'pencil'); r.lead = s.penColor; r.pencilBarrel = /f2c230/i.test(cur()); r.pencilLead = cur().toLowerCase().includes(String(s.penColor).toLowerCase()); r.pencilHot = / 2 2,/.test(cur());
+    r.nibUrl = (() => { const el = document.createElement('div'); a.interaction.placeNib(el, { x: 50, y: 50 }, 'pen'); return /f2c230/i.test(decodeURIComponent(el.style.backgroundImage)); })();
+    I.choosePen(a, 'black'); r.penBarrel = /f2c230/i.test(cur()); r.penInk = /201f1e/i.test(cur());
+    I.choosePen(a, 'pencil');
+    const btn = document.querySelector('#toolbar .pen[data-pen="pencil"]');
+    I.openToolPopover(a, btn, 'pen');
+    const wheel = document.querySelector('.pop .sw-custom');
+    r.wheelInk = wheel ? wheel.style.getPropertyValue('--ink') : '(no swatch)';
+    r.wheelLooksLikeWheel = wheel ? /conic-gradient/.test(getComputedStyle(wheel).backgroundImage) : false;
+    a.hideMenus();
+    Object.assign(s, { activePen: was.pen, penColor: was.color, penEffect: was.effect, theme: was.theme }); a.saveSettings(); a.applyTheme(); a.syncUI();
+    return r;
+  `);
+  check('the pointer is a pencil while the pencil is held - yellow barrel, point in its lead colour, tip on the hotspot - and a pen again with a pen',
+    pencilLook.pencilBarrel && pencilLook.pencilLead && pencilLook.pencilHot && pencilLook.nibUrl && !pencilLook.penBarrel && pencilLook.penInk,
+    JSON.stringify(pencilLook) + ' (wanted pencil: barrel, its lead colour, hotspot and stylus nib all true; pen: no barrel, black ink)');
+  check('the "any colour" swatch is a colour wheel with the ink in hand at its middle, not a second graphite dot',
+    pencilLook.wheelLooksLikeWheel && String(pencilLook.wheelInk).toLowerCase() === String(pencilLook.lead).toLowerCase(),
+    `colour wheel: ${pencilLook.wheelLooksLikeWheel}, ink in the middle: ${pencilLook.wheelInk} (wanted the pencil's own ${pencilLook.lead})`);
   check('pencil looks like graphite: grainy where a pen of the same colour is solid',
     pencil.once.sd >= 4 && pencil.pen.sd < 2 && pencil.once.sd > pencil.pen.sd + 3,
     `variation along the line (average of 5 rows) - pencil ${JSON.stringify(pencil.once)}, solid pen ${JSON.stringify(pencil.pen)} (wanted pencil at least 4 and 3 more than the pen, pen under 2; dpr ${pencil.dpr})`);

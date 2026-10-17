@@ -488,7 +488,9 @@ input, textarea { font: inherit; }
 
 /* the custom picker, dressed as one more swatch; the input itself is the
    whole hit area so a thumb finds it as easily as any other colour */
-.sw.sw-custom { position: relative; overflow: hidden; }
+.sw.sw-custom { position: relative; overflow: hidden;
+  background: radial-gradient(circle, var(--ink, #201f1e) 0 38%, #ffffff 40% 50%, transparent 52%),
+    conic-gradient(#f44, #fa0, #fd0, #4c4, #2af, #66f, #c4f, #f44); }
 .sw.sw-custom input[type="color"] {
   position: absolute; inset: 0; width: 100%; height: 100%;
   opacity: 0; border: 0; padding: 0; cursor: pointer;
