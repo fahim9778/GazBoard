@@ -745,7 +745,9 @@ class App {
       // race it - if one is on its way, there is nothing here to decide.
       if ((await this.appInfo())?.pendingBoardFile) return;
       if (taken()) return;
-      const res = await window.board.boards.resume();
+      // as text, read here: a big board crosses from the other half of the app far faster that way
+      const res = await window.board.boards.resume({ asText: true });
+      if (res && typeof res.json === 'string' && !res.board) { try { res.board = JSON.parse(res.json); } catch { res.board = null; } delete res.json; }
       if (taken()) return;   // a file arrived, or somebody started writing, while we asked
       if (res && res.board) {
         try { window.board.startupStep?.(t('Opening “{name}”…', { name: res.board.name || t('Untitled board') })); } catch { /* no starting-up window */ }
@@ -3926,7 +3928,8 @@ class App {
 
   /** Cached app:info, so the version is not re-fetched on every call. */
   async appInfo() {
-    if (!this._appInfo) this._appInfo = await window.board.info();
+    // asked again while LibreOffice has not been looked for yet, so About and Settings show the real answer
+    if (!this._appInfo || this._appInfo.libreofficeKnown === false) this._appInfo = await window.board.info();
     return this._appInfo;
   }
 
@@ -3966,6 +3969,7 @@ class App {
       ['h', t('Canvas')],
       [t('Pan'), t('Space + drag, or middle-drag')], [t('Zoom'), t('Ctrl + wheel, or pinch')],
       [t('Pan while drawing'), t('Hold any mouse button, or scroll')],
+      [t('Straight line'), t('Hold Shift while drawing')],
       [t('Auto-pan while drawing'), t('Run the pen into the edge of the window')],
       [t('Zoom in / out'), 'Ctrl + = / Ctrl + -'], [t('Reset zoom'), 'Ctrl+0'], [t('Fit to board'), 'Ctrl+Shift+F'],
       ['h', t('Editing')],

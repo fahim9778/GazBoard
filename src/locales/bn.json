@@ -1144,5 +1144,6 @@
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "পেনসিলের দাগ মোছা হয়েছে, লক করাগুলো রাখা হয়েছে - আনডু (Ctrl+Z) করলে ফিরে আসবে",
  "Could not delete this board": "এই বোর্ডটি মোছা যায়নি",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "বন্ধ থাকলে: ট্র্যাকপ্যাডে স্ক্রল হয়, আর পেজওয়ালা বোর্ডে (A4, A5…) মাউস হুইল দিয়ে পেজগুলো স্ক্রল হয়। Ctrl+হুইল সবসময় জুম করে।",
- "Opening “{name}”…": "“{name}” খোলা হচ্ছে…"
+ "Opening “{name}”…": "“{name}” খোলা হচ্ছে…",
+ "Straight line": "সরল রেখা"
 }

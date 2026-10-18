@@ -585,6 +585,34 @@ function setLastBoard(id, dir = dataDir()) {
   lastBoardQueue = run;
   return run;
 }
+/*
+ * The board to reopen is read while the window is still loading, not after. Opening a big board kept
+ * in Google Drive or OneDrive can take a second or more, and the page takes about as long to be ready
+ * to ask for it - so the two now happen side by side and the page finds the board already read.
+ * Only the text is fetched early; it is checked exactly as before when the page asks for it, and if
+ * anything changed in between (another boards folder, another last board) it is simply read again.
+ */
+let startupRead = null;
+function readLastBoardEarly() {
+  const dir = dataDir();
+  startupRead = { dir, done: (async () => {
+    try {
+      const id = await getLastBoard();
+      if (!id || /[\\/:*?"<>|\u0000-\u001f]/.test(id) || id.startsWith('.')) return null;
+      const text = await fsp.readFile(path.join(dir, id + '.json'), 'utf8');
+      startupMark(`last board read ahead (${Math.round(text.length / 1024)} KB)`);
+      return { id, text };
+    } catch { return null; }
+  })() };
+}
+async function takeEarlyRead(dir, id) {
+  const s = startupRead;
+  startupRead = null;                       // used once: later asks always read the disk
+  if (!s || s.dir !== dir) return null;
+  const got = await s.done;
+  return got && got.id === id ? got.text : null;
+}
+
 async function getLastBoard() {
   const raw = await readLastBoard();
   const here = raw.byFolder && typeof raw.byFolder === 'object' ? raw.byFolder[dataDir()] : undefined;
@@ -756,6 +784,8 @@ function createWindow() {
     send('window:resized');
     closeSplash();
     startupMark('window shown');
+    // the LibreOffice question, answered once the board is up and nobody is waiting on it
+    setTimeout(() => { try { findSoffice(); } catch { /* not found is an answer too */ } }, 4000);
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   };
   revealMainWindow = reveal;
@@ -1117,7 +1147,11 @@ function ipc() {
     version: app.getVersion(), platform: process.platform,
     electron: process.versions.electron, chrome: process.versions.chrome, boardsDir: dataDir(),
     storage: await storageInfo(),
-    libreoffice: !!findSoffice(), sofficePath: findSoffice(), userData: app.getPath('userData'),
+    // Looking for LibreOffice means checking folders on every drive, and on a cloud or network drive each
+    // check can take a while - so the answer is only given once it is known, never looked for here, on the
+    // way to opening the first board. It is looked for a few seconds after start (see reveal).
+    libreoffice: _soffice === undefined ? null : !!_soffice, sofficePath: _soffice || null, libreofficeKnown: _soffice !== undefined,
+    userData: app.getPath('userData'),
     // the suite drives the app headlessly; it must never be stopped by a
     // consent dialog, and it must never reach the network
     smoke: process.argv.includes('--smoke'),
@@ -1524,7 +1558,14 @@ function ipc() {
    * the most recently touched one. Falling back to a blank canvas while the
    * user's work sits on disk is the one thing this must never do.
    */
-  ipcMain.handle('boards:resume', async () => {
+  /*
+   * { asText: true } hands the board over as the text of its file rather than as an object. Handing a
+   * big board over as an object means copying every point of every stroke one by one between the two
+   * halves of the app - most of a second on a slower laptop for a board full of handwriting; the same
+   * board as text is copied in one go and read on the page side. The board is still checked here first.
+   */
+  ipcMain.handle('boards:resume', async (_e, opts) => {
+    const asText = !!(opts && opts.asText);
     await ensureDataDir();
     const read = async (id) => {
       try {
@@ -1534,8 +1575,16 @@ function ipc() {
     };
     const wanted = await getLastBoard();
     if (wanted) {
-      const doc = await read(wanted);
-      if (doc) return { board: doc, reason: 'pointer' };
+      let doc = null, text = null;
+      const asked = startupSteps.length && !startupSteps.some(([w]) => w === 'page asked for the last board');
+      if (asked) startupMark('page asked for the last board');
+      text = await takeEarlyRead(dataDir(), wanted);
+      if (text === null && /^[^\\/:*?"<>|\u0000-\u001f.][^\\/:*?"<>|\u0000-\u001f]*$/.test(wanted)) {
+        try { text = await fsp.readFile(path.join(dataDir(), wanted + '.json'), 'utf8'); } catch { text = null; }
+      }
+      if (text !== null) { try { const raw = JSON.parse(text); if (StorageLocation.isBoardFile(raw)) doc = raw; } catch { doc = null; } }
+      if (asked) startupMark('last board ready to hand over');
+      if (doc) return asText ? { json: text, reason: 'pointer' } : { board: doc, reason: 'pointer' };
     }
     // pointer missing or stale - fall back to the newest board that has anything in it
     const files = (await fsp.readdir(dataDir())).filter((f) => f.endsWith('.json'));
@@ -1752,6 +1801,7 @@ if (!singleInstance) {
     startupMark('boards folder checked');
     if (!storedStorageLocation) await migrateLegacyData();
     await openBoardPath(boardFileFromArgv(process.argv));
+    if (!pendingOpen) readLastBoardEarly();     // a double-clicked file opens instead: nothing to read ahead
     createWindow();
     startupMark('window created');
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

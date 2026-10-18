@@ -16723,6 +16723,36 @@ module.exports.run = async (win, app) => {
       `frames that slid: ${r.slid} of 25 (wanted at least 20); pixels a shade off from a full paint: ${r.during} of ${r.pixels} (largest ${r.duringWorst}); two full paints differ by ${r.noise}; ${JSON.stringify(r.info)} (wanted settleRan at least 1, slidAfter false); pictures in test/out/pan-slide-*.png when it fails`);
   }
 
+  /* ---- Shift held while inking draws a straight line, as in Microsoft Whiteboard ---- */
+  {
+    const setup = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true); a.settings.inkToShape = false;
+      window.__mouseWas = a.settings.inkWithMouse; a.settings.inkWithMouse = 'yes';   // this mouse is the pen here
+      const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'black'); a.setTool('pen');
+      a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0; a.surface.invalidate();
+      const r = a.surface.canvas.getBoundingClientRect(); return { x: Math.round(r.left + 300), y: Math.round(r.top + 300) };`);
+    const wc = win.webContents;
+    const drag = async (path, shift) => {
+      const mods = shift ? ['shift'] : [];
+      wc.sendInputEvent({ type: 'mouseDown', x: path[0][0], y: path[0][1], button: 'left', clickCount: 1, modifiers: mods }); await sleep(30);
+      for (const [x, y] of path.slice(1)) { wc.sendInputEvent({ type: 'mouseMove', x, y, button: 'left', modifiers: [...mods, 'leftbuttondown'] }); await sleep(16); }
+      const last = path[path.length - 1];
+      wc.sendInputEvent({ type: 'mouseUp', x: last[0], y: last[1], button: 'left', clickCount: 1, modifiers: mods }); await sleep(120);
+    };
+    // a wobbly, slightly sloping hand: with Shift it must come out dead level
+    const wobble = []; for (let i = 0; i <= 30; i++) wobble.push([setup.x + i * 12, setup.y + Math.round(Math.sin(i / 2) * 9) + Math.round(i * 0.4)]);
+    await drag(wobble, true);
+    await drag(wobble.map(([x, y]) => [x, y + 80]), false);
+    const r = await js(`const a = window.app; const ss = a.store.objects.filter((o) => o.type === 'stroke');
+      const spread = (o) => { const ys = o.points.map((q) => q.y); return +(Math.max(...ys) - Math.min(...ys)).toFixed(2); };
+      const out = { strokes: ss.length, straightSpread: ss[0] ? spread(ss[0]) : null, freeSpread: ss[1] ? spread(ss[1]) : null,
+        straightLen: ss[0] ? Math.round(Math.hypot(ss[0].points.at(-1).x - ss[0].points[0].x, ss[0].points.at(-1).y - ss[0].points[0].y)) : 0,
+        evenPressure: ss[0] ? new Set(ss[0].points.map((q) => q.p)).size === 1 : false };
+      a.settings.inkWithMouse = window.__mouseWas; a.store.clear(); a.newBoard(true); return out;`);
+    check('holding Shift while inking draws a straight line - level when the hand is nearly level - and without Shift the hand is kept as drawn',
+      r.strokes === 2 && r.straightSpread === 0 && r.straightLen > 300 && r.evenPressure && r.freeSpread > 10,
+      `strokes: ${r.strokes} (wanted 2); with Shift: rises ${r.straightSpread} units over ${r.straightLen} (wanted 0, over 300), even pressure: ${r.evenPressure}; without Shift it rises ${r.freeSpread} (wanted more than 10 - left as drawn)`);
+  }
+
   /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {};

@@ -215,7 +215,7 @@ contextBridge.exposeInMainWorld('board', {
     remove: (id) => ipcRenderer.invoke('boards:delete', id),
     last: () => ipcRenderer.invoke('boards:last'),
     setLast: (id) => ipcRenderer.invoke('boards:setLast', id),
-    resume: () => ipcRenderer.invoke('boards:resume'),
+    resume: (opts) => ipcRenderer.invoke('boards:resume', opts && typeof opts === 'object' ? { asText: !!opts.asText } : undefined),
     migrate: () => ipcRenderer.invoke('boards:migrate')
   },
 

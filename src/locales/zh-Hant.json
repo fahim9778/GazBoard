@@ -185,7 +185,7 @@
  "Arrow keys": "方向鍵",
  "Bring to front / Send to back": "移至最上層 / 移至最下層",
  "Constrain / square": "限制比例 / 正方形",
- "Hold Shift while drawing": "繪圖時按住 Shift",
+ "Hold Shift while drawing": "繪製時按住 Shift",
  "Teaching": "教學",
  "Present": "簡報",
  "Stop presenting": "停止簡報",
@@ -1144,5 +1144,6 @@
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "鉛筆痕跡已擦除，已鎖定的保留——復原（Ctrl+Z）可恢復",
  "Could not delete this board": "無法刪除此白板",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "關閉時：觸控板捲動；在有頁面的白板（A4、A5…）上，滑鼠滾輪在頁面間捲動。Ctrl+滾輪一律縮放。",
- "Opening “{name}”…": "正在開啟「{name}」…"
+ "Opening “{name}”…": "正在開啟「{name}」…",
+ "Straight line": "直線"
 }

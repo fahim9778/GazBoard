@@ -185,7 +185,7 @@
  "Arrow keys": "Teclas de flecha",
  "Bring to front / Send to back": "Traer al frente / Enviar al fondo",
  "Constrain / square": "Restringir / cuadrado",
- "Hold Shift while drawing": "Mantén presionada Shift mientras dibujas",
+ "Hold Shift while drawing": "Mantén pulsado Mayús mientras dibujas",
  "Teaching": "Enseñanza",
  "Present": "Presentar",
  "Stop presenting": "Dejar de presentar",
@@ -1144,5 +1144,6 @@
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Marcas de lápiz borradas, las bloqueadas se han conservado: deshacer (Ctrl+Z) las recupera",
  "Could not delete this board": "No se pudo eliminar esta pizarra",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desactivado: el panel táctil desplaza, y en pizarras con páginas (A4, A5…) la rueda del ratón las recorre. Ctrl+rueda siempre hace zoom.",
- "Opening “{name}”…": "Abriendo «{name}»…"
+ "Opening “{name}”…": "Abriendo «{name}»…",
+ "Straight line": "Línea recta"
 }

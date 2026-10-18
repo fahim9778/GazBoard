@@ -689,6 +689,20 @@ export class Interaction {
         let added = false;
 
         /*
+         * Shift held: a straight line, as in Microsoft Whiteboard - from where the pen went down to
+         * where it is now, following the hand until it lifts. Music staves, guitar tabs, underlines,
+         * the axes of a graph. Close to level, upright or a diagonal it settles exactly on it, so five
+         * staff lines come out truly parallel. Once a stroke has gone straight it stays straight, so
+         * letting go of Shift a moment before the pen does not curl the end of the line.
+         */
+        if ((a.straight || (e && e.shiftKey)) && !a.ruled && !(a.pieces && a.pieces.length) && a.obj.points.length) {
+          a.straight = true;
+          this.drawStraight(a, wp, pressure);
+          if (a.obj.effect === 'pencil' && e) PencilSound.move(e.clientX || 0, e.clientY || 0, undefined, this.pressure(e), this.tilt(e));
+          break;
+        }
+
+        /*
          * Spacing is judged for each candidate point against the one before it,
          * never for the batch as a whole.
          *
@@ -1719,6 +1733,38 @@ export class Interaction {
     a.obj.points = [];
   }
 
+  /** The stroke as a straight line from its first point to `to` (see the Shift note in the 'draw' move). */
+  drawStraight(a, to, pressure) {
+    const p0 = a.obj.points[0];
+    let dx = to.x - p0.x, dy = to.y - p0.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 0) {
+      // within 4 degrees of level, upright or a diagonal: exactly on it
+      const ang = Math.atan2(dy, dx), step = Math.PI / 4;
+      const near = Math.round(ang / step) * step;
+      if (Math.abs(ang - near) < (4 * Math.PI) / 180) { dx = Math.cos(near) * len; dy = Math.sin(near) * len; }
+    }
+    let end = { x: p0.x + dx, y: p0.y + dy };
+    // on a page, a straight line stops at the edge of its sheet
+    if (a.sheet && !inRect(a.sheet, end.x, end.y)) {
+      const r = a.sheet;
+      let t = 1;
+      if (dx) t = Math.min(t, ((dx > 0 ? r.x + r.w : r.x) - p0.x) / dx);
+      if (dy) t = Math.min(t, ((dy > 0 ? r.y + r.h : r.y) - p0.y) / dy);
+      t = Math.max(0, t);
+      end = { x: p0.x + dx * t, y: p0.y + dy * t };
+    }
+    // evenly spaced points, all at the pressure the line was started with, so it is one even line
+    const p = p0.p ?? (pressure ?? 0.5);
+    const z = this.surface.cam.z || 1;
+    const n = Math.max(2, Math.min(400, Math.ceil((Math.hypot(end.x - p0.x, end.y - p0.y) * z) / 6) + 1));
+    const pts = [];
+    for (let i = 0; i < n; i++) { const t = i / (n - 1); pts.push({ x: p0.x + (end.x - p0.x) * t, y: p0.y + (end.y - p0.y) * t, p }); }
+    a.obj.points = pts;
+    a.obj.bbox = bboxOfPoints(pts);
+    this.surface.invalidate();
+  }
+
   finishStroke(a) {
     const obj = a.obj;
     PencilSound.stop();
@@ -1786,7 +1832,7 @@ export class Interaction {
     this.surface.extendFreeze?.(obj);
 
     // a pencil sketch stays a sketch: guide lines are meant to be rough
-    if (this.app.settings.inkToShape && obj.tool === 'pen' && obj.effect !== 'pencil') {
+    if (this.app.settings.inkToShape && obj.tool === 'pen' && obj.effect !== 'pencil' && !a.straight) {
       const r = recognize(obj.points);
       // classified AND actually shaped like the thing it was classified as
       const fit = r ? fitError(obj.points, r.kind, r) : 1;
