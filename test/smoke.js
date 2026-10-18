@@ -16151,9 +16151,16 @@ module.exports.run = async (win, app) => {
       document.querySelector('#boardList [data-folder]').click(); await new Promise((res) => setTimeout(res, 300));
       const out = { crumbs: [...document.querySelectorAll('#boardList .crumb')].map((c) => c.textContent).join(' › '),
         rows: [...document.querySelectorAll('#boardList [data-board]')].map((b) => b.dataset.board).join(',') };
+      const was = a.store.doc.id;
       [...document.querySelectorAll('#boardList button')].find((b) => /New board/.test(b.textContent)).click();
+      await new Promise((res) => setTimeout(res, 150));
+      // answer "New board?" - the board is made, and filed, only then
+      const create = [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent.trim() === 'Create');
+      out.asked = !!create && document.getElementById('overlay').classList.contains('show');
+      create && create.click();
       await new Promise((res) => setTimeout(res, 200));
-      out.newFiled = F.folderOf(a.settings, a.store.doc.id) === a.boardFolder && !!a.boardFolder;
+      out.newFiled = a.store.doc.id !== was && F.folderOf(a.settings, a.store.doc.id) === a.boardFolder && !!a.boardFolder;
+      out.wasLeft = F.folderOf(a.settings, was) !== a.boardFolder;
       out.newId = a.store.doc.id;
       return out;`);
     // Move to… from the top level
@@ -16183,8 +16190,8 @@ module.exports.run = async (win, app) => {
       dragged.filed === seed.folderId && !dragged.atTop && dragged.stillOpen && dragged.saved === seed.folderId,
       `filed in ${dragged.filed} (wanted ${seed.folderId}); still listed at the top ${dragged.atTop}; panel still open ${dragged.stillOpen}; written to settings ${dragged.saved}; dragged from ${JSON.stringify(from)} to ${JSON.stringify(to)} (both on screen: ${ends && ends.fromVisible && ends.toVisible})`);
     check('opening a folder shows the path back up, the boards in it, and new boards are made inside it',
-      inside.crumbs === 'My boards › CSE221' && inside.rows === 'fold-a' && inside.newFiled,
-      `path "${inside.crumbs}"; boards here [${inside.rows}]; new board ${inside.newId} filed here ${inside.newFiled}`);
+      inside.crumbs === 'My boards › CSE221' && inside.rows === 'fold-a' && inside.asked && inside.newFiled && inside.wasLeft,
+      `path "${inside.crumbs}"; boards here [${inside.rows}]; asked "New board?": ${inside.asked}; new board ${inside.newId} filed here ${inside.newFiled}; the board open before left where it was: ${inside.wasLeft}`);
     check('Move to… lists every folder, marks where the board is now, and files it where you pick',
       moved.button && moved.filed === seed.folderId && /^top\(here\),f/.test(moved.choices),
       `button found ${moved.button}; choices ${moved.choices}; fold-b now in ${moved.filed}`);
@@ -16337,6 +16344,291 @@ module.exports.run = async (win, app) => {
     check('a board inside a folder shows its folder path before its name in the top bar, and pressing the path opens that folder',
       r.path === 'CSE221 / Lectures /' && r.name === 'out-3' && r.opened === 'My boards › CSE221 › Lectures' && r.topPath === '(none)',
       `top bar: "${r.path}" + "${r.name}"; pressing it opened ${r.opened}; a top-level board shows a path: ${r.topPath}`);
+  }
+
+  /* ---- New board inside a folder: the new board goes there, the board that was open stays put, and it is a recent ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const F = await import('app://board/js/core/folders.js'); const Rc = await import('app://board/js/core/recent.js');
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      if (a.panels.open) a.panels.close();
+      await a.loadBoard({ id: 'nf-open', name: 'Networking Addressing', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } }, { silent: true });
+      await a.persist({ force: true });
+      a.settings.folders = []; a.settings.boardFolders = {};
+      const cse = F.createFolder(a.settings, 'CSE221'); a.saveSettings();
+      a.boardFolder = cse;
+      // earlier tests answer every question with yes by replacing confirm; this one needs the real question
+      const stubbed = Object.prototype.hasOwnProperty.call(a, 'confirm') ? a.confirm : null;
+      delete a.confirm;
+      const press = async (answer) => {
+        await a.panels.boards(); await wait(250);
+        const btn = [...document.querySelectorAll('#boardList button')].find((b) => b.textContent.trim() === '+ New board');
+        if (!btn) return 'no New board button';
+        btn.click(); await wait(150);
+        const card = document.getElementById('overlayCard');
+        if (!document.getElementById('overlay').classList.contains('show') || !/New board\?/.test(card.textContent)) return 'no "New board?" question; overlay shows: ' + card.textContent.slice(0, 80);
+        const choice = [...card.querySelectorAll('button')].find((b) => b.textContent.trim() === answer);
+        if (!choice) return 'no ' + answer + ' button in: ' + card.textContent.slice(0, 80);
+        choice.click(); await wait(120); await (a.pendingWrite || Promise.resolve()); await wait(120);
+        return 'ok';
+      };
+      const out = {};
+      // "Cancel": nothing new, and the open board is not moved anywhere
+      out.cancel = await press('Cancel');
+      out.afterCancel = { open: a.store.doc.id, openIn: F.folderOf(a.settings, 'nf-open') };
+      a.boardFolder = cse;
+      out.create = await press('Create');
+      const made = a.store.doc.id;
+      out.made = made !== 'nf-open';
+      out.madeIn = F.folderOf(a.settings, made) === cse ? 'CSE221' : String(F.folderOf(a.settings, made));
+      out.oldIn = F.folderOf(a.settings, 'nf-open') === null ? 'top' : 'CSE221';
+      out.recentFirst = (a.settings.recentBoards || [])[0]?.id === made;
+      const all = await window.board.boards.list();
+      out.listed = !!all.find((b) => b.id === made);
+      out.inFolderView = F.boardsIn(a.settings, all, cse).map((b) => b.id === made ? 'new' : b.id).join(',');
+      out.recentShown = Rc.entries(a.settings, all).some((e) => e.id === made && e.board);
+      if (a.panels.open) a.panels.close();
+      a.settings.folders = []; a.settings.boardFolders = {}; a.boardFolder = null; a.saveSettings();
+      for (const id of ['nf-open', made]) { try { await window.board.boards.remove(id); } catch {} Rc.forget(a.settings, id); }
+      if (stubbed) a.confirm = stubbed;
+      a.newBoard(true);
+      return out;`);
+    check('New board pressed inside a folder files the NEW board there, once "New board?" is answered - never the board that was open',
+      r.create === 'ok' && r.made && r.madeIn === 'CSE221' && r.oldIn === 'top' && r.listed && r.inFolderView === 'new',
+      `pressing: ${r.create}; new board made: ${r.made}, filed in: ${r.madeIn} (wanted CSE221), on disk: ${r.listed}; the board that was open is in: ${r.oldIn} (wanted top); CSE221 holds: ${r.inFolderView} (wanted new)`);
+    check('answering Cancel to "New board?" changes nothing - the open board stays open and stays where it was',
+      r.cancel === 'ok' && r.afterCancel.open === 'nf-open' && r.afterCancel.openIn === null,
+      `pressing: ${r.cancel}; after Cancel: ${JSON.stringify(r.afterCancel)} (wanted nf-open, folder null)`);
+    check('a new board goes to the top of Recent, the way an opened board does',
+      r.recentFirst && r.recentShown, `first in Recent: ${r.recentFirst}; shown in the Recent row: ${r.recentShown}`);
+  }
+
+  /* ---- the blank board GazBoard puts up by itself joins Recent once it is written on or named ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const Rc = await import('app://board/js/core/recent.js');
+      const inRecent = () => (a.settings.recentBoards || []).some((x) => x.id === a.store.doc.id);
+      const out = {};
+      a.newBoard(true); await (a.pendingWrite || Promise.resolve());
+      out.blankListed = inRecent();
+      await a.persist({ force: true }); out.blankSavedListed = inRecent();
+      a.store.add({ id: 'jr-note', type: 'note', x: 0, y: 0, w: 120, h: 120, color: '#ffd94a', text: 'hi', rotation: 0 });
+      await a.persist({ force: true }); out.writtenListed = inRecent();
+      const first = a.store.doc.id; Rc.forget(a.settings, first); try { await window.board.boards.remove(first); } catch {}
+      a.newBoard(true);
+      const title = document.getElementById('boardTitle'); title.value = 'Named by hand'; title.dispatchEvent(new Event('change'));
+      out.namedListed = inRecent();
+      out.namedTop = (a.settings.recentBoards || [])[0]?.name;
+      Rc.forget(a.settings, a.store.doc.id); a.keepRecent();
+      // deleting the open board inside a folder: the blank board that replaces it is in that folder
+      const F = await import('app://board/js/core/folders.js');
+      await a.loadBoard({ id: 'jr-del', name: 'To delete', objects: [], pages: [], camera: { x: 0, y: 0, z: 1 } }, { silent: true });
+      await a.persist({ force: true });
+      const fid = F.createFolder(a.settings, 'Delete here'); F.moveBoard(a.settings, 'jr-del', fid); a.saveSettings();
+      await a.deleteBoard('jr-del');
+      out.replacedBy = a.store.doc.id !== 'jr-del';
+      out.replacementIn = F.folderOf(a.settings, a.store.doc.id) === fid ? 'Delete here' : String(F.folderOf(a.settings, a.store.doc.id));
+      out.replacementRecent = inRecent();
+      F.deleteFolder(a.settings, fid); a.saveSettings(); a.newBoard(true);
+      return out;`);
+    check('deleting the open board inside a folder puts the blank board that replaces it in that same folder (not in Recent until used)',
+      r.replacedBy && r.replacementIn === 'Delete here' && !r.replacementRecent,
+      `replaced: ${r.replacedBy}; the blank board is in: ${r.replacementIn} (wanted Delete here); in Recent: ${r.replacementRecent} (wanted false)`);
+    check('a blank board GazBoard put up by itself is not a recent - until it is written on or named, then it is',
+      !r.blankListed && !r.blankSavedListed && r.writtenListed && r.namedListed && r.namedTop === 'Named by hand',
+      `blank: ${r.blankListed}, blank after a save: ${r.blankSavedListed} (both wanted false); written on: ${r.writtenListed}; named: ${r.namedListed} as "${r.namedTop}" (wanted true, "Named by hand")`);
+  }
+
+  /* ---- switching boards never loses what was just done, and the board on disk stays the right one ---- */
+  {
+    const r = await js(`const a = window.app; const toasts = []; a.toast = (m) => toasts.push(m);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const stubbed = Object.prototype.hasOwnProperty.call(a, 'confirm') ? a.confirm : null; delete a.confirm;
+      const note = (id, x) => ({ id, type: 'note', x, y: 0, w: 100, h: 100, color: '#ffd94a', text: id, rotation: 0 });
+      const onDisk = async (id) => { const d = await window.board.boards.load(id); return d ? { name: d.name, objs: (d.objects || []).map((o) => o.id).join(',') } : null; };
+      const out = {};
+      if (a.panels.open) a.panels.close();
+      // 1. draw and rename, then at once open another board (inside the autosave pause)
+      await a.loadBoard({ id: 'sw-a', name: 'Board A', objects: [note('a1', 0)], order: ['a1'], pages: [] }, { silent: true }); await a.persist({ force: true });
+      await a.loadBoard({ id: 'sw-b', name: 'Board B', objects: [note('b1', 0)], order: ['b1'], pages: [] }, { silent: true }); await a.persist({ force: true });
+      a.store.add(note('b2', 200)); a.store.rename('Board B renamed');
+      await a.loadBoard(await window.board.boards.load('sw-a'), { silent: true });
+      await wait(900);
+      out.afterOpen = await onDisk('sw-b');
+      out.aUntouched = await onDisk('sw-a');
+      // 2. draw, then New board straight away (answered Create)
+      a.store.add(note('a2', 200));
+      const made = a.command('board.new'); await wait(120);
+      [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent.trim() === 'Create')?.click();
+      out.madeAnswer = await made; await wait(900);
+      out.afterNew = await onDisk('sw-a');
+      // 3. delete the open board while its save is on the way: it stays deleted, and the blank board is not saved as junk
+      await a.loadBoard({ id: 'sw-c', name: 'Board C', objects: [note('c1', 0)], order: ['c1'], pages: [] }, { silent: true }); await a.persist({ force: true });
+      a.store.add(note('c2', 200));
+      const saving = a.persist();
+      await a.deleteBoard('sw-c'); await saving; await wait(900);
+      const list = await window.board.boards.list();
+      out.cBack = list.some((b) => b.id === 'sw-c');
+      out.blankSaved = list.some((b) => b.id === a.store.doc.id);
+      // 4. a board file whose id would make a file outside the boards folder is given a plain id of its own
+      await a.loadBoard({ id: '../../escaped-board', name: 'Sneaky', origin: '/tmp/sneaky.gazboard', objects: [note('s1', 0)], order: ['s1'], pages: [] }, { silent: true });
+      await a.persist({ force: true });
+      out.sneakyId = a.store.doc.id;
+      out.sneakySaved = !!(await window.board.boards.load(a.store.doc.id));
+      out.mainRefuses = (await window.board.boards.save({ id: '../outside', json: '{}', setLast: false })) === false;
+      const sneaky = a.store.doc.id;
+      // 5. the same file opened again after work was done here: asked, and Escape keeps the work
+      const file = { id: 'sw-file', name: 'Lesson', origin: '/tmp/lesson.gazboard', modified: Date.now() - 60000, objects: [note('f1', 0)], order: ['f1'], pages: [] };
+      await a.loadBoard({ ...file }, { silent: true }); await a.persist({ force: true });
+      const local = a.store.doc.id;
+      a.store.add(note('work', 200)); await a.persist({ force: true });
+      const again = a.loadBoard({ ...file }, { silent: true }); await wait(250);
+      out.asked = document.getElementById('overlay').classList.contains('show') && /changed since the file/.test(document.getElementById('overlayCard').textContent);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); a._overlayDismiss && a._overlayDismiss();
+      await again; await wait(150);
+      out.keptWork = a.store.doc.id === local && a.store.has('work');
+      // and opening it again with nothing new here asks nothing
+      await a.loadBoard({ id: 'sw-file2', name: 'Plain', origin: '/tmp/plain.gazboard', modified: Date.now(), objects: [], order: [], pages: [] }, { silent: true }); await a.persist({ force: true });
+      const p1 = a.store.doc.id;
+      await a.loadBoard({ id: 'sw-file2', name: 'Plain', origin: '/tmp/plain.gazboard', modified: Date.now() + 5000, objects: [], order: [], pages: [] }, { silent: true });
+      out.quietReopen = a.store.doc.id === p1 && !document.getElementById('overlay').classList.contains('show');
+      for (const id of ['sw-a', 'sw-b', 'sw-c', sneaky, local, p1]) { try { await window.board.boards.remove(id); } catch {} }
+      if (stubbed) a.confirm = stubbed;
+      a.newBoard(true);
+      return out;`);
+    check('opening another board straight after drawing or renaming keeps that work on the board it was done on',
+      r.afterOpen && r.afterOpen.objs === 'b1,b2' && r.afterOpen.name === 'Board B renamed' && r.aUntouched.objs === 'a1',
+      `board B on disk: ${JSON.stringify(r.afterOpen)} (wanted b1,b2 and the new name); board A: ${JSON.stringify(r.aUntouched)} (wanted a1 only)`);
+    check('New board straight after drawing keeps the last strokes on the board they were drawn on',
+      r.madeAnswer === true && r.afterNew && r.afterNew.objs === 'a1,a2', `answer: ${r.madeAnswer}; board A on disk: ${JSON.stringify(r.afterNew)} (wanted a1,a2)`);
+    check('deleting the open board while it is being saved leaves it deleted, and the blank board after it is not saved as junk',
+      !r.cBack && !r.blankSaved, `deleted board came back: ${r.cBack}; empty replacement saved: ${r.blankSaved} (both wanted false)`);
+    check('a board file whose id would reach outside the boards folder gets a plain id of its own, and the app refuses such a file name',
+      /^[A-Za-z0-9_-]+$/.test(r.sneakyId) && r.sneakySaved && r.mainRefuses, `id given: ${r.sneakyId}; saved under it: ${r.sneakySaved}; "../outside" refused: ${r.mainRefuses}`);
+    check('opening the same file again after working on its board asks first - and Escape keeps the work; with nothing new it just opens',
+      r.asked && r.keptWork && r.quietReopen, `asked: ${r.asked}; work kept after Escape: ${r.keptWork}; quiet reopen when nothing changed: ${r.quietReopen}`);
+  }
+
+  /* ---- erase pencil, undo order, the pencil's real width, the nib's colour, and the pen menu ---- */
+  {
+    const r = await js(`const a = window.app; const toasts = []; a.toast = (m) => toasts.push(m);
+      const T = await import('app://board/js/ui/toolbar.js'); const H = await import('app://board/js/core/hit.js');
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      a.newBoard(true);
+      const line = (id, y, o = {}) => ({ id, type: 'stroke', tool: 'pen', color: '#4b4a48', width: 12, effect: 'pencil', opacity: 1, rotation: 0,
+        points: [{ x: 0, y, p: 0.5 }, { x: 100, y, p: 0.5 }, { x: 200, y, p: 0.5 }], bbox: { x: 0, y, w: 200, h: 0 }, ...o });
+      a.store.addMany([line('pA', 0), line('pB', 40, { locked: true }), line('pC', 80), line('pD', 120, { effect: 'none', color: '#201f1e' })], 'x');
+      a.command('edit.erasePencil');
+      const afterErase = a.store.doc.order.join(',');
+      a.store.undo();
+      const out = { afterErase, afterUndo: a.store.doc.order.join(','), toastSome: toasts.pop() };
+      // only locked pencil left
+      a.store.remove(['pA', 'pC'], 'x');
+      a.command('edit.erasePencil'); out.toastLocked = toasts.pop();
+      // undo of a multi-delete puts everything back in its own place
+      a.store.clear(); a.store.addMany(['q1', 'q2', 'q3', 'q4'].map((id, i) => line(id, i * 30, { effect: 'none' })), 'x');
+      a.store.remove(['q1', 'q3'], 'delete'); a.store.undo(); out.deleteUndo = a.store.doc.order.join(',');
+      // a pencil on its side: its visible shading can be clicked
+      a.store.clear(); a.store.add(line('side', 0, { tilt: 1 }));
+      out.hitEdge = H.hitObject(a.store.get('side'), { x: 100, y: 15 }, 2);
+      // the nib layer shows the ink as the board paints it
+      a.settings.theme = 'dark'; a.applyTheme(); T.choosePen(a, 'black');
+      const el = document.createElement('div'); a.interaction.placeNib(el, { x: 10, y: 10 }, 'pen');
+      out.nibLight = /f3f2f1/i.test(decodeURIComponent(el.style.backgroundImage));
+      a.settings.theme = 'light'; a.applyTheme();
+      // choosing the Pencil effect in the open pen menu shows the pencil's own rows at once
+      T.choosePen(a, 'blue'); const btn = document.querySelector('#toolbar .pen[data-pen="blue"]');
+      T.openToolPopover(a, btn, 'pen'); await wait(50);
+      [...document.querySelectorAll('.pop .btn')].find((b) => b.textContent.trim() === 'Pencil')?.click(); await wait(80);
+      out.menuHasErase = !!document.querySelector('.pop [data-erase-pencil]');
+      [...document.querySelectorAll('.pop .btn')].find((b) => b.textContent.trim() === 'Solid')?.click(); await wait(80);
+      out.menuDropsErase = !document.querySelector('.pop [data-erase-pencil]');
+      a.hideMenus(); T.choosePen(a, 'black');
+      a.store.clear(); a.newBoard(true);
+      return out;`);
+    check('undo after "Erase pencil marks" puts the pencil back UNDER the ink, exactly where it was',
+      r.afterErase === 'pB,pD' && r.afterUndo === 'pA,pB,pC,pD', `after erase: ${r.afterErase} (wanted pB,pD - pB is locked); after undo: ${r.afterUndo} (wanted pA,pB,pC,pD)`);
+    check('"Erase pencil marks" says when locked pencil lines were kept, instead of "no pencil marks"',
+      /locked ones kept/.test(r.toastSome || '') && /locked - unlock/.test(r.toastLocked || ''), `some locked: "${r.toastSome}"; all locked: "${r.toastLocked}"`);
+    check('undoing a delete of several things puts each back in its own place in the stack',
+      r.deleteUndo === 'q1,q2,q3,q4', `after undo: ${r.deleteUndo} (wanted q1,q2,q3,q4)`);
+    check('the soft edge of a pencil held on its side can be clicked, as far as it is drawn',
+      r.hitEdge === true, `a click 15 units off the middle of a 12-wide pencil on its side (drawn about 41 wide) hit it: ${r.hitEdge}`);
+    check('the pen nib under a stylus shows the ink as painted on a dark board, the same as the cursor', r.nibLight, `light ink in the nib layer: ${r.nibLight}`);
+    check('choosing the Pencil effect in the pen menu shows the pencil rows at once, and Solid takes them away again',
+      r.menuHasErase && r.menuDropsErase, `"Erase pencil marks" shown after Pencil: ${r.menuHasErase}; gone after Solid: ${r.menuDropsErase}`);
+  }
+
+  /* ---- My boards: the open board's tile, Cancel, and the folder copy beside the boards ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const F = await import('app://board/js/core/folders.js');
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const stubbed = Object.prototype.hasOwnProperty.call(a, 'confirm') ? a.confirm : null; delete a.confirm;
+      const askStub = Object.prototype.hasOwnProperty.call(a, 'askText') ? a.askText : null;
+      if (a.panels.open) a.panels.close();
+      a.settings.folders = []; a.settings.boardFolders = {}; a.boardFolder = null;
+      await a.loadBoard({ id: 'mt-open', name: 'Open one', objects: [], pages: [] }, { silent: true }); await a.persist({ force: true });
+      a.store.add({ id: 'u1', type: 'note', x: 0, y: 0, w: 80, h: 80, color: '#ffd94a', text: '', rotation: 0 });
+      a.store.add({ id: 'u2', type: 'note', x: 100, y: 0, w: 80, h: 80, color: '#ffd94a', text: '', rotation: 0 });
+      await a.persist({ force: true });
+      const undoBefore = a.store.undoStack.length;
+      await a.panels.boards(); await wait(300);
+      document.querySelector('#boardList [data-board="mt-open"]')?.click(); await wait(250);
+      const out = { undoBefore, undoAfter: a.store.undoStack.length, stillThis: a.store.doc.id === 'mt-open', closed: !a.panels.open };
+      // Cancel on "New board?" leaves My boards up
+      await a.panels.boards(); await wait(250);
+      [...document.querySelectorAll('#boardList button')].find((b) => b.textContent.trim() === '+ New board')?.click(); await wait(150);
+      [...document.querySelectorAll('#overlayCard button')].find((b) => b.textContent.trim() === 'Cancel')?.click(); await wait(200);
+      out.upAfterCancel = !!a.panels.open && !!document.getElementById('boardList');
+      // a folder made in My boards is passed on to the copy beside the boards
+      let sent = 0; const real = a.queueCatalogue; a.queueCatalogue = (...x) => { sent++; return real.apply(a, x); };
+      a.askText = async () => 'Catalogue test';
+      document.querySelector('#boardList [data-new-folder]')?.click(); await wait(250);
+      out.folderMade = a.settings.folders.some((f) => f.name === 'Catalogue test');
+      out.catalogueQueued = sent;
+      a.queueCatalogue = real; if (askStub) a.askText = askStub; else delete a.askText;
+      if (a.panels.open) a.panels.close();
+      a.settings.folders = []; a.settings.boardFolders = {}; a.saveSettings();
+      try { await window.board.boards.remove('mt-open'); } catch {}
+      if (stubbed) a.confirm = stubbed;
+      a.newBoard(true);
+      return out;`);
+    check('pressing the tile of the board already open goes back to it as it is - undo still there, nothing reloaded',
+      r.stillThis && r.closed && r.undoAfter === r.undoBefore, `same board: ${r.stillThis}; My boards closed: ${r.closed}; undo steps ${r.undoBefore} → ${r.undoAfter}`);
+    check('answering Cancel to "New board?" leaves My boards open where it was', r.upAfterCancel, `My boards still up: ${r.upAfterCancel}`);
+    check('a folder made in My boards is passed on to the folders file beside the boards', r.folderMade && r.catalogueQueued > 0,
+      `folder made: ${r.folderMade}; folders file updates asked for: ${r.catalogueQueued}`);
+  }
+
+  /* ---- the mouse wheel scrolls through pages on a paper board, and still zooms on an infinite one ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const cam = a.surface.cam, c = a.surface.canvas, box = c.getBoundingClientRect();
+      const wheel = (o) => { c.dispatchEvent(new WheelEvent('wheel', { clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, bubbles: true, cancelable: true, ...o })); };
+      const was = a.settings.wheelZoom; a.settings.wheelZoom = false;
+      a.newBoard(true); await a.setPageSize('a4', 'portrait'); await wait(150);
+      a.addPage && a.addPage(); a.addPage && a.addPage(); await wait(150);
+      a.fitToPage(0); await wait(100);
+      const out = { pages: a.store.pageCount };
+      let z0 = cam.z, y0 = cam.y;
+      for (let i = 0; i < 4; i++) { wheel({ deltaY: 3, deltaMode: 1 }); await wait(20); }
+      out.paperScrolled = Math.round(cam.y - y0); out.paperZoomSame = Math.abs(cam.z - z0) < 1e-6;
+      z0 = cam.z; wheel({ deltaY: -120, ctrlKey: true }); await wait(30);
+      out.ctrlZooms = cam.z > z0;
+      a.settings.wheelZoom = true; z0 = cam.z; await wait(400); wheel({ deltaY: 3, deltaMode: 1 }); await wait(30);
+      out.settingZooms = Math.abs(cam.z - z0) > 1e-6;
+      a.settings.wheelZoom = false;
+      await a.setPageSize('infinite'); a.newBoard(true); await wait(100); await wait(400);
+      out.infinitePages = a.store.pageCount;
+      z0 = cam.z; wheel({ deltaY: 3, deltaMode: 1 }); await wait(30);
+      out.infiniteZooms = Math.abs(cam.z - z0) > 1e-6;
+      a.settings.wheelZoom = was; a.newBoard(true);
+      return out;`);
+    check('on a board of pages the mouse wheel scrolls down through them; Ctrl+wheel zooms; an infinite board still zooms with the wheel',
+      r.pages >= 2 && r.paperScrolled !== 0 && r.paperZoomSame && r.ctrlZooms && r.settingZooms && r.infiniteZooms,
+      `pages: ${r.pages}; wheel on paper moved the view by ${r.paperScrolled} (wanted not 0) with zoom unchanged: ${r.paperZoomSame}; Ctrl+wheel zoomed: ${r.ctrlZooms}; "Mouse wheel zooms" on still zooms: ${r.settingZooms}; infinite board (pages ${r.infinitePages}) zooms: ${r.infiniteZooms}`);
   }
 
   /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */

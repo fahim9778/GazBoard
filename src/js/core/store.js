@@ -197,7 +197,10 @@ export class Store {
 
   remove(ids, label = 'delete') {
     const ops = [];
-    for (const id of [].concat(ids)) {
+    // last first, as clear() does: undo puts them back in the opposite order, so each one returns to
+    // the place it really had and the stacking (pencil under ink, say) comes back exactly as it was
+    const list = [...new Set([].concat(ids))].filter((id) => this.get(id)).sort((a, b) => this.indexOf(b) - this.indexOf(a));
+    for (const id of list) {
       const o = this.get(id); if (!o) continue;
       ops.push({ t: 'del', id, obj: structuredCloneSafe(o), index: this.indexOf(id) });
     }
@@ -379,12 +382,23 @@ function structuredCloneSafe(v) {
 let connectorBox = null;
 export function setConnectorBounds(fn) { connectorBox = fn; }
 
+/**
+ * How wide a stroke is actually painted. A pencil on its side shades a band much wider than its
+ * nib, and selecting, erasing and culling have to know that or they miss the edge you can see.
+ */
+export function strokeDrawWidth(o) {
+  const w = (o && o.width) || 4;
+  if (!o || o.effect !== 'pencil') return w;
+  const tilt = Math.max(0, Math.min(1, o.tilt || 0));
+  return w * (1 + tilt * 2.4);
+}
+
 export function boundsOf(o) {
   if (!o) return { x: 0, y: 0, w: 0, h: 0 };
   if (o.type === 'connector') return connectorBox ? connectorBox(o) : { x: o.x || 0, y: o.y || 0, w: o.w || 0, h: o.h || 0 };
   if (o.type === 'stroke') {
     const b = o.bbox || { x: 0, y: 0, w: 0, h: 0 };
-    const pad = (o.width || 4) / 2 + 1;
+    const pad = strokeDrawWidth(o) / 2 + 1;
     return { x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 };
   }
   return { x: o.x, y: o.y, w: o.w, h: o.h };

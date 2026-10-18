@@ -726,7 +726,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "متوقف (الافتراضي): الرسم بالإصبع لا يُظهر رأس قلم، لأن طرف إصبعك موجود على الموضع بالفعل ورأس القلم سيختفي تحت يدك. أما القلم الإلكتروني أو الماوس على هذا الجهاز فيظهر له رأس القلم. شغّله إن كنت تستخدم Surface أو كمبيوترًا آخر بشاشة لمس وتريد رأس القلم تحت إصبعك أيضًا.",
  "Ruler snapping": "الالتصاق بالمسطرة",
  "Mouse wheel zooms": "عجلة الماوس تكبّر وتصغّر",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "متوقف: العجلة ولوحة اللمس تحرّكان اللوحة، وCtrl+العجلة للتكبير والتصغير.",
  "Auto-pan at the edges": "التحريك التلقائي عند الحواف",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "أثناء الرسم أو السحب، يؤدي وصول المؤشر إلى حافة النافذة إلى تمرير اللوحة. كما أن الضغط مطولًا على زر الماوس أثناء خط بالقلم يسحب اللوحة أيضًا.",
  "Return to select after drawing": "العودة إلى التحديد بعد الرسم",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "امسح خطوط قلم الرصاص",
  "Removes every pencil line on this board and keeps the ink": "يزيل كل خطوط قلم الرصاص من هذه اللوحة ويُبقي الحبر",
  "No pencil marks on this board": "لا توجد خطوط بقلم الرصاص في هذه اللوحة",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "مُسحت خطوط قلم الرصاص — التراجع (Ctrl+Z) يعيدها"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "مُسحت خطوط قلم الرصاص — التراجع (Ctrl+Z) يعيدها",
+ "This board has changed since the file": "تغيّرت هذه اللوحة منذ حفظ الملف",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "تحتوي «{name}» على هذا الكمبيوتر على عمل أحدث من هذا الملف. فتح الملف فوقها سيُضيّع ذلك العمل.",
+ "Open the board here": "افتح اللوحة الموجودة هنا",
+ "Open the file as a new board": "افتح الملف كلوحة جديدة",
+ "Replace it with the file": "استبدلها بالملف",
+ "The pencil marks here are locked - unlock them to erase them": "علامات القلم الرصاص هنا مقفلة - افتح قفلها لمسحها",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "مُسحت علامات القلم الرصاص وبقيت المقفلة - التراجع (Ctrl+Z) يعيدها",
+ "Could not delete this board": "تعذّر حذف هذه اللوحة",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "عند الإيقاف: لوحة اللمس تمرّر، وفي اللوحات ذات الصفحات (A4، A5…) تمرّر عجلة الفأرة بين الصفحات. Ctrl+العجلة يكبّر دائمًا."
 }

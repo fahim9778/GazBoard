@@ -14,6 +14,9 @@ import { Interaction } from './core/tools.js';
 import { InkTrail } from './core/inktrail.js';
 import { pick, ghost } from './core/hit.js';
 import { uid, debounce, clamp, unionBox } from './core/util.js';
+
+/** An id GazBoard itself would make: safe as a file name on every system, the phone included. */
+const plainBoardId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id);
 import { pageRects, stripBounds, pageIndexForBox, nearestPageIndex, offsetIntoRect, PAGE_GAP, todayStamp } from './core/pages.js';
 import { isNewer } from './core/version.js';
 import { emojiAspect, forgetEmojiMetrics, setDarkBoard, setPageColor } from './core/render.js';
@@ -461,6 +464,23 @@ class App {
     });
   }
 
+  /**
+   * Before the board on screen is replaced by another (opening one, starting a new one): whatever
+   * was just drawn or typed on it is written out first. The autosave waits up to a few seconds after
+   * the last change, and a board swapped in during that pause would otherwise take the save meant
+   * for this one - the last strokes, a rename, a text box still being typed, simply gone.
+   * Not while the boards folder is being switched: that has its own careful hand-over.
+   */
+  async saveBeforeLeaving() {
+    if (this._storageSwitching || this._storageSettling) return;
+    clearTimeout(this._saveTimer);
+    try { this.textEditor?.commit(); } catch { /* nothing being typed */ }
+    try {
+      if (this._unsaved) await this.persist();
+      else if (this._persistInFlight) await this._persistInFlight;
+    } catch { /* a failed save says so itself; the switch goes on */ }
+  }
+
   /** True while a pointer gesture is mid-flight. Reads one flag; never the board. */
   gestureInFlight() { return !!(this.interaction && this.interaction.action); }
 
@@ -515,6 +535,9 @@ class App {
 
   async _persistNow({ force = false } = {}) {
     if (!force && this.unsavedNew && !this.store.objects.length) return;
+    // The board being saved. Everything below the first await may run after another board has
+    // been opened; what this save then says about "the open board" would be about the wrong one.
+    const savingId = this.store.doc.id;
     this.store.doc.camera = this.surface.cam.toJSON();
     // boards.save writes the file and records the "last open" pointer in one go,
     // both through the main process, so both are on disk immediately
@@ -533,9 +556,12 @@ class App {
     await this.mathsReady();
     // a link to a board made since the list was last read would show as missing in the picture
     if (linkedRefs(this.store.objects).some((r) => !lookupBoard(r))) await this.refreshBoardDirectory();
-    const pic = this.boardPictureFor(force);
+    // the picture is of what is on screen, so only while that is still this board
+    const pic = this.store.doc.id === savingId ? this.boardPictureFor(force) : null;
     if (pic) doc.thumb = pic;
     await window.board.boards.save({ id: doc.id, json: JSON.stringify(doc) });
+    if (this.store.doc.id !== savingId) return;   // saved; the board now open is not this one
+    this.joinRecentOnceUsed();
     this.unsavedNew = false;
     this._unsaved = false;
     this._lastSaveAt = performance.now();
@@ -810,7 +836,14 @@ class App {
     }
   }
 
-  newBoard(silent = false) {
+  /**
+   * @param {boolean} silent  nobody asked for this board (startup, after a delete): no toast, not a recent
+   * @param {{folder?: string|null}} opts  folder: the My boards folder to file it in - the one the person was
+   *   looking at when they pressed New board. Filed here, after the new board exists, because the button that
+   *   asks for it only starts the question "New board?", and anything it did itself would land on the board
+   *   that was open before.
+   */
+  newBoard(silent = false, opts = {}) {
     this.store.reset();
     this.surface.selection.clear();
     this.applyCanvasDefaults();
@@ -822,6 +855,10 @@ class App {
     this.unsavedNew = true;
     document.getElementById('savedBadge').textContent = t('Saved');
     window.board.boards.setLast(this.store.doc.id);
+    const folder = opts.folder && folderPath(this.settings, opts.folder).length ? opts.folder : null;
+    if (folder) { moveBoard(this.settings, this.store.doc.id, folder); this.saveSettings(); }
+    // a board somebody made is one they are working on: it belongs at the top of Recent
+    if (!silent && Recent.noteOpened(this.settings, this.store.doc)) this.keepRecent();
     this.syncBackPill();
     this.syncLinkedFrom();
     this.refreshBoardDirectory();
@@ -846,19 +883,45 @@ class App {
    * rewrites the folders file beside the boards, and a shared folder should not
    * churn every time somebody opens a board.
    */
+  /**
+   * A blank board GazBoard put up by itself (at first launch, after deleting the open board) is not
+   * a recent: nobody chose it. The moment somebody writes on it or names it, it is their board, and
+   * it joins Recent like any other. Only ever adds a board that is missing - it never reorders the list.
+   */
+  joinRecentOnceUsed() {
+    const doc = this.store.doc;
+    if (!doc || !doc.id) return false;
+    if ((this.settings.recentBoards || []).some((r) => r && r.id === doc.id)) return false;
+    const named = doc.name && doc.name !== 'Untitled board' && doc.name !== t('Untitled board');
+    if (!this.store.objects.length && !(doc.pages && doc.pages.length) && !named) return false;
+    if (Recent.noteOpened(this.settings, doc)) { this.keepRecent(); return true; }
+    return false;
+  }
+
   keepRecent() {
     try { localStorage.setItem('gazboard.settings', JSON.stringify(this.settings)); } catch { /* storage refused: the list lives until the app closes */ }
   }
 
   async deleteBoard(id) {
     const wasOpen = id === this.store.doc.id;
-    await window.board.boards.remove(id);
+    // a save of this board already on its way would write it straight back after the delete
+    if (wasOpen) {
+      clearTimeout(this._saveTimer);
+      this._unsaved = false;
+      try { await this._persistInFlight; } catch { /* it failed: nothing to bring back */ }
+    }
+    // the blank board that takes an open board's place goes where that board was: somebody working
+    // in CSE221 who deletes a board and starts writing again is still working in CSE221
+    const wasIn = folderOf(this.settings, id);
+    let removed = true;
+    try { removed = (await window.board.boards.remove(id)) !== false; } catch { removed = false; }
+    if (!removed) { this.toast(t('Could not delete this board')); return false; }
     // deleted on purpose, here: nothing to mark as missing, it simply goes
     if (Recent.forget(this.settings, id)) this.keepRecent();
     this.refreshBoardDirectory();          // links to it now say it is gone
     if (wasOpen) {
       this.textEditor.cancel();
-      this.newBoard(true);          // silent: nobody asked for this board
+      this.newBoard(true, { folder: wasIn });          // silent: nobody asked for this board
       this.toast(t('Board deleted'));
     }
     return wasOpen;
@@ -894,7 +957,36 @@ class App {
     // Opened here before: it keeps the board it was given, so editing a file on
     // disk goes on updating the same board. No question, no second copy.
     const seenBefore = list.find((b) => b.origin && b.origin === data.origin);
-    if (seenBefore) return { ...data, id: seenBefore.id };
+    if (seenBefore) {
+      /*
+       * Unless the board here has been worked on since this file was written. The file is never
+       * written back, so opening it again would put the old file over that work and the next
+       * stroke would save it for good. Then it asks, and the answer that loses nothing comes first.
+       */
+      let here = null;
+      try { here = await window.board.boards.load(seenBefore.id); } catch { here = null; }
+      // What is on the board, leaving out what differs only in how it is stored (pictures kept as
+      // files here, inside the file there) - the same drawing is the same drawing.
+      const drawing = (d) => {
+        try {
+          return JSON.stringify({ o: d.objects || [], p: d.pages || [] },
+            (k, v) => (k === 'src' || k === 'assetId' || k === 'missing' || k === 'thumb' ? undefined : v));
+        } catch { return null; }
+      };
+      const fileTime = Number(data.modified) || 0, hereTime = Number(here && here.modified) || 0;
+      const newerHere = !fileTime || hereTime > fileTime + 1000;
+      if (!here || !newerHere || drawing(here) === drawing(data)) return { ...data, id: seenBefore.id };
+      const answer = await this.choose(
+        t('This board has changed since the file'),
+        t('“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.', { name: here.name || seenBefore.name }),
+        [{ id: 'here', label: t('Open the board here'), primary: true },
+         { id: 'both', label: t('Open the file as a new board') },
+         { id: 'replace', label: t('Replace it with the file') }],
+        { cancel: false });
+      if (answer === 'replace') return { ...data, id: seenBefore.id };
+      if (answer === 'both') return { ...data, id: uid('b'), name: uniqueBoardName(data.name || t('Untitled board'), list), created: Date.now() };
+      return { ...here, id: seenBefore.id };          // Escape, or anything else: the work here, untouched
+    }
 
     // A board that never got past the placeholder name is named after its file.
     // Two rows reading "Untitled board" is how this went unnoticed for so long.
@@ -902,6 +994,8 @@ class App {
       ? data.name
       : boardNameFromPath(data.origin) || t('Untitled board');
 
+    // a board's id becomes its file name here: anything but plain letters, digits, - and _ gets a fresh one
+    if (!plainBoardId(data.id)) return { ...data, id: uid('b'), name: uniqueBoardName(base, list), created: Date.now() };
     const clash = list.find((b) => b.id === data.id);
     if (!clash) return { ...data, name: uniqueBoardName(base, list) };
 
@@ -928,6 +1022,7 @@ class App {
     // double-click in Explorer. Whatever the startup restore was about to
     // reopen, it does not get to land on top of that.
     if (!opts.startup) this.boardOpenedExplicitly = true;
+    if (!opts.startup) await this.saveBeforeLeaving();
     // A board arriving from a file has to be given its own place to live before
     // anything is written, or the first autosave lands on somebody else's board.
     // `claimed` means the caller has already decided which board on this
@@ -1642,6 +1737,15 @@ class App {
     return o;
   }
 
+  /** File a board in a My boards folder, if that folder is still there. */
+  fileBoardIn(id, folder) {
+    if (!id || !folder || !folderPath(this.settings, folder).length) return false;
+    moveBoard(this.settings, id, folder);
+    this.saveSettings();
+    this.refreshBoardDirectory();
+    return true;
+  }
+
   /**
    * A new, empty board for a link to point at - made on the side, without
    * leaving this one, in the same folder as this one.
@@ -2154,7 +2258,7 @@ class App {
   }
 
   /* ---------------- commands ---------------- */
-  command(id) {
+  command(id, arg = null) {
     const s = this.store, sf = this.surface;
     switch (id) {
       case 'undo': case 'edit.undo': this.textEditor.commit(); s.undo(); this.pruneSelection(); break;
@@ -2185,11 +2289,15 @@ class App {
       case 'edit.nameGroup': this.nameGroup(); break;
       case 'edit.erasePencil': {
         // sketch in pencil, ink over it, then this: the guide lines go and the ink stays
-        const ids = s.objects.filter((o) => o.type === 'stroke' && o.effect === 'pencil' && !o.locked).map((o) => o.id);
-        if (!ids.length) { this.toast(t('No pencil marks on this board'), 'pen'); break; }
+        const pencil = s.objects.filter((o) => o.type === 'stroke' && o.effect === 'pencil');
+        const ids = pencil.filter((o) => !o.locked).map((o) => o.id);
+        const locked = pencil.length - ids.length;
+        // locked lines are kept on purpose, and said so: "no pencil marks" with pencil plainly on the page is no answer
+        if (!ids.length) { this.toast(locked ? t('The pencil marks here are locked - unlock them to erase them') : t('No pencil marks on this board'), 'pen'); break; }
         s.remove(ids, 'erase pencil');
         for (const i of ids) sf.selection.delete(i);
-        this.toast(t('Pencil marks erased — undo (Ctrl+Z) brings them back'), 'eraser');
+        this.toast(locked ? t('Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back')
+          : t('Pencil marks erased — undo (Ctrl+Z) brings them back'), 'eraser');
         break;
       }
       case 'edit.clear':
@@ -2261,11 +2369,16 @@ class App {
       case 'page.prev': this.prevPage(); break;
       case 'page.fitContent': this.fitContentToPage(); break;
       case 'board.save': this.saveBoardCopy(); break;
-      case 'board.open': openBoardFile(this); break;
+      // these two answer with a promise of whether anything happened, so My boards can stay up on Cancel
+      case 'board.open': return openBoardFile(this, { folder: arg && arg.folder });
       case 'board.new':
-        this.confirm(t('New board?'), t('Your current board is saved automatically and stays in "My boards".'), t('Create'))
-          .then((ok) => { if (ok) this.newBoard(); });
-        break;
+        return this.confirm(t('New board?'), t('Your current board is saved automatically and stays in "My boards".'), t('Create'))
+          .then(async (ok) => {
+            if (!ok) return false;
+            await this.saveBeforeLeaving();
+            this.newBoard(false, { folder: arg && arg.folder });
+            return true;
+          });
       case 'help.shortcuts': this.showShortcuts(); break;
       case 'help.about': this.showAbout(); break;
       case 'help.checkUpdates': this.checkForUpdates({ force: true, silent: false }); break;
@@ -4047,6 +4160,7 @@ class App {
     titleEl.addEventListener('change', () => {
       this.store.rename(titleEl.value.trim() || t('Untitled board'));
       if (Recent.rename(this.settings, this.store.doc.id, this.store.doc.name)) this.keepRecent();
+      this.joinRecentOnceUsed();
     });
     titleEl.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') titleEl.blur(); });
 
@@ -4069,6 +4183,12 @@ class App {
         this.textEditor.commit();
         await this._persistInFlight;
         await this.persist({ force: true, storageFlush: !!ticket });
+        // the folders, as they are now, go with the boards they describe before the folder is left
+        if (ticket) {
+          clearTimeout(this._catalogueTimer);
+          const send = window.board?.storage?.writeCatalogue;
+          if (send) { try { const json = JSON.stringify(catalogueOf(this.settings)); await send(json); this._catalogueSent = json; } catch { /* the boards still moved */ } }
+        }
         if (ticket) window.board.storage?.flushAck?.(ticket, true);
       } catch (e) {
         console.warn('flush failed:', e);
@@ -4620,7 +4740,7 @@ class App {
     let data;
     if (mine && answer === 'replace') data = { ...board, origin, id: mine.id, name: base };
     else if (mine) data = { ...board, origin, id: uid('b'), name: uniqueBoardName(base, list), created: Date.now() };
-    else data = { ...board, origin, name: uniqueBoardName(base, list) };
+    else data = { ...board, origin, id: plainBoardId(board.id) ? board.id : uid('b'), name: uniqueBoardName(base, list) };
 
     /*
      * The boards that came with it are filed the same way: a board sent before
@@ -4641,7 +4761,7 @@ class App {
       let d;
       if (have && answer === 'replace' && have.id !== this.store.doc.id) d = { ...lb, origin: lo, id: have.id, name: lbase };
       else if (have) d = { ...lb, origin: lo, id: uid('b'), name: uniqueBoardName(lbase, taken), created: Date.now() };
-      else d = { ...lb, origin: lo, name: uniqueBoardName(lbase, taken) };
+      else d = { ...lb, origin: lo, id: plainBoardId(lb.id) ? lb.id : uid('b'), name: uniqueBoardName(lbase, taken) };
       if (lb.id && d.id !== lb.id) idMap.set(lb.id, d.id);
       taken.push({ id: d.id, name: d.name });
       linkedData.push(d);

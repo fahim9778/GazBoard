@@ -726,7 +726,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "Desativado (padrão): desenhar com o dedo não mostra a ponta da caneta, porque a ponta do seu dedo já está no lugar e a ponta só ficaria escondida sob a sua mão. Uma caneta ou um mouse neste computador continuam mostrando. Ative se estiver em um Surface ou outro PC com tela sensível ao toque e quiser a ponta sob o dedo também.",
  "Ruler snapping": "Encaixe na régua",
  "Mouse wheel zooms": "A roda do mouse aplica zoom",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "Desativado: a roda e o trackpad deslocam a tela, Ctrl+roda aplica zoom.",
  "Auto-pan at the edges": "Deslocamento automático nas bordas",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "Ao desenhar ou arrastar, levar o ponteiro até a borda da janela rola a tela. Um botão do mouse pressionado durante um traço de caneta também arrasta a tela.",
  "Return to select after drawing": "Voltar para Selecionar depois de desenhar",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "Apagar traços de lápis",
  "Removes every pencil line on this board and keeps the ink": "Remove todas as linhas de lápis deste quadro e mantém a tinta",
  "No pencil marks on this board": "Não há traços de lápis neste quadro",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "Traços de lápis apagados — desfazer (Ctrl+Z) os traz de volta"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Traços de lápis apagados — desfazer (Ctrl+Z) os traz de volta",
+ "This board has changed since the file": "Este quadro mudou desde o arquivo",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "“{name}” neste computador tem trabalho mais recente que este arquivo. Abrir o arquivo por cima faria perder esse trabalho.",
+ "Open the board here": "Abrir o quadro daqui",
+ "Open the file as a new board": "Abrir o arquivo como novo quadro",
+ "Replace it with the file": "Substituir pelo arquivo",
+ "The pencil marks here are locked - unlock them to erase them": "As marcas de lápis aqui estão bloqueadas — desbloqueie-as para apagá-las",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Marcas de lápis apagadas, as bloqueadas foram mantidas — desfazer (Ctrl+Z) as traz de volta",
+ "Could not delete this board": "Não foi possível excluir este quadro",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desligado: o touchpad rola e, em quadros com páginas (A4, A5…), a roda do mouse percorre as páginas. Ctrl+roda sempre aplica zoom."
 }

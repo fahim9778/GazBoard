@@ -2351,7 +2351,8 @@ export class Interaction {
     const s = this.app.settings;
     const hl = t === 'highlighter';
     const kind = hl ? 'highlighter' : this.penKind();
-    const url = inkGlyphUrl(kind, hl ? s.highlighterColor : s.penColor);
+    // painted as the board paints it, like the cursor: a black pen on a dark board writes light
+    const url = inkGlyphUrl(kind, hl ? s.highlighterColor : inkPaint(s.penColor));
     if (this._nibUrl !== url) { this._nibUrl = url; el.style.backgroundImage = url; }
     const hot = inkGlyphHotspot(kind);
     el.style.transform = 'translate3d(' + Math.round(sp.x - hot.x) + 'px,'
@@ -2509,8 +2510,16 @@ export class Interaction {
       this.surface.invalidate();
       return;
     }
+    // On a board of pages (A4, A5, ...) the wheel turns pages the way it does in Word or a PDF reader:
+    // down the stack, with Ctrl+wheel to zoom. An infinite board keeps the wheel for zooming, as before,
+    // and "Mouse wheel zooms" switched on keeps it zooming everywhere.
+    const paged = this.app.store.pageCount > 0 && !this.app.settings.wheelZoom;
     if (e.ctrlKey || e.metaKey) {
       this.surface.cam.zoomAt(sp.x, sp.y, Math.exp(-e.deltaY * 0.0022));
+    } else if (paged && !e.shiftKey) {
+      // lines and pages (some mice, some systems) become pixels, about as far as a notch scrolls elsewhere
+      const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? this.surface.height * 0.9 : 1;
+      this.surface.cam.panBy(-(e.deltaX || 0) * unit, -(e.deltaY || 0) * unit);
     } else if (e.shiftKey) {
       this.surface.cam.panBy(-e.deltaY, 0);
     } else if (this.wheelDevice(e) === 'trackpad' && !this.app.settings.wheelZoom) {

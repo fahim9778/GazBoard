@@ -565,11 +565,15 @@ export function openToolPopover(app, anchor, tool) {
         b.style.fontSize = '12.5px';
         b.addEventListener('click', () => {
           markActive(effects, b, 'primary');
+          const crossing = (s.penEffect === 'pencil') !== (e.id === 'pencil');
           s.penEffect = e.id;
           const held = heldPenId(s);
           if (held) rememberPen(s, held, { color: s.penColor, effect: e.id });
           app.saveSettings();
           app.syncUI();
+          // becoming a pencil (or stopping being one) changes what the menu offers: graphite, the
+          // pencil sound, erase pencil marks. Built again, so it shows them now, not next time.
+          if (crossing && anchor) { closePopover(); openToolPopover(app, anchor, 'pen'); }
         });
         return b;
       })
@@ -590,8 +594,19 @@ export function openToolPopover(app, anchor, tool) {
     customInput.value = s.penColor || '#201f1e';
     // a colour wheel with the ink in hand at its middle: it reads as "pick any colour", not as one
     // more swatch that happens to match the first (graphite twice in the pencil's menu, black twice in a pen's)
-    customInput.addEventListener('input', () => { customInk.style.setProperty('--ink', customInput.value); pickInk(customInput.value); });
-    customInk.style.setProperty('--ink', s.penColor || '#201f1e');
+    // The two inks the theme repaints (default black, pencil graphite) are kept for the swatches. A colour
+    // picked here is "exactly as picked", so landing on one of them by hand moves it by one shade the eye
+    // cannot see, and it stays that colour in a dark theme too.
+    const asPicked = (c) => {
+      const lc = String(c).toLowerCase();
+      return lc === '#201f1e' ? '#201f1f' : lc === PENCIL_GRAPHITE ? '#4b4a49' : c;
+    };
+    customInput.addEventListener('input', () => {
+      const c = asPicked(customInput.value);
+      customInk.style.setProperty('--ink', inkPaint(c));
+      pickInk(c);
+    });
+    customInk.style.setProperty('--ink', inkPaint(s.penColor || '#201f1e'));
     customInk.appendChild(customInput);
 
     body = h('div', {},

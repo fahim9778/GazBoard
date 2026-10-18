@@ -724,7 +724,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "Aus (Standard): Das Zeichnen mit dem Finger zeigt keine Stiftspitze an, da sich deine Fingerspitze bereits an der Stelle befindet und die Spitze sich nur unter deiner Hand versteckt. Ein Eingabestift oder eine Maus auf diesem Gerät erhalten weiterhin eine. Schalte dies ein, wenn du ein Surface oder einen anderen Touchscreen-PC verwendest und die Spitze auch unter deinem Finger sehen möchtest.",
  "Ruler snapping": "Lineal-Einrasten",
  "Mouse wheel zooms": "Mausrad zoomt",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "Aus: Rad und Trackpad verschieben, Strg + Rad zoomt.",
  "Auto-pan at the edges": "Automatisches Verschieben an den Rändern",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "Wenn du den Zeiger beim Zeichnen oder Ziehen an den Fensterrand führst, wird die Leinwand gescrollt. Eine während eines Strichs gedrückte Maustaste verschiebt die Leinwand ebenfalls.",
  "Return to select after drawing": "Nach dem Zeichnen zu „Auswählen“ zurückkehren",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "Bleistiftstriche löschen",
  "Removes every pencil line on this board and keeps the ink": "Entfernt alle Bleistiftlinien auf diesem Whiteboard und behält die Tinte",
  "No pencil marks on this board": "Keine Bleistiftstriche auf diesem Whiteboard",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "Bleistiftstriche gelöscht — Rückgängig (Strg+Z) holt sie zurück"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Bleistiftstriche gelöscht — Rückgängig (Strg+Z) holt sie zurück",
+ "This board has changed since the file": "Dieses Whiteboard wurde seit der Datei geändert",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "„{name}“ auf diesem Computer enthält Arbeit, die neuer ist als diese Datei. Die Datei darüber zu öffnen, würde diese Arbeit verlieren.",
+ "Open the board here": "Whiteboard hier öffnen",
+ "Open the file as a new board": "Datei als neues Whiteboard öffnen",
+ "Replace it with the file": "Durch die Datei ersetzen",
+ "The pencil marks here are locked - unlock them to erase them": "Die Bleistiftstriche hier sind gesperrt – entsperren Sie sie, um sie zu löschen",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Bleistiftstriche gelöscht, gesperrte behalten – Rückgängig (Strg+Z) holt sie zurück",
+ "Could not delete this board": "Dieses Whiteboard konnte nicht gelöscht werden",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Aus: Ein Trackpad scrollt, und auf Whiteboards mit Seiten (A4, A5…) blättert das Mausrad durch die Seiten. Strg+Mausrad zoomt immer."
 }

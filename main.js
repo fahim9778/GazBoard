@@ -1251,8 +1251,18 @@ function ipc() {
     }
     return out.sort((a, b) => b.modified - a.modified);
   });
+  /*
+   * A board's id is the name of its file in the boards folder, so it must never be able to name a
+   * file anywhere else: no slashes, no drive letters, nothing starting with a dot. GazBoard makes
+   * plain letters-and-digits ids itself and replaces any other arriving from a file or the network;
+   * this is the backstop. It is a little looser than that, so a board already saved under an
+   * unusual (but harmless) name still opens, saves and deletes.
+   */
+  const safeBoardId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 200
+    && !/[\\/:*?"<>|\u0000-\u001f]/.test(id) && !id.startsWith('.') && id.trim() === id;
   ipcMain.handle('boards:load', async (_e, id) => {
     await ensureDataDir();
+    if (!safeBoardId(id)) return null;
     try {
       const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), id + '.json'), 'utf8'));
       return StorageLocation.isBoardFile(raw) ? raw : null;
@@ -1275,6 +1285,8 @@ function ipc() {
      * accepting a student's doodle in the background would quietly replace
      * what the teacher was working on.
      */
+    // a board's id is its file name: one that could reach outside the boards folder is never written
+    if (!safeBoardId(board.id)) return false;
     const moveLast = !(payload && payload.setLast === false);
     // the board and the "last open" pointer are two separate files; there is no
     // ordering between them, so they go out together rather than one after the
@@ -1476,7 +1488,7 @@ function ipc() {
      * outside the folder - is never removed, whatever the page asked for.
      */
     let isBoard = false;
-    try { isBoard = /^[A-Za-z0-9_-]{1,128}$/.test(String(id)) && StorageLocation.isBoardFile(JSON.parse(await fsp.readFile(file, 'utf8'))); } catch {}
+    try { isBoard = safeBoardId(id) && StorageLocation.isBoardFile(JSON.parse(await fsp.readFile(file, 'utf8'))); } catch {}
     if (isBoard) { try { await fsp.unlink(file); ok = true; } catch { ok = false; } }
     // The "last open" pointer must not go on naming a board that no longer
     // exists, or the next launch spends its first moments trying to open a

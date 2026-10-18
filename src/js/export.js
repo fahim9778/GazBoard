@@ -670,13 +670,17 @@ export async function saveBoardFile(app) {
   return filePath;
 }
 
-export async function openBoardFile(app) {
+/**
+ * @param {{folder?: string|null}} opts  folder: the My boards folder this was asked for from. A board that is
+ *   new to this computer is filed there; one it already had stays wherever it is.
+ */
+export async function openBoardFile(app, opts = {}) {
   const paths = await window.board.openDialog({
     title: t('Open a board'),
     properties: ['openFile'],
     filters: [{ name: t('GazBoard file'), extensions: ['gazboard', 'openboard', 'json'] }]
   });
-  if (!paths.length) return;
+  if (!paths || !paths.length) return false;
   const buf = await window.board.readFile(paths[0]);
   const data = JSON.parse(new TextDecoder().decode(buf));
   // Which file this is, so re-opening it returns to its own board instead of
@@ -684,8 +688,12 @@ export async function openBoardFile(app) {
   let origin = paths[0];
   try { origin = (await window.board.fileOrigin?.(paths[0])) || paths[0]; } catch { /* keep the path */ }
   data.origin = origin;
+  let before = null;
+  if (opts.folder) { try { before = new Set(((await window.board.boards.list()) || []).map((b) => b.id)); } catch { before = null; } }
   await app.loadBoard(data, { asCopy: false });
+  if (before && !before.has(app.store.doc.id)) app.fileBoardIn?.(app.store.doc.id, opts.folder);
   app.toast(t('Opened {name}', { name: data.name || t('board') }));
+  return true;
 }
 
 export const safeName = (n) => String(n || 'board').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80).trim() || 'board';

@@ -726,7 +726,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "বন্ধ (ডিফল্ট): আঙুল দিয়ে আঁকলে পেনের নিব দেখায় না, কারণ আঙুলের ডগা আগে থেকেই সেখানে থাকে আর নিবটি হাতের নিচে ঢাকা পড়ে। এই মেশিনে স্টাইলাস বা মাউসে তবুও নিব দেখাবে। Surface বা অন্য টাচস্ক্রিন পিসিতে আঙুলের নিচেও নিব চাইলে এটি চালু করুন।",
  "Ruler snapping": "রুলারে স্ন্যাপ",
  "Mouse wheel zooms": "মাউস হুইলে জুম",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "বন্ধ: হুইল আর ট্র্যাকপ্যাডে প্যান হয়, Ctrl+হুইলে জুম।",
  "Auto-pan at the edges": "কিনারায় অটো-প্যান",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "আঁকা বা টানার সময় পয়েন্টার উইন্ডোর কিনারায় নিয়ে গেলে ক্যানভাস স্ক্রল হয়। পেন দিয়ে আঁকার সময় মাউস বাটন চেপে ধরলেও ক্যানভাস সরে।",
  "Return to select after drawing": "আঁকার পর সিলেক্টে ফিরে যান",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "পেনসিলের দাগ মুছুন",
  "Removes every pencil line on this board and keeps the ink": "এই বোর্ডের সব পেনসিলের দাগ মুছে দেয়, কালি থেকে যায়",
  "No pencil marks on this board": "এই বোর্ডে পেনসিলের কোনো দাগ নেই",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "পেনসিলের দাগ মোছা হয়েছে — আনডু (Ctrl+Z) করলে ফিরে আসবে"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "পেনসিলের দাগ মোছা হয়েছে — আনডু (Ctrl+Z) করলে ফিরে আসবে",
+ "This board has changed since the file": "ফাইলটির পর এই বোর্ডে পরিবর্তন হয়েছে",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "এই কম্পিউটারের “{name}”-এ এমন কাজ আছে যা এই ফাইলের চেয়ে নতুন। ফাইলটি এর ওপর খুললে সেই কাজ হারিয়ে যাবে।",
+ "Open the board here": "এখানকার বোর্ডটি খুলুন",
+ "Open the file as a new board": "ফাইলটি নতুন বোর্ড হিসেবে খুলুন",
+ "Replace it with the file": "ফাইল দিয়ে এটি বদলে দিন",
+ "The pencil marks here are locked - unlock them to erase them": "এখানকার পেনসিলের দাগগুলো লক করা - মুছতে হলে আগে আনলক করুন",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "পেনসিলের দাগ মোছা হয়েছে, লক করাগুলো রাখা হয়েছে - আনডু (Ctrl+Z) করলে ফিরে আসবে",
+ "Could not delete this board": "এই বোর্ডটি মোছা যায়নি",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "বন্ধ থাকলে: ট্র্যাকপ্যাডে স্ক্রল হয়, আর পেজওয়ালা বোর্ডে (A4, A5…) মাউস হুইল দিয়ে পেজগুলো স্ক্রল হয়। Ctrl+হুইল সবসময় জুম করে।"
 }

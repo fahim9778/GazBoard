@@ -1,6 +1,6 @@
 // Canvas painting: backgrounds, every object type, and the selection chrome.
 
-import { boundsOf, worldBounds } from './store.js';
+import { boundsOf, worldBounds, strokeDrawWidth } from './store.js';
 import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
@@ -487,10 +487,7 @@ export function pencilDarkness(o) {
 }
 
 /** A pencil on its side lays down a wider line. */
-export function pencilWidth(o) {
-  const tilt = Math.max(0, Math.min(1, o.tilt || 0));
-  return (o.width || 4) * (1 + tilt * 2.4);
-}
+export function pencilWidth(o) { return strokeDrawWidth({ ...o, effect: 'pencil' }); }
 
 export function drawStroke(ctx, o) {
   const pts = o.points;

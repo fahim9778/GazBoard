@@ -1,7 +1,7 @@
 // Hit testing: which object is under the pointer, what falls inside a
 // marquee or lasso, and which stroke a point eraser touches.
 
-import { boundsOf, worldBounds } from './store.js';
+import { boundsOf, worldBounds, strokeDrawWidth } from './store.js';
 import { distToSegment, pointInBox, pointInPolygon, rotatePoint, boxesIntersect, boxContains } from './util.js';
 import { shapePath } from './render.js';
 import { hitConnector } from './connectors.js';
@@ -39,7 +39,7 @@ export function hitObject(o, p, tol = 6) {
 
   if (o.type === 'stroke') {
     if (!pointInBox(lp, { x: b.x - tol, y: b.y - tol, w: b.w + tol * 2, h: b.h + tol * 2 })) return false;
-    const r = Math.max(tol, (o.width || 4) / 2 + 2);
+    const r = Math.max(tol, strokeDrawWidth(o) / 2 + 2);
     const pts = o.points;
     if (pts.length === 1) return Math.hypot(pts[0].x - lp.x, pts[0].y - lp.y) <= r;
     for (let i = 1; i < pts.length; i++) if (distToSegment(lp, pts[i - 1], pts[i]) <= r) return true;

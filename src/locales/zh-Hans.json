@@ -726,7 +726,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "关闭（默认）：用手指书写时不显示笔尖，因为指尖已经在该位置，笔尖只会被手挡住。此设备上的触控笔或鼠标仍会显示笔尖。如果你使用 Surface 或其他触屏电脑，且希望手指下方也显示笔尖，请开启此项。",
  "Ruler snapping": "标尺吸附",
  "Mouse wheel zooms": "鼠标滚轮缩放",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "关闭时：滚轮和触控板用于平移，Ctrl+滚轮用于缩放。",
  "Auto-pan at the edges": "边缘自动平移",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "书写或拖动时，将指针移到窗口边缘会滚动画布。书写时按住鼠标按键也可拖动画布。",
  "Return to select after drawing": "绘制后返回选择工具",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "擦除铅笔痕迹",
  "Removes every pencil line on this board and keeps the ink": "移除此白板上的所有铅笔线条，保留墨迹",
  "No pencil marks on this board": "此白板上没有铅笔痕迹",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "已擦除铅笔痕迹 — 撤销（Ctrl+Z）可恢复"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "已擦除铅笔痕迹 — 撤销（Ctrl+Z）可恢复",
+ "This board has changed since the file": "此白板在该文件之后已有改动",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "这台电脑上的“{name}”包含比此文件更新的内容。用该文件覆盖打开会丢失这些内容。",
+ "Open the board here": "打开这里的白板",
+ "Open the file as a new board": "将文件作为新白板打开",
+ "Replace it with the file": "用文件替换它",
+ "The pencil marks here are locked - unlock them to erase them": "这里的铅笔痕迹已锁定——解锁后才能擦除",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "铅笔痕迹已擦除，已锁定的保留——撤销（Ctrl+Z）可恢复",
+ "Could not delete this board": "无法删除此白板",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "关闭时：触控板滚动；在有页面的白板（A4、A5…）上，鼠标滚轮在页面间滚动。Ctrl+滚轮始终缩放。"
 }

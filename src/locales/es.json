@@ -726,7 +726,6 @@
  "Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.": "Desactivado (predeterminado): al dibujar con el dedo no se muestra la punta del lápiz, porque la yema del dedo ya está en el lugar y la punta solo quedaría oculta bajo tu mano. Un lápiz óptico o un mouse en este equipo siguen mostrándola. Actívalo si usas una Surface u otro PC con pantalla táctil y también quieres ver la punta bajo el dedo.",
  "Ruler snapping": "Ajuste a la regla",
  "Mouse wheel zooms": "La rueda del mouse hace zoom",
- "Off: wheel and trackpad pan, Ctrl+wheel zooms.": "Desactivado: la rueda y el panel táctil desplazan; Ctrl+rueda hace zoom.",
  "Auto-pan at the edges": "Desplazamiento automático en los bordes",
  "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "Al dibujar o arrastrar, llevar el puntero hasta el borde de la ventana desplaza el lienzo. Mantener presionado un botón del mouse durante un trazo con el lápiz también arrastra el lienzo.",
  "Return to select after drawing": "Volver a Seleccionar después de dibujar",
@@ -1135,5 +1134,14 @@
  "Erase pencil marks": "Borrar trazos de grafito",
  "Removes every pencil line on this board and keeps the ink": "Quita todas las líneas de grafito de esta pizarra y conserva la tinta",
  "No pencil marks on this board": "No hay trazos de grafito en esta pizarra",
- "Pencil marks erased — undo (Ctrl+Z) brings them back": "Trazos de grafito borrados — deshacer (Ctrl+Z) los recupera"
+ "Pencil marks erased — undo (Ctrl+Z) brings them back": "Trazos de grafito borrados — deshacer (Ctrl+Z) los recupera",
+ "This board has changed since the file": "Esta pizarra ha cambiado desde el archivo",
+ "“{name}” on this computer has work in it that is newer than this file. Opening the file over it would lose that work.": "«{name}» en este equipo tiene trabajo más reciente que este archivo. Abrir el archivo encima haría perder ese trabajo.",
+ "Open the board here": "Abrir la pizarra de aquí",
+ "Open the file as a new board": "Abrir el archivo como pizarra nueva",
+ "Replace it with the file": "Reemplazarla por el archivo",
+ "The pencil marks here are locked - unlock them to erase them": "Las marcas de lápiz de aquí están bloqueadas: desbloquéalas para borrarlas",
+ "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Marcas de lápiz borradas, las bloqueadas se han conservado: deshacer (Ctrl+Z) las recupera",
+ "Could not delete this board": "No se pudo eliminar esta pizarra",
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desactivado: el panel táctil desplaza, y en pizarras con páginas (A4, A5…) la rueda del ratón las recorre. Ctrl+rueda siempre hace zoom."
 }
