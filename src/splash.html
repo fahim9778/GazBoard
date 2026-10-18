@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<!--
+  The small window GazBoard shows while it starts: the logo, the version, the boards folder it is
+  opening and then the board, and a moving bar so a slow machine never looks frozen. Nothing in it
+  can be clicked and nothing in it can fail - it is closed the moment the board is on screen.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' app:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src app: data:">
+<style>
+  :root { --bg: #ffffff; --text: #242424; --sub: #616161; --track: #ebebeb; --bar: #5b5fc7; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1f1f1f; --text: #f3f3f3; --sub: #adadad; --track: #333; --bar: #8b8fe8; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px "Segoe UI", system-ui, -apple-system, sans-serif; user-select: none; -webkit-app-region: drag; cursor: default; }
+  .wrap { height: 100%; box-sizing: border-box; padding: 34px 32px 28px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  img { width: 76px; height: 76px; border-radius: 18px; }
+  h1 { font-size: 24px; font-weight: 700; margin: 14px 0 2px; letter-spacing: -.3px; }
+  .ver { color: var(--sub); font-size: 12.5px; }
+  .track { width: 220px; height: 4px; border-radius: 2px; background: var(--track); overflow: hidden; margin: 22px 0 14px; }
+  .track i { display: block; width: 40%; height: 100%; border-radius: 2px; background: var(--bar); animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { .track i { animation: none; width: 100%; opacity: .5; } }
+  #status { min-height: 1.4em; color: var(--sub); font-size: 13px; max-width: 360px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style></head>
+<body><div class="wrap">
+  <img src="app://board/assets/icon-256.png" alt="">
+  <h1>GazBoard</h1>
+  <div class="ver" id="ver"></div>
+  <div class="track"><i></i></div>
+  <div id="status"></div>
+</div>
+<script>
+  const q = new URLSearchParams(location.search);
+  document.getElementById('ver').textContent = q.get('v') ? 'v' + q.get('v') : '';
+  // written by the app as it goes: the folder it is opening, then the board
+  window.setStatus = (text) => { document.getElementById('status').textContent = String(text || ''); };
+</script>
+</body></html>

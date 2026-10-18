@@ -1143,5 +1143,6 @@
  "The pencil marks here are locked - unlock them to erase them": "這裡的鉛筆痕跡已鎖定——解鎖後才能擦除",
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "鉛筆痕跡已擦除，已鎖定的保留——復原（Ctrl+Z）可恢復",
  "Could not delete this board": "無法刪除此白板",
- "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "關閉時：觸控板捲動；在有頁面的白板（A4、A5…）上，滑鼠滾輪在頁面間捲動。Ctrl+滾輪一律縮放。"
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "關閉時：觸控板捲動；在有頁面的白板（A4、A5…）上，滑鼠滾輪在頁面間捲動。Ctrl+滾輪一律縮放。",
+ "Opening “{name}”…": "正在開啟「{name}」…"
 }

@@ -279,6 +279,9 @@ contextBridge.exposeInMainWorld('board', {
   onOpenFile: (cb) => ipcRenderer.on('board:open', (_e, data) => cb(data)),
   onWindowResized: (cb) => ipcRenderer.on('window:resized', () => cb()),
   onFlush: (cb) => ipcRenderer.on('app:flush', async () => { await cb(); ipcRenderer.send('app:flushed'); }),
+  // starting up: what is being opened (for the starting-up window), and that the board is on screen
+  startupStep: (text) => ipcRenderer.send('app:startupStep', String(text || '')),
+  startupDone: (info) => ipcRenderer.send('app:startupDone', info && typeof info === 'object' ? JSON.parse(JSON.stringify(info)) : {}),
 
   // used only by the hidden conversion window
   convertReady: (msg) => ipcRenderer.send('convert:ready', msg),

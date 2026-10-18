@@ -267,7 +267,17 @@ class App {
     this.initSync();
     // startupSettled tells the device tests (and anything else that needs to know) that
     // the board on screen is the one GazBoard opened on, not a stand-in about to be replaced.
-    this.restoreLastBoard().finally(() => { this.startupSettled = true; });
+    this.restoreLastBoard().finally(() => {
+      this.startupSettled = true;
+      // the board is drawn on the next frame; then the window can come up on it. A window not shown yet
+      // may get no frames at all (that is what it is waiting for), so a short timer stands in for one.
+      const next = (fn) => { let done = false; const go = () => { if (!done) { done = true; fn(); } }; requestAnimationFrame(go); setTimeout(go, 40); };
+      next(() => next(() => {
+        try {
+          window.board?.startupDone?.({ page: { settled: Math.round(performance.now()) } });
+        } catch { /* nothing to tell */ }
+      }));
+    });
     // Board text cannot wait the way emoji can: until its faces land, every
     // line on the board is measured in a stand-in font and wraps wrongly.
     this.loadBoardFonts();
@@ -738,6 +748,7 @@ class App {
       const res = await window.board.boards.resume();
       if (taken()) return;   // a file arrived, or somebody started writing, while we asked
       if (res && res.board) {
+        try { window.board.startupStep?.(t('Opening “{name}”…', { name: res.board.name || t('Untitled board') })); } catch { /* no starting-up window */ }
         await this.loadBoard(res.board, { silent: true, startup: true });
         if (res.reason === 'newest') this.toast(t('Reopened your most recent board'));
         return;

@@ -1143,5 +1143,6 @@
  "The pencil marks here are locked - unlock them to erase them": "علامات القلم الرصاص هنا مقفلة - افتح قفلها لمسحها",
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "مُسحت علامات القلم الرصاص وبقيت المقفلة - التراجع (Ctrl+Z) يعيدها",
  "Could not delete this board": "تعذّر حذف هذه اللوحة",
- "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "عند الإيقاف: لوحة اللمس تمرّر، وفي اللوحات ذات الصفحات (A4، A5…) تمرّر عجلة الفأرة بين الصفحات. Ctrl+العجلة يكبّر دائمًا."
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "عند الإيقاف: لوحة اللمس تمرّر، وفي اللوحات ذات الصفحات (A4، A5…) تمرّر عجلة الفأرة بين الصفحات. Ctrl+العجلة يكبّر دائمًا.",
+ "Opening “{name}”…": "جارٍ فتح «{name}»…"
 }

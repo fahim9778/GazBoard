@@ -70,7 +70,9 @@ function within(parent, child) {
   return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
 }
 
-function validateBoardsDir(dir, { currentDir, protectedDir, appPath, create = true } = {}) {
+// count: false skips reading every board to count them. Launch only needs to know the folder is
+// there and writable; reading a whole Google Drive or OneDrive folder to count it made every start wait.
+function validateBoardsDir(dir, { currentDir, protectedDir, appPath, create = true, count = true } = {}) {
   if (typeof dir !== 'string' || !path.isAbsolute(dir)) return { ok: false, reason: 'Choose an absolute folder path.' };
   const resolved = path.resolve(dir);
   try {
@@ -110,7 +112,7 @@ function validateBoardsDir(dir, { currentDir, protectedDir, appPath, create = tr
         if (!fs.readFileSync(probe).equals(bytes)) return { ok: false, reason: 'GazBoard could not verify writes to this folder.' };
       } finally { try { fs.unlinkSync(probe); } catch {} }
     }
-    const existingBoards = countBoards(real);
+    const existingBoards = count ? countBoards(real) : null;
     return { ok: true, path: real, isEmpty: existingBoards === 0, existingBoards };
   } catch (e) {
     return { ok: false, reason: e.message || 'This folder is not writable.' };

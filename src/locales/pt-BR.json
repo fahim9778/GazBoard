@@ -1143,5 +1143,6 @@
  "The pencil marks here are locked - unlock them to erase them": "As marcas de lápis aqui estão bloqueadas — desbloqueie-as para apagá-las",
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Marcas de lápis apagadas, as bloqueadas foram mantidas — desfazer (Ctrl+Z) as traz de volta",
  "Could not delete this board": "Não foi possível excluir este quadro",
- "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desligado: o touchpad rola e, em quadros com páginas (A4, A5…), a roda do mouse percorre as páginas. Ctrl+roda sempre aplica zoom."
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desligado: o touchpad rola e, em quadros com páginas (A4, A5…), a roda do mouse percorre as páginas. Ctrl+roda sempre aplica zoom.",
+ "Opening “{name}”…": "Abrindo “{name}”…"
 }

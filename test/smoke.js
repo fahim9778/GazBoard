@@ -16631,6 +16631,98 @@ module.exports.run = async (win, app) => {
       `pages: ${r.pages}; wheel on paper moved the view by ${r.paperScrolled} (wanted not 0) with zoom unchanged: ${r.paperZoomSame}; Ctrl+wheel zoomed: ${r.ctrlZooms}; "Mouse wheel zooms" on still zooms: ${r.settingZooms}; infinite board (pages ${r.infinitePages}) zooms: ${r.infiniteZooms}`);
   }
 
+  /* ---- the board list remembers what each file says, and notices when a file changes ---- */
+  {
+    const dir = path.join(app.getPath('userData'), 'boards');
+    const name = async () => js(`return ((await window.board.boards.list()).find((b) => b.id === 'ix1') || {}).name || null;`);
+    await js(`await window.board.boards.save({ id: 'ix1', json: JSON.stringify({ id: 'ix1', name: 'Index one', schema: 2, objects: [], pages: [], background: { color: '#ffffff' } }), setLast: false }); return true;`);
+    const first = await name();
+    // saved again through GazBoard: the new name shows at once
+    await js(`await window.board.boards.save({ id: 'ix1', json: JSON.stringify({ id: 'ix1', name: 'Index renamed', schema: 2, objects: [], pages: [], background: { color: '#ffffff' } }), setLast: false }); return true;`);
+    const second = await name();
+    // changed behind GazBoard's back (another computer, a sync service): noticed by its size and time
+    const file = path.join(dir, 'ix1.json');
+    let third = '(file not found in ' + dir + ')', gone = null;
+    try {
+      await fs.writeFile(file, JSON.stringify({ id: 'ix1', name: 'Changed elsewhere, longer', schema: 2, objects: [], pages: [], background: { color: '#ffffff' } }));
+      const later = new Date(Date.now() + 5000); await fs.utimes(file, later, later);
+      third = await name();
+      await fs.unlink(file);
+      gone = await name();
+    } catch (e) { third = 'error: ' + e.message; }
+    let indexKept = false;
+    await sleep(1800);
+    try { indexKept = !!JSON.parse(await fs.readFile(path.join(app.getPath('userData'), 'board-index.json'), 'utf8')).dirs; } catch { indexKept = false; }
+    check('the board list stays right with its quick index: a save, a change from elsewhere and a removed file all show',
+      first === 'Index one' && second === 'Index renamed' && third === 'Changed elsewhere, longer' && gone === null && indexKept,
+      `names seen: "${first}", after a save "${second}", after a change from elsewhere "${third}", after removal ${gone} (wanted null); index file kept on this computer: ${indexKept}`);
+    const SL = require('../storage-location.js');
+    const quick = SL.validateBoardsDir(dir, { create: false, count: false });
+    const full = SL.validateBoardsDir(dir, { create: false });
+    check('checking the boards folder at launch does not read every board to count them',
+      quick.ok && quick.existingBoards === null && full.ok && typeof full.existingBoards === 'number',
+      `quick check: ${JSON.stringify({ ok: quick.ok, n: quick.existingBoards })} (wanted ok, no count); full check counted: ${full.existingBoards}`);
+  }
+
+  /* ---- panning slides the board picture instead of repainting it, and the result is the same picture ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const objs = []; let k = 0;
+      for (let row = 0; row < 24; row++) for (let col = 0; col < 24; col++) {
+        const x0 = col * 110 - 1300, y0 = row * 80 - 950, pts = [];
+        for (let i = 0; i < 30; i++) pts.push({ x: x0 + i * 3, y: y0 + Math.sin(i / 3 + col) * 18, p: 0.3 + (i % 6) / 10 });
+        objs.push({ id: 'pz' + (k++), type: 'stroke', tool: 'pen', color: (row + col) % 5 ? '#201f1e' : '#e81123', width: 3, effect: (window.__pzPencil && (row * col) % 7 === 3) ? 'pencil' : 'none', opacity: 1, rotation: 0, points: pts, bbox: { x: x0, y: y0 - 18, w: 90, h: 36 } });
+      }
+      objs.push({ id: 'pznote', type: 'note', x: -200, y: -150, w: 220, h: 200, color: '#ffd94a', text: 'slide me', rotation: 0, align: 'center', font: 'ui' });
+      a.store.addMany(objs, 'x');
+      const sf = a.surface;
+      await wait(120);   // a new board centres itself at 100% on the next frame; the zoom is set after that
+      sf.cam.z = 0.5; sf.cam.x = Math.round(sf.width / 2); sf.cam.y = Math.round(sf.height / 2);
+      sf._ink = null; sf.invalidate(); sf.draw(); await wait(500); sf.draw();
+      let slid = 0;
+      for (let i = 0; i < 25; i++) { sf.cam.panBy(i < 15 ? -9 : 5, i < 15 ? -6 : 7); sf.draw(); if (sf._ink && sf._ink.slid) slid++; }
+      // Compared in the board's own offscreen picture, not by reading the screen back: on Windows the screen
+      // canvas is a low-latency one, and reading it back can return an earlier frame than the one just drawn.
+      const pic = () => { const c = sf._ink && sf._ink.canvas; return c ? c.getContext('2d').getImageData(0, 0, c.width, c.height).data : null; };
+      const W = sf._ink ? sf._ink.canvas.width : 0, H = sf._ink ? sf._ink.canvas.height : 0;
+      const compare = (x, y) => { let n = 0, worst = 0; if (!x || !y || x.length !== y.length) return { n: -1, worst: -1 }; for (let i = 0; i < x.length; i += 4) { const dd = Math.max(Math.abs(x[i] - y[i]), Math.abs(x[i + 1] - y[i + 1]), Math.abs(x[i + 2] - y[i + 2])); if (dd > 8) n++; if (dd > worst) worst = dd; } return { n, worst }; };
+      const wasSlid = !!(sf._ink && sf._ink.slid);
+      const during = pic();
+      const duringPng = sf._ink ? sf._ink.canvas.toDataURL('image/png') : '';
+      // the same view painted in full
+      sf._ink = sf._freezeScene(sf.freezeKey());
+      const fresh = pic();
+      const freshPng = sf._ink.canvas.toDataURL('image/png');
+      sf._ink = sf._freezeScene(sf.freezeKey());
+      const noise = compare(pic(), fresh);
+      // and once the hand stops, the slid picture is let go, so the next frame is a full paint
+      const settlesBefore = sf.slideSettles || 0;
+      sf._ink.slid = true; sf.draw(); await wait(450);
+      const settleRan = (sf.slideSettles || 0) - settlesBefore, slidAfter = !!(sf._ink && sf._ink.slid);
+      const mid = compare(during, fresh);
+      let x0 = W, y0 = H, x1 = -1, y1 = -1;
+      if (during && fresh) for (let i = 0; i < during.length; i += 4) {
+        const dd = Math.max(Math.abs(during[i] - fresh[i]), Math.abs(during[i + 1] - fresh[i + 1]), Math.abs(during[i + 2] - fresh[i + 2]));
+        if (dd > 8) { const px = (i / 4) % W, py = Math.floor(i / 4 / W); if (px < x0) x0 = px; if (py < y0) y0 = py; if (px > x1) x1 = px; if (py > y1) y1 = py; }
+      }
+      const info = { dpr: sf.dpr, css: [sf.width, sf.height], buffer: [W, H], cam: [sf.cam.x, sf.cam.y, sf.cam.z], fades: sf._fades.size, wasSlid, settleRan, slidAfter,
+        box: x1 < 0 ? null : [x0, y0, x1, y1] };
+      a.store.clear(); a.newBoard(true);
+      return { slid, during: mid.n, duringWorst: mid.worst, noise: noise.n, pixels: W * H, info, duringPng, freshPng };`);
+    if (r.during > r.pixels * 0.002 || r.during < 0) {
+      // pictures to look at: the slid picture, and the same view painted in full
+      for (const [k, v] of [['pan-slide-during.png', r.duringPng], ['pan-slide-full.png', r.freshPng]]) {
+        try { await fs.writeFile(path.join(OUT, k), Buffer.from(String(v).split(',')[1] || '', 'base64')); } catch { /* no pictures, just numbers */ }
+      }
+    }
+    // While sliding, the only differences are a few edge pixels of lines cut by the screen's edge, a shade
+    // apart (ink is trimmed to the view as it is drawn); the full paint when the hand stops removes even those.
+    check('panning slides the board picture along instead of repainting every stroke, matching a full paint, and is painted in full once the hand stops',
+      r.slid >= 20 && r.during >= 0 && r.during <= r.pixels * 0.002 && r.duringWorst <= 80 && r.info.settleRan >= 1 && !r.info.slidAfter,
+      `frames that slid: ${r.slid} of 25 (wanted at least 20); pixels a shade off from a full paint: ${r.during} of ${r.pixels} (largest ${r.duringWorst}); two full paints differ by ${r.noise}; ${JSON.stringify(r.info)} (wanted settleRan at least 1, slidAfter false); pictures in test/out/pan-slide-*.png when it fails`);
+  }
+
   /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {};

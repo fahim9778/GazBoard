@@ -1143,5 +1143,6 @@
  "The pencil marks here are locked - unlock them to erase them": "Las marcas de lápiz de aquí están bloqueadas: desbloquéalas para borrarlas",
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Marcas de lápiz borradas, las bloqueadas se han conservado: deshacer (Ctrl+Z) las recupera",
  "Could not delete this board": "No se pudo eliminar esta pizarra",
- "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desactivado: el panel táctil desplaza, y en pizarras con páginas (A4, A5…) la rueda del ratón las recorre. Ctrl+rueda siempre hace zoom."
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desactivado: el panel táctil desplaza, y en pizarras con páginas (A4, A5…) la rueda del ratón las recorre. Ctrl+rueda siempre hace zoom.",
+ "Opening “{name}”…": "Abriendo «{name}»…"
 }

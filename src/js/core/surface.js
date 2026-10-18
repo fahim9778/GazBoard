@@ -129,9 +129,78 @@ export class Surface {
    */
   freezeKey() {
     const cam = this.cam;
+    return `${this.freezeRest()}|${cam.x}|${cam.y}`;
+  }
+
+  /** Everything in freezeKey() except where the camera has slid to: what a pan leaves the same. */
+  freezeRest() {
+    const cam = this.cam;
     const ed = this.editing ? `${this.editing.id}:${this.editing.cell || ''}` : '';
     const page = (this.store.doc.background && this.store.doc.background.color) || '';
-    return `${this.store.rev}.${this._liveRev || 0}|${cam.x}|${cam.y}|${cam.z}|${this.width}|${this.height}|${this.dpr}|${ed}|${page}`;
+    return `${this.store.rev}.${this._liveRev || 0}|${cam.z}|${this.width}|${this.height}|${this.dpr}|${ed}|${page}`;
+  }
+
+  /**
+   * Panning without repainting the board.
+   *
+   * A pan moves the camera, so the frozen copy no longer matches and the whole board was painted
+   * again on every frame of the drag - every stroke in view, and at 50% zoom four times as many are
+   * in view as at 100%. On a slower laptop that is more than a frame's worth, and the board lags
+   * behind the hand. But a pan changes nothing ON the board: the picture is the same picture, moved.
+   * So the copy is slid across by the distance the camera moved, and only the strip that has just
+   * come into view is painted. A pan then costs one copy and a thin strip, however full the board.
+   *
+   * Only for a move of whole device pixels, so the slid pixels are exactly the ones a full paint
+   * would make; anything else (a zoom, a fractional step, a big jump) paints in full as before. When
+   * the hand stops, the board is painted once in full anyway, so nothing a slide could leave behind
+   * outlives the pan.
+   */
+  _slideFrozen() {
+    const ink = this._ink;
+    if (this.noSlide || !ink || !ink.cam || ink.rest !== this.freezeRest()) return false;
+    if (this.showsGreeting() || this._fades.size) return false;
+    const d = this.dpr || 1, cam = this.cam;
+    /*
+     * At 125% or 150% display scaling a move of whole CSS pixels is not a move of whole device pixels,
+     * and only whole device pixels can be slid exactly. So while panning the camera settles on the
+     * nearest device pixel - a fraction of a pixel nobody can see - and so does the copy it slides.
+     */
+    const snap = (v) => Math.round(v * d) / d;
+    cam.x = snap(cam.x); cam.y = snap(cam.y);
+    if (snap(ink.cam.x) !== ink.cam.x || snap(ink.cam.y) !== ink.cam.y) {
+      // a copy taken off the grid: take it again, on the grid, and slide from there next time
+      this._ink = this._freezeScene(this.freezeKey());
+      return true;
+    }
+    const fx = (cam.x - ink.cam.x) * d, fy = (cam.y - ink.cam.y) * d;
+    const dx = Math.round(fx), dy = Math.round(fy);
+    if (Math.abs(fx - dx) > 0.001 || Math.abs(fy - dy) > 0.001) return false;
+    const src = ink.canvas, bw = src.width, bh = src.height;
+    if (Math.abs(dx) > bw * 0.5 || Math.abs(dy) > bh * 0.5) return false;   // most of it is new: paint it all
+    let c = this._inkSpare;
+    if (!c || c === src || c.width !== bw || c.height !== bh) {
+      c = document.createElement('canvas');
+      c.width = bw; c.height = bh;
+    }
+    const g = c.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, bw, bh);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(src, dx, dy);
+    // the strips that came into view, in CSS pixels, painted from the board itself
+    const w = this.width, h = this.height, sx = dx / d, sy = dy / d;
+    const strips = [];
+    if (sx > 0) strips.push([0, 0, sx, h]); else if (sx < 0) strips.push([w + sx, 0, -sx, h]);
+    if (sy > 0) strips.push([0, 0, w, sy]); else if (sy < 0) strips.push([0, h + sy, w, -sy]);
+    const onload = () => { this._ink = null; this.invalidate(); };
+    for (const [x, y, sw, sh] of strips) {
+      const a = cam.toWorld(x, y), b = cam.toWorld(x + sw, y + sh);
+      this.drawScene(g, w, h, onload, { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y });
+    }
+    this._inkSpare = src;
+    this._inkCanvas = c;
+    this._ink = { canvas: c, key: this.freezeKey(), rest: ink.rest, cam: { x: cam.x, y: cam.y }, slid: true };
+    return true;
   }
 
   /**
@@ -390,13 +459,17 @@ export class Surface {
      */
     const visible = [];
     const objs = this.store.doc.objects;
+    const grow = clip ? 3 / ((this.dpr || 1) * cam.z) : 0;
+    const clipHit = clip ? { x: clip.x - grow, y: clip.y - grow, w: clip.w + grow * 2, h: clip.h + grow * 2 } : null;
     for (const id of this.store.doc.order) {
       const o = objs[id];
       if (!o) continue;
       const wb = worldBounds(o);
       if (!boxesIntersect(vbox, wb)) continue;
-      // Outside the band being repainted: its pixels are already right.
-      if (clip && !boxesIntersect(clip, wb)) continue;
+      // Outside the band being repainted: its pixels are already right. The band is painted a device
+      // pixel wider than asked (see above), so anything reaching into that extra pixel is drawn too, or
+      // the paper laid down there would leave a nick in its edge.
+      if (clipHit && !boxesIntersect(clipHit, wb)) continue;
       visible.push(o);
     }
 
@@ -458,7 +531,7 @@ export class Surface {
     // an image that finishes decoding mid-stroke has to invalidate the freeze,
     // or it would not appear until the pen lifted
     this.drawScene(g, this.width, this.height, () => { this._ink = null; this.invalidate(); });
-    return { canvas: c, key };
+    return { canvas: c, key, rest: this.freezeRest(), cam: { x: this.cam.x, y: this.cam.y } };
   }
 
   /**
@@ -589,6 +662,16 @@ export class Surface {
       this.screenTransform();
       ctx.drawImage(this._ink.canvas, 0, 0, w, h);
       this._painted = true;
+    } else if (this._slideFrozen()) {
+      // a pan: the copy slid along and the new strip painted - see _slideFrozen()
+      this.screenTransform();
+      ctx.drawImage(this._ink.canvas, 0, 0, w, h);
+      this._painted = true;
+      clearTimeout(this._slideSettle);
+      this._slideSettle = setTimeout(() => {
+        this.slideSettles = (this.slideSettles || 0) + 1;
+        if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._ink = null; this.invalidate(); }
+      }, 300);
     } else {
       /*
        * A late-decoding image has to drop the frozen copy as well as ask for a
@@ -802,7 +885,8 @@ export class Surface {
    * still empty and it comes back on its own.
    */
   showsGreeting() {
-    return !!this.greeting && !this.wet && !!this.store && this.store.objects.length === 0;
+    // the count, not the list: the list is built afresh each time it is read, and this is asked every frame
+    return !!this.greeting && !this.wet && !!this.store && this.store.count === 0;
   }
 
   /**

@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, Menu, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, net, shell, Menu, screen, nativeTheme } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -175,6 +175,35 @@ const storageFlushes = new Map();
 const deletableStorageCopies = new Map();
 const dataDir = () => activeDataDir || defaultDataDir();
 async function ensureDataDir() { await fsp.mkdir(dataDir(), { recursive: true }); }
+
+/*
+ * The board index (see boards:list): kept on this computer in the app's own folder, never in the
+ * boards folder, so a shared or synced boards folder gets no extra file and two computers never
+ * fight over it. One index per boards folder. Losing it costs nothing but one slower listing.
+ */
+const boardIndexes = new Map();
+const boardIndexFile = () => path.join(app.getPath('userData'), 'board-index.json');
+let boardIndexDisk = null;
+async function boardIndex(dir) {
+  if (boardIndexes.has(dir)) return boardIndexes.get(dir);
+  if (boardIndexDisk === null) {
+    try { boardIndexDisk = JSON.parse(await fsp.readFile(boardIndexFile(), 'utf8')); } catch { boardIndexDisk = {}; }
+    if (!boardIndexDisk || typeof boardIndexDisk !== 'object' || boardIndexDisk.version !== 1) boardIndexDisk = { version: 1, dirs: {} };
+  }
+  const idx = (boardIndexDisk.dirs[dir] && typeof boardIndexDisk.dirs[dir] === 'object') ? boardIndexDisk.dirs[dir] : {};
+  boardIndexes.set(dir, idx);
+  return idx;
+}
+let boardIndexTimer = null;
+function saveBoardIndex(dir, idx) {
+  boardIndexDisk.dirs[dir] = idx;
+  const keep = Object.keys(boardIndexDisk.dirs);
+  if (keep.length > 6) for (const d of keep.slice(0, keep.length - 6)) { if (d !== dir) delete boardIndexDisk.dirs[d]; }
+  clearTimeout(boardIndexTimer);
+  boardIndexTimer = setTimeout(() => {
+    writeAtomic(boardIndexFile(), JSON.stringify(boardIndexDisk)).catch(() => { /* next time */ });
+  }, 1500);
+}
 
 async function withStorageWrite(write) {
   while (storageWriteGate) await storageWriteGate;
@@ -625,6 +654,7 @@ async function migrateLegacyData() {
  *  Windows
  * ------------------------------------------------------------------ */
 let mainWindow = null;
+let revealMainWindow = null;      // shows the main window and closes the starting-up one (createWindow sets it)
 let pendingOpen = null;
 /*
  * Sticky, unlike pendingOpen, which is cleared the moment the file is handed to
@@ -712,11 +742,27 @@ function createWindow() {
   });
   Menu.setApplicationMenu(buildMenu());
   mainWindow.loadURL('app://board/index.html');
-  mainWindow.once('ready-to-show', () => {
+  /*
+   * With the starting-up window up, the main window waits until its board is drawn (the page says
+   * so), so it opens on the board rather than on an empty frame - but never longer than a few
+   * seconds past being ready, whatever the page is doing. Without it, it shows when ready, as always.
+   */
+  let shown = false;
+  const reveal = () => {
+    if (shown || !mainWindow || mainWindow.isDestroyed()) return;
+    shown = true;
     if (saved?.maximized) mainWindow.maximize();
     mainWindow.show();
     send('window:resized');
+    closeSplash();
+    startupMark('window shown');
     if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
+  };
+  revealMainWindow = reveal;
+  mainWindow.once('ready-to-show', () => {
+    startupMark('page ready');
+    if (!splash) { reveal(); return; }
+    setTimeout(reveal, 6000);
   });
   mainWindow.webContents.once('did-finish-load', () => {
     if (pendingOpen) { send('board:open', pendingOpen); pendingOpen = null; }
@@ -1059,6 +1105,14 @@ function sync() {
  *  IPC
  * ------------------------------------------------------------------ */
 function ipc() {
+  // the page, as it starts: what it is opening (shown in the starting-up window), then that it is done
+  ipcMain.on('app:startupStep', (_e, text) => { startupMark('page: ' + String(text || '').slice(0, 120)); splashStatus(text); });
+  ipcMain.on('app:startupDone', (_e, info) => {
+    startupMark('board on screen');
+    if (revealMainWindow) revealMainWindow();
+    const o = info && typeof info === 'object' ? info : {};
+    writeStartupTimes({ 'page timings (ms since the page began)': JSON.stringify(o.page || {}) });
+  });
   ipcMain.handle('app:info', async () => ({
     version: app.getVersion(), platform: process.platform,
     electron: process.versions.electron, chrome: process.versions.chrome, boardsDir: dataDir(),
@@ -1237,18 +1291,40 @@ function ipc() {
   });
 
   /* --- board persistence --- */
+  /*
+   * The list of boards, for My boards, Recent, links and the rest.
+   *
+   * It used to open and read every board file every time it was asked - several times while the app
+   * starts. On a boards folder in Google Drive or OneDrive that can mean fetching every board from the
+   * internet before the first one shows. So what each file says (its name, picture, size) is kept in
+   * a small index on this computer, and a file is read again only when its size or time has changed.
+   * Looking at a file's size and time is quick even on a cloud drive; reading it is not.
+   */
   ipcMain.handle('boards:list', async () => {
     await ensureDataDir();
-    const files = (await fsp.readdir(dataDir())).filter((f) => f.endsWith('.json'));
+    const dir = dataDir();
+    const files = (await fsp.readdir(dir)).filter((f) => f.endsWith('.json'));
+    const index = await boardIndex(dir);
+    const seen = new Set(files);
+    let changed = false;
     const out = [];
-    for (const f of files) {
+    const one = async (f) => {
       try {
-        const st = await fsp.stat(path.join(dataDir(), f));
-        const raw = JSON.parse(await fsp.readFile(path.join(dataDir(), f), 'utf8'));
-        if (!StorageLocation.isBoardFile(raw)) continue;      // some other program's .json: not a board
-        out.push({ id: raw.id || path.basename(f, '.json'), name: raw.name || 'Untitled board', modified: st.mtimeMs, objects: (raw.objects || []).length, thumb: raw.thumb || null, origin: raw.origin || null });
-      } catch {}
-    }
+        const st = await fsp.stat(path.join(dir, f));
+        const was = index[f];
+        if (was && was.mtime === st.mtimeMs && was.size === st.size) { if (was.meta) out.push({ ...was.meta, modified: st.mtimeMs }); return; }
+        const raw = JSON.parse(await fsp.readFile(path.join(dir, f), 'utf8'));
+        changed = true;
+        if (!StorageLocation.isBoardFile(raw)) { index[f] = { mtime: st.mtimeMs, size: st.size, meta: null }; return; }   // some other program's .json: not a board
+        const meta = { id: raw.id || path.basename(f, '.json'), name: raw.name || 'Untitled board', objects: (raw.objects || []).length, thumb: raw.thumb || null, origin: raw.origin || null };
+        index[f] = { mtime: st.mtimeMs, size: st.size, meta };
+        out.push({ ...meta, modified: st.mtimeMs });
+      } catch { /* half-written or unreadable: left out this time, looked at again next time */ }
+    };
+    // a few at a time: a cloud drive answers several requests at once much faster than one by one
+    for (let i = 0; i < files.length; i += 6) await Promise.all(files.slice(i, i + 6).map(one));
+    for (const f of Object.keys(index)) if (!seen.has(f)) { delete index[f]; changed = true; }
+    if (changed) saveBoardIndex(dir, index);
     return out.sort((a, b) => b.modified - a.modified);
   });
   /*
@@ -1292,6 +1368,8 @@ function ipc() {
     // ordering between them, so they go out together rather than one after the
     // other
     const dir = dataDir();
+    // what the index knew about this board is out of date the moment it is written
+    if (boardIndexes.has(dir)) delete boardIndexes.get(dir)[board.id + '.json'];
     await Promise.all([
       writeAtomic(path.join(dir, board.id + '.json'), board.json),
       moveLast ? setLastBoard(board.id, dir) : Promise.resolve()
@@ -1572,7 +1650,7 @@ async function prepareConfiguredStorage() {
   if (!storedStorageLocation) return;
   for (;;) {
     const check = StorageLocation.validateBoardsDir(activeDataDir, {
-      currentDir: null, protectedDir: defaultDataDir(), appPath: app.getAppPath(), create: false
+      currentDir: null, protectedDir: defaultDataDir(), appPath: app.getAppPath(), create: false, count: false
     });
     if (check.ok) return;
     const choice = process.argv.includes('--smoke') && process.env.GAZBOARD_TEST_STORAGE_FALLBACK === 'default'
@@ -1604,6 +1682,53 @@ async function prepareConfiguredStorage() {
   }
 }
 
+/*
+ * Starting up, made visible.
+ *
+ * On a slow laptop (a spinning disk, antivirus checking every file, a boards folder in Google Drive)
+ * GazBoard can take a while before its window appears, and a long wait with nothing on screen looks
+ * like the click did not work. So a small window with the logo comes up first, says what it is
+ * opening, and goes the moment the board is on screen.
+ *
+ * Every launch also writes how long each step took to startup-time.txt in the app's own folder
+ * (%APPDATA%\GazBoard on Windows), so "it starts slowly" can be answered with numbers, not guesses.
+ */
+const bootAt = Date.now() - Math.round(process.uptime() * 1000);
+const startupSteps = [];
+const startupMark = (what) => { startupSteps.push([what, Date.now() - bootAt]); };
+let splash = null;
+function showSplash() {
+  if (process.argv.includes('--smoke') || process.env.GAZBOARD_TEST || process.env.GAZBOARD_NO_SPLASH) return;
+  try {
+    splash = new BrowserWindow({
+      width: 420, height: 300, frame: false, resizable: false, movable: true, minimizable: false, maximizable: false,
+      fullscreenable: false, skipTaskbar: true, show: false, center: true, alwaysOnTop: false,
+      backgroundColor: nativeTheme.shouldUseDarkColors ? '#1f1f1f' : '#ffffff',
+      icon: path.join(SRC, 'assets', 'icon.png'),
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+    });
+    splash.loadURL('app://board/splash.html?v=' + encodeURIComponent(app.getVersion()));
+    // only if starting takes a moment: on a quick machine the board is up first and nothing flashes
+    splash.once('ready-to-show', () => setTimeout(() => { if (splash && !splash.isDestroyed()) splash.show(); }, 250));
+    splash.on('closed', () => { splash = null; });
+  } catch { splash = null; }
+}
+function splashStatus(text) {
+  if (!splash || splash.isDestroyed()) return;
+  splash.webContents.executeJavaScript(`window.setStatus && window.setStatus(${JSON.stringify(String(text || ''))})`).catch(() => {});
+}
+function closeSplash() {
+  if (splash && !splash.isDestroyed()) { try { splash.close(); } catch { /* already going */ } }
+  splash = null;
+}
+function writeStartupTimes(extra = {}) {
+  const lines = [`GazBoard ${app.getVersion()} on ${process.platform} ${process.arch}, ${new Date().toISOString()}`,
+    `boards folder: ${activeDataDir || 'the usual place'}`];
+  for (const [what, ms] of startupSteps) lines.push(`${String(ms).padStart(6)} ms  ${what}`);
+  for (const [k, v] of Object.entries(extra)) lines.push(`${k}: ${v}`);
+  fsp.writeFile(path.join(app.getPath('userData'), 'startup-time.txt'), lines.join('\n') + '\n').catch(() => {});
+}
+
 if (!singleInstance) {
   app.quit();
 } else {
@@ -1618,12 +1743,17 @@ if (!singleInstance) {
   app.on('open-file', (e, filePath) => { e.preventDefault(); openBoardPath(filePath); });   // macOS
 
   app.whenReady().then(async () => {
+    startupMark('Electron ready');
     registerProtocol();
+    showSplash();
     ipc();
+    if (storedStorageLocation && activeDataDir) splashStatus(activeDataDir);
     await prepareConfiguredStorage();
+    startupMark('boards folder checked');
     if (!storedStorageLocation) await migrateLegacyData();
     await openBoardPath(boardFileFromArgv(process.argv));
     createWindow();
+    startupMark('window created');
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   });
 }

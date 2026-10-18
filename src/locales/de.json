@@ -1143,5 +1143,6 @@
  "The pencil marks here are locked - unlock them to erase them": "Die Bleistiftstriche hier sind gesperrt – entsperren Sie sie, um sie zu löschen",
  "Pencil marks erased, locked ones kept - undo (Ctrl+Z) brings them back": "Bleistiftstriche gelöscht, gesperrte behalten – Rückgängig (Strg+Z) holt sie zurück",
  "Could not delete this board": "Dieses Whiteboard konnte nicht gelöscht werden",
- "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Aus: Ein Trackpad scrollt, und auf Whiteboards mit Seiten (A4, A5…) blättert das Mausrad durch die Seiten. Strg+Mausrad zoomt immer."
+ "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Aus: Ein Trackpad scrollt, und auf Whiteboards mit Seiten (A4, A5…) blättert das Mausrad durch die Seiten. Strg+Mausrad zoomt immer.",
+ "Opening “{name}”…": "„{name}“ wird geöffnet…"
 }
