@@ -13,6 +13,10 @@ import { t } from '../i18n.js';
 
 export const CLIENT_ID = uid('c');
 
+export function validTableSize(o) {
+  return [o.rows, o.cols].every(n => Number.isInteger(n) && n >= 1 && n <= 40);
+}
+
 export function emptyDoc(name = t('Untitled board')) {
   return {
     id: uid('b'), name, schema: 2,
@@ -357,7 +361,10 @@ export class Store {
     const list = Array.isArray(data.objects) ? data.objects
       : Array.isArray(data.objectList) ? data.objectList
         : data.objects ? Object.values(data.objects) : [];
-    for (const o of list) { d.objects[o.id] = o; d.order.push(o.id); }
+    for (const o of list) {
+      if (o.type === 'table' && !validTableSize(o)) throw new Error('Invalid table dimensions: expected 1 to 40 rows and columns');
+      d.objects[o.id] = o; d.order.push(o.id);
+    }
     this.doc = d;
     this.rev++;
     this.undoStack.length = 0; this.redoStack.length = 0; this.log.length = 0;

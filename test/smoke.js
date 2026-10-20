@@ -49,6 +49,7 @@ async function run(win, app) {
   check('app boots', await js(`return !!window.app && !!window.app.store;`));
   check('the real mouse is kept out of the suite, so moving it while the tests run changes nothing', realMouseOut, `setIgnoreMouseEvents worked: ${realMouseOut} on ${process.platform}`);
   check('canvas sized', (await js(`return window.app.surface.width;`)) > 100);
+  await require('./table-import').checkTables(win, check);
 
   /* ---- ink ---- */
   await js(`

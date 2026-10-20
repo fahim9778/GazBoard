@@ -1,6 +1,6 @@
 // Canvas painting: backgrounds, every object type, and the selection chrome.
 
-import { boundsOf, worldBounds, strokeDrawWidth } from './store.js';
+import { boundsOf, worldBounds, strokeDrawWidth, validTableSize } from './store.js';
 import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
@@ -1068,7 +1068,8 @@ export function drawImage(ctx, o, onload) {
 }
 
 export function drawTable(ctx, o, hideCell = null) {
-  const cols = o.cols || 3, rows = o.rows || 3;
+  if (!validTableSize(o)) return;
+  const { cols, rows } = o;
   const cw = o.w / cols, ch = o.h / rows;
   ctx.save();
   ctx.fillStyle = o.fill || '#ffffff';

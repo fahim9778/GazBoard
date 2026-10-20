@@ -1,6 +1,6 @@
 // Exporting: PNG bitmap, SVG vector, and the .gazboard document format.
 
-import { worldBounds } from './core/store.js';
+import { worldBounds, validTableSize } from './core/store.js';
 import { pageRects } from './core/pages.js';
 import { wrapText, boxesIntersect } from './core/util.js';
 import { objectRuns, layoutRich, effective, needsRich, chipColours, chipPad } from './core/richtext.js';
@@ -280,6 +280,7 @@ function svgObjects(objects, meas) {
         parts.push(`<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" rx="${Math.min(14, Math.abs(o.w) / 6, Math.abs(o.h) / 6)}" fill="${o.color || CURTAIN_COLOR}"${rot}/>`);
       }
     } else if (o.type === 'table') {
+      if (!validTableSize(o)) continue;
       const cw = o.w / o.cols, ch = o.h / o.rows;
       parts.push(`<g${rot}><rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="${o.fill || '#fff'}"/>`);
       for (let c = 0; c <= o.cols; c++) parts.push(`<line x1="${o.x + c * cw}" y1="${o.y}" x2="${o.x + c * cw}" y2="${o.y + o.h}" stroke="${o.stroke || '#605e5c'}" stroke-width="${o.lineWidth || 2}"/>`);
@@ -437,7 +438,7 @@ export async function linkedSources(app, ids) {
     if (!data) continue;
     try { data = (await app.resolveAssets?.(data)) || data; } catch { /* drawn without its pictures */ }
     const store = new Store();
-    store.load(data);
+    try { store.load(data); } catch { continue; }
     store.doc.id = id;
     await picturesReady(store.objects);
     await app.mathsReady?.(store.objects);
