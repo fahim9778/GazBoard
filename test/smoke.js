@@ -16856,7 +16856,7 @@ module.exports.run = async (win, app) => {
       a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
       a.store.add({ id: 'vmNote', type: 'note', x: 260, y: 220, w: 200, h: 200, color: '#ffd94a', text: 'look, do not touch', rotation: 0, align: 'center', font: 'ui' });
       a.setTool('pen'); a.surface.invalidate();
-      const r = a.surface.canvas.getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) };`);
+      const r = a.surface.canvas.getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };`);
     const wc = win.webContents;
     const chord = async () => { wc.focus(); wc.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control', 'alt'] }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control', 'alt'] }); await sleep(120); };
     const key = async (k) => { wc.sendInputEvent({ type: 'keyDown', keyCode: k }); wc.sendInputEvent({ type: 'keyUp', keyCode: k }); await sleep(80); };
@@ -16875,12 +16875,17 @@ module.exports.run = async (win, app) => {
       a.command('edit.selectAll'); a.command('insert.table'); a.command('undo'); a.store.add({ id: 'sneak', type: 'note', x: 0, y: 0, w: 10, h: 10, color: '#fff', text: '', rotation: 0 });
       a.setTool('laser'); const laser = a.tool; a.setTool('highlighter');
       a.surface.constructor.__hold = a.surface.constructor.GHOST_HOLD; a.surface.constructor.__fade = a.surface.constructor.GHOST_FADE;
-      a.surface.constructor.GHOST_HOLD = 250; a.surface.constructor.GHOST_FADE = 250;
+      a.surface.constructor.GHOST_HOLD = 60000; a.surface.constructor.GHOST_FADE = 100;   // held while it is looked for, however slow the machine
       return { noteX: n.x, noteY: n.y, camX: Math.round(a.surface.cam.x), camY: Math.round(a.surface.cam.y), afterEraser, afterNote, laser, hl: a.tool, sel: a.surface.selection.size };`);
     await key('Delete');
-    await drag(setup.left + 120, setup.top + 520, setup.left + 420, setup.top + 530);
-    const marked = await js(`const a = window.app; return { ghosts: a.surface.ghosts.length, strokes: a.store.objects.filter((o) => o.type === 'stroke').length };`);
-    await sleep(800);
+    // well inside the canvas and clear of the toolbar, whatever size the runner's window is (a Mac runner's is short)
+    const hy = setup.top + Math.round(Math.min(520, setup.h * 0.42)), hx0 = setup.left + 60, hx1 = setup.left + Math.round(Math.min(420, setup.w * 0.6));
+    const under = await js(`const e = document.elementFromPoint(${hx0}, ${hy}); return e ? (e.id || e.className || e.tagName) : 'nothing';`);
+    await drag(hx0, hy, hx1, hy + 10);
+    const marked = await js(`const a = window.app; const S = a.surface.constructor; const out = { ghosts: a.surface.ghosts.length, strokes: a.store.objects.filter((o) => o.type === 'stroke').length };
+      S.GHOST_HOLD = 0; for (const g of a.surface.ghosts) g.t = performance.now(); return out;`);
+    marked.at = `${hx0},${hy} to ${hx1},${hy + 10} in a ${setup.w}x${setup.h} canvas, over ${under}`;
+    await sleep(600);
     const faded = await js(`const a = window.app; const S = a.surface.constructor; const out = { ghosts: a.surface.ghosts.length, rev: a.store.rev - window.__vmRev, count: a.store.count - window.__vmCount, note: !!a.store.get('vmNote') };
       S.GHOST_HOLD = S.__hold; S.GHOST_FADE = S.__fade; return out;`);
     await key('Escape');
@@ -16900,7 +16905,7 @@ module.exports.run = async (win, app) => {
       `on: ${JSON.stringify(on)} (wanted view true, tool pan, body class and pill); after the drag and the refused tools: ${JSON.stringify(moved)} (wanted the note still at 260,220, the camera moved, eraser and note refused leaving pan, laser and highlighter allowed, nothing selected); board changes while in View mode: rev +${faded.rev}, objects +${faded.count} (wanted 0 and 0), note still there: ${faded.note}`);
     check('in View mode the highlighter mark is shown, never saved, and fades away by itself',
       marked.ghosts === 1 && marked.strokes === 0 && faded.ghosts === 0,
-      `right after the highlighter drag: ${marked.ghosts} fading mark(s) on screen (wanted 1), ${marked.strokes} strokes on the board (wanted 0); after the fade: ${faded.ghosts} left (wanted 0)`);
+      `right after the highlighter drag (${marked.at}): ${marked.ghosts} fading mark(s) on screen (wanted 1), ${marked.strokes} strokes on the board (wanted 0); after the fade: ${faded.ghosts} left (wanted 0)`);
     check('Escape does not leave View mode by accident; Done leaves it keeping a tool chosen inside it; Ctrl+Alt+V turns it on and off again, giving back the tool from before',
       off.afterEsc === true && !off.view && !off.body && !off.pill && off.tool === 'highlighter' && again.view && again.tool === 'pan' && again.back === 'select',
       `after Escape then Done: ${JSON.stringify(off)} (wanted afterEsc true - still in View mode - then view off, no class, no pill, the highlighter chosen inside View mode kept); pressed again from Select: ${JSON.stringify(again)} (wanted view on with the hand in place of Select, and Select back when it ends)`);
