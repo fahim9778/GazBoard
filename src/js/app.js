@@ -2175,6 +2175,16 @@ class App {
    */
   static VIEW_TOOLS = ['pan', 'laser', 'highlighter'];
 
+  /**
+   * Whether to talk about Ctrl+Alt+V at all. Android, and a touch screen with no
+   * mouse or trackpad, almost never has a keyboard to press it on - there the
+   * way out is the Done button, so that is what the words point at.
+   */
+  static viewKeysUsable() {
+    if (document.documentElement?.dataset.platform === 'android') return false;
+    try { return matchMedia('(any-pointer: fine)').matches; } catch { return true; }
+  }
+
   toggleViewMode(on = !this.viewMode) {
     on = !!on;
     if (on === this.viewMode) return;
@@ -2189,7 +2199,9 @@ class App {
       this.store.frozen = true;
       if (!App.VIEW_TOOLS.includes(this.tool)) this.setTool('pan');
       document.body.classList.add('view-mode');
-      this.toast(t('View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.'), 'eye', 4200);
+      this.toast(App.viewKeysUsable()
+        ? t('View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.')
+        : t('View mode — move around freely. Nothing on the board will change. Tap Done to leave.'), 'eye', 4200);
     } else {
       this.interaction?.cancelGesture?.();
       this.viewMode = false;
@@ -2213,7 +2225,9 @@ class App {
     const now = Date.now();
     if (now - (this._viewHintAt || 0) < 1500) return;
     this._viewHintAt = now;
-    this.toast(t('View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.'), 'eye', 3200);
+    this.toast(App.viewKeysUsable()
+      ? t('View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.')
+      : t('View mode — the board cannot be changed. Tap Done to edit again.'), 'eye', 3200);
   }
 
   /** The "View mode · Done" pill at the top of the board, so a finger can get out too. */

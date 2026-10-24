@@ -16911,6 +16911,32 @@ module.exports.run = async (win, app) => {
       `after Escape then Done: ${JSON.stringify(off)} (wanted afterEsc true - still in View mode - then view off, no class, no pill, the highlighter chosen inside View mode kept); pressed again from Select: ${JSON.stringify(again)} (wanted view on with the hand in place of Select, and Select back when it ends)`);
   }
 
+  /* ---- View mode on Android (no keyboard): the words point at Done, never at Ctrl+Alt+V ---- */
+  {
+    const r = await js(`const a = window.app; const said = []; const was = a.toast; a.toast = (m) => said.push(m);
+      const root = document.documentElement, platWas = root.dataset.platform;
+      const T = await import('app://board/js/ui/toolbar.js');
+      const menuKey = () => { const it = [...document.querySelectorAll('.menu .menu-item')].find((b) => /View mode/.test(b.textContent)); return it ? (it.querySelector('.k')?.textContent || '') : '(no item)'; };
+      a.newBoard(true);
+      a.toggleViewMode(true); a._viewHintAt = 0; a.hintViewMode(); a.toggleViewMode(false);
+      T.openMorePopover(a, document.querySelector('#toolbar [data-pop="more"]') || document.body); const deskKey = menuKey(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      const desk = said.splice(0);
+      root.dataset.platform = 'android';
+      a.toggleViewMode(true); a._viewHintAt = 0; a.hintViewMode(); a.toggleViewMode(false);
+      T.openMorePopover(a, document.querySelector('#toolbar [data-pop="more"]') || document.body); const droidKey = menuKey();
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      const droid = said.splice(0);
+      if (platWas === undefined) delete root.dataset.platform; else root.dataset.platform = platWas;
+      a.toast = was; let fine = true; try { fine = matchMedia('(any-pointer: fine)').matches; } catch {}
+      return { desk, droid, deskKey, droidKey, fine };`);
+    const deskOk = r.desk.length >= 2 && r.desk.slice(0, 2).every((m) => /Ctrl\+Alt\+V/.test(m));
+    const droidOk = r.droid.length >= 2 && r.droid.every((m) => !/Ctrl|Alt\+V/.test(m)) && r.droid.slice(0, 2).every((m) => /Done/.test(m));
+    check('on Android View mode tells you to tap Done and never mentions Ctrl+Alt+V; on a desktop it keeps the shortcut',
+      (deskOk || !r.fine) && droidOk && r.deskKey === 'Ctrl+Alt+V' && r.droidKey === '',
+      `desktop said: ${JSON.stringify(r.desk)} (wanted the shortcut in both, as this machine has a mouse: ${r.fine}); Android said: ${JSON.stringify(r.droid)} (wanted Done and no Ctrl+Alt+V); menu shortcut on desktop: "${r.deskKey}" (wanted Ctrl+Alt+V), on Android: "${r.droidKey}" (wanted none)`);
+  }
+
   /* ---- the page strip: a picture of every page, click to go there, and only a changed page is redrawn ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);

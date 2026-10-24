@@ -1158,5 +1158,7 @@
  "Show page pictures": "Mostrar miniaturas das páginas",
  "Hide page pictures": "Ocultar miniaturas das páginas",
  "A table in this board had an impossible size and has been mended": "Uma tabela deste quadro tinha um tamanho impossível e foi corrigida",
- "{n} tables in this board had impossible sizes and have been mended": "{n} tabelas deste quadro tinham tamanhos impossíveis e foram corrigidas"
+ "{n} tables in this board had impossible sizes and have been mended": "{n} tabelas deste quadro tinham tamanhos impossíveis e foram corrigidas",
+ "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "Modo visualização — mova-se à vontade. Nada no quadro vai mudar. Toque em Concluído para sair.",
+ "View mode — the board cannot be changed. Tap Done to edit again.": "Modo visualização — o quadro não pode ser alterado. Toque em Concluído para editar de novo."
 }

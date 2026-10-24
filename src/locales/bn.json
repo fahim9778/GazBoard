@@ -1151,12 +1151,14 @@
  "Each staff is about {mm} mm tall when printed. New boards use this size too.": "প্রিন্ট করলে প্রতিটি স্টাফ প্রায় {mm} মিমি উঁচু হবে। নতুন বোর্ডেও এই মাপ থাকবে।",
  "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "View mode — ইচ্ছেমতো ঘুরে দেখুন। বোর্ডের কিছুই বদলাবে না। বের হতে Ctrl+Alt+V।",
  "View mode off — editing again": "View mode বন্ধ — আবার এডিট করা যাবে",
- "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "View mode — বোর্ড বদলানো যাবে না। আবার এডিট করতে Ctrl+Alt+V চাপুন, বা Done।",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "View mode — বোর্ড বদলানো যাবে না। আবার এডিট করতে Ctrl+Alt+V চাপুন, বা \"হয়ে গেছে\"।",
  "View mode": "View mode",
  "Leave View mode": "View mode থেকে বের হন",
  "View mode (look only; laser and fading highlighter)": "View mode (শুধু দেখা; লেজার আর মিলিয়ে যাওয়া হাইলাইটার)",
  "Show page pictures": "পেজের ছবি দেখান",
  "Hide page pictures": "পেজের ছবি লুকান",
  "A table in this board had an impossible size and has been mended": "এই বোর্ডের একটি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে",
- "{n} tables in this board had impossible sizes and have been mended": "এই বোর্ডের {n}টি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে"
+ "{n} tables in this board had impossible sizes and have been mended": "এই বোর্ডের {n}টি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে",
+ "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "View mode — ইচ্ছেমতো ঘুরে দেখুন। বোর্ডের কিছুই বদলাবে না। বের হতে \"হয়ে গেছে\" চাপুন।",
+ "View mode — the board cannot be changed. Tap Done to edit again.": "View mode — বোর্ড বদলানো যাবে না। আবার এডিট করতে \"হয়ে গেছে\" চাপুন।"
 }

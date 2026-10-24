@@ -756,7 +756,7 @@ function teachingItems(app) {
   return [
     menuItem(app.presenting ? t('Stop presenting') : t('Present'), 'present', () => app.command('view.present'), { key: app.presenting ? 'Esc' : 'F5' }),
     // the shortcut is only shown where there is a keyboard to press it on
-    menuItem(app.viewMode ? t('Leave View mode') : t('View mode'), 'eye', () => app.command('view.viewMode'), { key: isPhoneLayout() ? '' : 'Ctrl+Alt+V' }),
+    menuItem(app.viewMode ? t('Leave View mode') : t('View mode'), 'eye', () => app.command('view.viewMode'), { key: isPhoneLayout() || document.documentElement?.dataset.platform === 'android' ? '' : 'Ctrl+Alt+V' }),
     menuItem(app.timer?.visible ? t('Close the class timer') : t('Class timer'), 'timer', () => app.command('timer.open')),
     menuItem(t('Cover answers again'), 'curtain', () => app.command('curtain.coverAll'), { disabled: !lifted })
   ];

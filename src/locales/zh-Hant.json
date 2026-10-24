@@ -1158,5 +1158,7 @@
  "Show page pictures": "顯示頁面縮圖",
  "Hide page pictures": "隱藏頁面縮圖",
  "A table in this board had an impossible size and has been mended": "此白板中有一個表格的尺寸不合理，已自動修復",
- "{n} tables in this board had impossible sizes and have been mended": "此白板中有 {n} 個表格的尺寸不合理，已自動修復"
+ "{n} tables in this board had impossible sizes and have been mended": "此白板中有 {n} 個表格的尺寸不合理，已自動修復",
+ "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "檢視模式 — 隨意瀏覽，白板上的內容不會被改動。點按「完成」即可離開。",
+ "View mode — the board cannot be changed. Tap Done to edit again.": "檢視模式 — 白板無法變更。點按「完成」即可繼續編輯。"
 }

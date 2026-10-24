@@ -1158,5 +1158,7 @@
  "Show page pictures": "Seitenbilder anzeigen",
  "Hide page pictures": "Seitenbilder ausblenden",
  "A table in this board had an impossible size and has been mended": "Eine Tabelle auf diesem Board hatte eine unmögliche Größe und wurde repariert",
- "{n} tables in this board had impossible sizes and have been mended": "{n} Tabellen auf diesem Board hatten unmögliche Größen und wurden repariert"
+ "{n} tables in this board had impossible sizes and have been mended": "{n} Tabellen auf diesem Board hatten unmögliche Größen und wurden repariert",
+ "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "Ansichtsmodus — frei umherbewegen. Am Board ändert sich nichts. Zum Beenden auf „Fertig“ tippen.",
+ "View mode — the board cannot be changed. Tap Done to edit again.": "Ansichtsmodus — das Board kann nicht geändert werden. Auf „Fertig“ tippen, um wieder zu bearbeiten."
 }

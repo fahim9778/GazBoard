@@ -1158,5 +1158,7 @@
  "Show page pictures": "Mostrar miniaturas de páginas",
  "Hide page pictures": "Ocultar miniaturas de páginas",
  "A table in this board had an impossible size and has been mended": "Una tabla de esta pizarra tenía un tamaño imposible y se ha reparado",
- "{n} tables in this board had impossible sizes and have been mended": "{n} tablas de esta pizarra tenían tamaños imposibles y se han reparado"
+ "{n} tables in this board had impossible sizes and have been mended": "{n} tablas de esta pizarra tenían tamaños imposibles y se han reparado",
+ "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "Modo vista — muévete libremente. Nada en la pizarra cambiará. Toca Listo para salir.",
+ "View mode — the board cannot be changed. Tap Done to edit again.": "Modo vista — la pizarra no se puede cambiar. Toca Listo para volver a editar."
 }
