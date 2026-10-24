@@ -1156,5 +1156,7 @@
  "Leave View mode": "الخروج من وضع العرض",
  "View mode (look only; laser and fading highlighter)": "وضع العرض (مشاهدة فقط؛ مؤشر الليزر وقلم تمييز يتلاشى)",
  "Show page pictures": "عرض صور الصفحات",
- "Hide page pictures": "إخفاء صور الصفحات"
+ "Hide page pictures": "إخفاء صور الصفحات",
+ "A table in this board had an impossible size and has been mended": "كان لجدول في هذه اللوحة حجم غير ممكن وقد تم إصلاحه",
+ "{n} tables in this board had impossible sizes and have been mended": "كان لـ {n} جداول في هذه اللوحة أحجام غير ممكنة وقد تم إصلاحها"
 }

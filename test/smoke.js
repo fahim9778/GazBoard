@@ -16753,6 +16753,34 @@ module.exports.run = async (win, app) => {
       `strokes: ${r.strokes} (wanted 2); with Shift: rises ${r.straightSpread} units over ${r.straightLen} (wanted 0, over 300), even pressure: ${r.evenPressure}; without Shift it rises ${r.freeSpread} (wanted more than 10 - left as drawn)`);
   }
 
+  /* ---- a table with an impossible size (from a damaged or hostile file) is mended, never frozen on (PR #42) ---- */
+  {
+    const r = await js(`const a = window.app; const toasts = []; const was = a.toast; a.toast = (m) => toasts.push(m);
+      const S = await import('app://board/js/core/store.js'); const R = await import('app://board/js/core/render.js'); const E = await import('app://board/js/export.js');
+      const bad = [JSON.parse('1e309'), -Infinity, NaN, 0, -3, 1.5, 41, 1e9, '4', null, undefined, 'abc'];
+      const want = [3, 3, 3, 1, 1, 2, 40, 40, 4, 3, 3, 3];
+      const t = (i, rows, cols) => ({ id: 'tb' + i, type: 'table', x: i * 300, y: 0, w: 280, h: 160, rows, cols, cells: { '0,0': 'kept', '45,45': 'far away' } });
+      const objects = bad.map((v, i) => t(i, v, v)); objects.push(t(99, 40, 40));
+      const t0 = performance.now();
+      await a.loadBoard({ id: 'tbl-mend', name: 'Tables', schema: 2, pages: [], objects }, { claimed: true, silent: true });
+      const got = bad.map((_, i) => { const o = a.store.get('tb' + i); return o ? o.rows + 'x' + o.cols : 'missing'; });
+      // drawing, SVG export and copying the words all finish, on the mended board and on raw, unmended data
+      a.surface.invalidate(); a.surface.draw();
+      let calls = 0; const ctx = new Proxy({}, { get: (tg, k) => (k === 'canvas' ? {} : () => { if (++calls > 20000) throw new Error('runaway'); return { width: 0 }; }) });
+      let rawDraw = 'ok'; try { for (const v of bad) R.drawTable(ctx, { type: 'table', x: 0, y: 0, w: 10, h: 10, rows: v, cols: v, cells: {} }); } catch (e) { rawDraw = e.message; }
+      const svg = E.buildSvg({ store: { doc: { background: {} }, objects: [{ type: 'table', x: 0, y: 0, w: 10, h: 10, rows: Infinity, cols: Infinity, cells: {} }] } }, { x: 0, y: 0, w: 10, h: 10 });
+      // a change arriving from another device cannot break it either
+      a.store.applyRemote([{ t: 'set', id: 'tb99', before: { cols: 40 }, after: { cols: Infinity } }]);
+      const remote = a.store.get('tb99').cols;
+      const out = { got: got.join(' '), want: want.map((n) => n + 'x' + n).join(' '), big: a.store.get('tb99') ? a.store.get('tb99').rows : null,
+        cells: a.store.get('tb0').cells['45,45'] === 'far away' && a.store.get('tb0').cells['0,0'] === 'kept', toast: toasts.join(' | '),
+        rawDraw, svgLines: (svg.match(/<line /g) || []).length, remote, ms: Math.round(performance.now() - t0) };
+      a.toast = was; a.newBoard(true); return out;`);
+    check('a table with an impossible size is mended as the board opens, drawing and SVG export never run away, a change from another device is mended too, and no cell text is lost',
+      r.got === r.want && r.big === 40 && r.cells && /12 tables/.test(r.toast) && r.rawDraw === 'ok' && r.svgLines === 8 && r.remote === 3 && r.ms < 8000,
+      `sizes after opening: ${r.got} (wanted ${r.want}); the valid 40x40 table kept ${r.big} rows; cell text kept (even outside the table): ${r.cells}; message: "${r.toast}" (wanted it to say 12 tables); drawing raw bad tables: ${r.rawDraw}; SVG of an Infinity table drew ${r.svgLines} lines (wanted 8: a 3x3 grid); remote Infinity columns became ${r.remote} (wanted 3, as on opening); took ${r.ms} ms`);
+  }
+
   /* ---- a board's pictures are fetched six at a time, and every one goes back exactly where it was ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {};

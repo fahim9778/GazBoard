@@ -1156,5 +1156,7 @@
  "Leave View mode": "離開檢視模式",
  "View mode (look only; laser and fading highlighter)": "檢視模式（只看；可用雷射筆和會自動消失的螢光筆）",
  "Show page pictures": "顯示頁面縮圖",
- "Hide page pictures": "隱藏頁面縮圖"
+ "Hide page pictures": "隱藏頁面縮圖",
+ "A table in this board had an impossible size and has been mended": "此白板中有一個表格的尺寸不合理，已自動修復",
+ "{n} tables in this board had impossible sizes and have been mended": "此白板中有 {n} 個表格的尺寸不合理，已自動修復"
 }

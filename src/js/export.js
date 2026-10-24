@@ -1,6 +1,6 @@
 // Exporting: PNG bitmap, SVG vector, and the .gazboard document format.
 
-import { worldBounds } from './core/store.js';
+import { worldBounds, tableDim } from './core/store.js';
 import { pageRects } from './core/pages.js';
 import { wrapText, boxesIntersect } from './core/util.js';
 import { objectRuns, layoutRich, effective, needsRich, chipColours, chipPad } from './core/richtext.js';
@@ -280,10 +280,10 @@ function svgObjects(objects, meas) {
         parts.push(`<rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" rx="${Math.min(14, Math.abs(o.w) / 6, Math.abs(o.h) / 6)}" fill="${o.color || CURTAIN_COLOR}"${rot}/>`);
       }
     } else if (o.type === 'table') {
-      const cw = o.w / o.cols, ch = o.h / o.rows;
+      const cols = tableDim(o.cols), rows = tableDim(o.rows), cw = o.w / cols, ch = o.h / rows;
       parts.push(`<g${rot}><rect x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" fill="${o.fill || '#fff'}"/>`);
-      for (let c = 0; c <= o.cols; c++) parts.push(`<line x1="${o.x + c * cw}" y1="${o.y}" x2="${o.x + c * cw}" y2="${o.y + o.h}" stroke="${o.stroke || '#605e5c'}" stroke-width="${o.lineWidth || 2}"/>`);
-      for (let r = 0; r <= o.rows; r++) parts.push(`<line x1="${o.x}" y1="${o.y + r * ch}" x2="${o.x + o.w}" y2="${o.y + r * ch}" stroke="${o.stroke || '#605e5c'}" stroke-width="${o.lineWidth || 2}"/>`);
+      for (let c = 0; c <= cols; c++) parts.push(`<line x1="${o.x + c * cw}" y1="${o.y}" x2="${o.x + c * cw}" y2="${o.y + o.h}" stroke="${o.stroke || '#605e5c'}" stroke-width="${o.lineWidth || 2}"/>`);
+      for (let r = 0; r <= rows; r++) parts.push(`<line x1="${o.x}" y1="${o.y + r * ch}" x2="${o.x + o.w}" y2="${o.y + r * ch}" stroke="${o.stroke || '#605e5c'}" stroke-width="${o.lineWidth || 2}"/>`);
       for (const [key, val] of Object.entries(o.cells || {})) {
         const [r, c] = key.split(',').map(Number);
         parts.push(textSvg(meas, val, o.x + c * cw + 6, o.y + r * ch + 6, cw - 12, ch - 12, { align: 'center', valign: 'middle', color: '#201f1e', size: 16, runs: objectRuns(o, key) }, ''));

@@ -1156,5 +1156,7 @@
  "Leave View mode": "Ansichtsmodus beenden",
  "View mode (look only; laser and fading highlighter)": "Ansichtsmodus (nur ansehen; Laser und verblassender Textmarker)",
  "Show page pictures": "Seitenbilder anzeigen",
- "Hide page pictures": "Seitenbilder ausblenden"
+ "Hide page pictures": "Seitenbilder ausblenden",
+ "A table in this board had an impossible size and has been mended": "Eine Tabelle auf diesem Board hatte eine unmögliche Größe und wurde repariert",
+ "{n} tables in this board had impossible sizes and have been mended": "{n} Tabellen auf diesem Board hatten unmögliche Größen und wurden repariert"
 }

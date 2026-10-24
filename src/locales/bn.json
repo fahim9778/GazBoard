@@ -1156,5 +1156,7 @@
  "Leave View mode": "View mode থেকে বের হন",
  "View mode (look only; laser and fading highlighter)": "View mode (শুধু দেখা; লেজার আর মিলিয়ে যাওয়া হাইলাইটার)",
  "Show page pictures": "পেজের ছবি দেখান",
- "Hide page pictures": "পেজের ছবি লুকান"
+ "Hide page pictures": "পেজের ছবি লুকান",
+ "A table in this board had an impossible size and has been mended": "এই বোর্ডের একটি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে",
+ "{n} tables in this board had impossible sizes and have been mended": "এই বোর্ডের {n}টি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে"
 }

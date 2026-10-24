@@ -13,6 +13,34 @@ import { t } from '../i18n.js';
 
 export const CLIENT_ID = uid('c');
 
+/*
+ * A table's rows and columns, made sane.
+ *
+ * Every table GazBoard makes has whole numbers from 1 to 40. A board file can
+ * still say anything - a damaged file, a hand-edited one, one from somewhere
+ * else - and a table claiming Infinity columns sent every loop over its cells
+ * round for ever: the window froze the moment it opened. So the size is
+ * mended wherever a table comes in (loading a board, pasting, a change from
+ * another device): numbers are rounded and kept within 1-40, anything that is
+ * not a number at all becomes 3, which is what a table with no size has always
+ * been drawn as. The cells are left alone, so text in a cell that no longer
+ * shows comes back if the table is made big enough again. Nothing is lost.
+ */
+export const TABLE_MAX = 40;
+export function tableDim(v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return 3;
+  return Math.min(TABLE_MAX, Math.max(1, Math.round(n)));
+}
+/** Mend a table's size in place. True when it needed mending. */
+export function repairTable(o) {
+  if (!o || o.type !== 'table') return false;
+  const rows = tableDim(o.rows), cols = tableDim(o.cols);
+  if (rows === o.rows && cols === o.cols) return false;
+  o.rows = rows; o.cols = cols;
+  return true;
+}
+
 export function emptyDoc(name = t('Untitled board')) {
   return {
     id: uid('b'), name, schema: 2,
@@ -64,6 +92,7 @@ export class Store {
     const d = this.doc;
     switch (op.t) {
       case 'add': {
+        repairTable(op.obj);
         d.objects[op.obj.id] = op.obj;
         if (!d.order.includes(op.obj.id)) {
           if (op.index == null || op.index >= d.order.length) d.order.push(op.obj.id);
@@ -79,7 +108,7 @@ export class Store {
       }
       case 'set': {
         const o = d.objects[op.id];
-        if (o) Object.assign(o, op.after);
+        if (o) { Object.assign(o, op.after); repairTable(o); }
         break;
       }
       case 'order': d.order = op.after.slice(); break;
@@ -371,7 +400,10 @@ export class Store {
     const list = Array.isArray(data.objects) ? data.objects
       : Array.isArray(data.objectList) ? data.objectList
         : data.objects ? Object.values(data.objects) : [];
-    for (const o of list) { d.objects[o.id] = o; d.order.push(o.id); }
+    // a table whose size makes no sense is mended on the way in (see repairTable); the count tells the app to say so
+    let repaired = 0;
+    for (const o of list) { if (repairTable(o)) repaired++; d.objects[o.id] = o; d.order.push(o.id); }
+    this.repaired = repaired;
     this.doc = d;
     this.rev++;
     this.undoStack.length = 0; this.redoStack.length = 0; this.log.length = 0;

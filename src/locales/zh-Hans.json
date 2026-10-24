@@ -1156,5 +1156,7 @@
  "Leave View mode": "退出查看模式",
  "View mode (look only; laser and fading highlighter)": "查看模式（只看；可用激光笔和会自动消失的荧光笔）",
  "Show page pictures": "显示页面缩略图",
- "Hide page pictures": "隐藏页面缩略图"
+ "Hide page pictures": "隐藏页面缩略图",
+ "A table in this board had an impossible size and has been mended": "此白板中有一个表格的尺寸不合理，已自动修复",
+ "{n} tables in this board had impossible sizes and have been mended": "此白板中有 {n} 个表格的尺寸不合理，已自动修复"
 }

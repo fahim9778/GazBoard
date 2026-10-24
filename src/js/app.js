@@ -1065,6 +1065,9 @@ class App {
     if (!opts.startup && this.panels?.page) this.panels.close();
     data = await this.resolveAssets(data);
     this.store.load(data);
+    if (this.store.repaired) this.toast(this.store.repaired === 1
+      ? t('A table in this board had an impossible size and has been mended')
+      : t('{n} tables in this board had impossible sizes and have been mended', { n: this.store.repaired }), 'help', 6000);
     this.unsavedNew = false;
     this.surface.selection.clear();
     if (data.camera) this.surface.cam.load(data.camera);

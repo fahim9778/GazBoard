@@ -1156,5 +1156,7 @@
  "Leave View mode": "Sair do modo visualização",
  "View mode (look only; laser and fading highlighter)": "Modo visualização (só olhar; laser e marca-texto que some)",
  "Show page pictures": "Mostrar miniaturas das páginas",
- "Hide page pictures": "Ocultar miniaturas das páginas"
+ "Hide page pictures": "Ocultar miniaturas das páginas",
+ "A table in this board had an impossible size and has been mended": "Uma tabela deste quadro tinha um tamanho impossível e foi corrigida",
+ "{n} tables in this board had impossible sizes and have been mended": "{n} tabelas deste quadro tinham tamanhos impossíveis e foram corrigidas"
 }
