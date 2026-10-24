@@ -142,7 +142,27 @@ jobs:
           ANDROID_VERSION_NAME: ${{ steps.version.outputs.name }}
           ANDROID_VERSION_CODE: ${{ steps.version.outputs.code }}
           ANDROID_BUILD_NUMBER: ${{ steps.version.outputs.build }}
-        run: ./android/gradlew -p android :app:assembleRelease :app:bundleRelease --stacktrace
+          UPLOAD_KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          UPLOAD_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        # The APK is the GitHub copy; the AAB is only ever for Google Play, so it is
+        # built as a Play copy that never looks at GitHub for updates.
+        #
+        # Google Play is handed the AAB signed with the UPLOAD key once its three
+        # secrets exist (Play keeps the real app signing key itself). Until then the
+        # AAB is signed with the release key, exactly as before.
+        run: |
+          set -euo pipefail
+          ./android/gradlew -p android :app:assembleRelease --stacktrace
+          if [ -n "${UPLOAD_KEYSTORE:-}" ] && [ -n "${UPLOAD_PASSWORD:-}" ] && [ -n "${UPLOAD_ALIAS:-}" ]; then
+            echo "$UPLOAD_KEYSTORE" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            test -s "$RUNNER_TEMP/upload.jks"
+            export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/upload.jks" ANDROID_KEYSTORE_PASSWORD="$UPLOAD_PASSWORD" ANDROID_KEY_ALIAS="$UPLOAD_ALIAS" ANDROID_KEY_PASSWORD="$UPLOAD_PASSWORD"
+            echo "Signing the Play bundle with the upload key"
+          else
+            echo "No upload key secrets yet: signing the Play bundle with the release key"
+          fi
+          ./android/gradlew -p android :app:bundleRelease -Pgazboard.distribution=play --stacktrace
 
       - name: Collect and verify
         id: collect

@@ -1145,5 +1145,16 @@
  "Could not delete this board": "No se pudo eliminar esta pizarra",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desactivado: el panel táctil desplaza, y en pizarras con páginas (A4, A5…) la rueda del ratón las recorre. Ctrl+rueda siempre hace zoom.",
  "Opening “{name}”…": "Abriendo «{name}»…",
- "Straight line": "Línea recta"
+ "Straight line": "Línea recta",
+ "Music staff": "Pentagrama",
+ "Guitar tab": "Tablatura de guitarra",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "Cada pentagrama mide unos {mm} mm de alto al imprimirlo. Las pizarras nuevas también usan este tamaño.",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "Modo vista — muévete libremente. Nada en la pizarra cambiará. Ctrl+Alt+V para salir.",
+ "View mode off — editing again": "Modo vista desactivado — puedes editar de nuevo",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "Modo vista — la pizarra no se puede cambiar. Pulsa Ctrl+Alt+V o Listo para volver a editar.",
+ "View mode": "Modo vista",
+ "Leave View mode": "Salir del modo vista",
+ "View mode (look only; laser and fading highlighter)": "Modo vista (solo mirar; láser y resaltador que se desvanece)",
+ "Show page pictures": "Mostrar miniaturas de páginas",
+ "Hide page pictures": "Ocultar miniaturas de páginas"
 }

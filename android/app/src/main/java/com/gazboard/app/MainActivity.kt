@@ -555,6 +555,8 @@ class MainActivity : ComponentActivity() {
    * else (the APK from GitHub, a file passed on by hand) is "github".
    */
   fun installStore(): String {
+    // a store build says so itself (see DISTRIBUTION in build.gradle.kts), however it was installed
+    if (BuildConfig.DISTRIBUTION == "play" || BuildConfig.DISTRIBUTION == "fdroid") return BuildConfig.DISTRIBUTION
     val installer = runCatching {
       if (Build.VERSION.SDK_INT >= 30) packageManager.getInstallSourceInfo(packageName).installingPackageName
       else @Suppress("DEPRECATION") packageManager.getInstallerPackageName(packageName)

@@ -1,0 +1,3 @@
+• Music staff and guitar tab paper, true to size when printed.
+• View mode (Ctrl+Alt+V, or More › View mode): move around a board freely with nothing changed. The laser still points, and the highlighter's marks fade away by themselves.
+• Page strip: a picture of every page down the side of a paper board (tap the tab on the left edge). Tap one to go there.

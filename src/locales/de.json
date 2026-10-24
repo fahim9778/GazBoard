@@ -1145,5 +1145,16 @@
  "Could not delete this board": "Dieses Whiteboard konnte nicht gelöscht werden",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Aus: Ein Trackpad scrollt, und auf Whiteboards mit Seiten (A4, A5…) blättert das Mausrad durch die Seiten. Strg+Mausrad zoomt immer.",
  "Opening “{name}”…": "„{name}“ wird geöffnet…",
- "Straight line": "Gerade Linie"
+ "Straight line": "Gerade Linie",
+ "Music staff": "Notenlinien",
+ "Guitar tab": "Gitarren-Tabulatur",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "Jedes Notensystem ist ausgedruckt etwa {mm} mm hoch. Neue Boards verwenden diese Größe ebenfalls.",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "Ansichtsmodus — frei umherbewegen. Am Board ändert sich nichts. Mit Strg+Alt+V beenden.",
+ "View mode off — editing again": "Ansichtsmodus aus — Bearbeiten wieder möglich",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "Ansichtsmodus — das Board kann nicht geändert werden. Strg+Alt+V oder „Fertig“ drücken, um wieder zu bearbeiten.",
+ "View mode": "Ansichtsmodus",
+ "Leave View mode": "Ansichtsmodus beenden",
+ "View mode (look only; laser and fading highlighter)": "Ansichtsmodus (nur ansehen; Laser und verblassender Textmarker)",
+ "Show page pictures": "Seitenbilder anzeigen",
+ "Hide page pictures": "Seitenbilder ausblenden"
 }

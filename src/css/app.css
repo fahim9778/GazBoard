@@ -585,6 +585,16 @@ input, textarea { font: inherit; }
 #backPill:hover { border-color: var(--accent); }
 body.presenting #backPill { top: 12px; }
 
+/* View mode: a quiet pill that says so, with a way out for a finger */
+#viewPill { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 31; display: none; align-items: center; gap: 8px;
+  padding: 4px 4px 4px 12px; border-radius: 999px; border: 1px solid var(--stroke); background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow-3); font-size: 13px; }
+#viewPill.show { display: inline-flex; }
+#viewPill .view-done { border: 0; border-radius: 999px; padding: 5px 12px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+body.view-mode #backPill { top: 100px; }
+body.presenting #viewPill { top: 12px; }
+body.presenting.view-mode #backPill { top: 54px; }
+
 .menu { min-width: 240px; padding: 6px; }
 .menu-item {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 6px;
@@ -1550,3 +1560,44 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .mx-key.typeset .katex { font-size: 1em; }
 .mx-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .mx-tip { flex: 1; font-size: 11.5px; color: var(--text-2); }
+
+/* View mode: the tools that would change the board step back; the hand, the laser and the highlighter stay */
+body.view-mode #toolbar .pen:not([data-tool="highlighter"]),
+body.view-mode #toolbar .tool:not([data-tool="pan"]):not([data-tool="laser"]):not([data-pop="more"]):not([data-cmd="ruler"]),
+body.view-mode #pagebar [data-page="add"] { opacity: .35; }
+
+/* ---------------- page strip (pads only) ---------------- */
+#pagestrip { position: absolute; left: 12px; top: 58px; bottom: 92px; z-index: 19; width: 144px; display: none; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--stroke); border-radius: 10px; box-shadow: var(--shadow-1); overflow: hidden; }
+#pagestrip.show { display: flex; }
+#pagestrip .ps-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 4px 12px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+#pagestrip .ps-close { width: 26px; height: 26px; border-radius: 6px; display: grid; place-items: center; color: var(--text-2); background: none; border: 0; cursor: pointer; }
+#pagestrip .ps-close:hover { background: var(--surface-2); }
+#pagestrip .ps-close svg { transform: rotate(180deg); }
+/* the tab on the left edge that opens the strip, like a PDF reader's page list */
+#pagetab { position: absolute; left: 0; top: 50%; transform: translateY(-50%); z-index: 19; display: none; flex-direction: column; align-items: center; gap: 2px;
+  padding: 10px 5px 8px 4px; border: 1px solid var(--stroke); border-left: 0; border-radius: 0 10px 10px 0; background: var(--surface); color: var(--text-2);
+  box-shadow: var(--shadow-1); cursor: pointer; }
+#pagetab.show { display: flex; }
+#pagetab:hover { color: var(--accent); background: var(--surface-2); }
+#pagetab .pt-arrow { display: flex; opacity: .7; }
+body.presenting #pagetab, body.typing #pagetab { display: none; }
+[dir="rtl"] #pagetab { left: auto; right: 0; border-left: 1px solid var(--stroke); border-right: 0; border-radius: 10px 0 0 10px; }
+[dir="rtl"] #pagetab .pt-arrow svg, [dir="rtl"] #pagestrip .ps-close svg { transform: none; }
+[dir="rtl"] #pagetab .pt-arrow svg { transform: rotate(180deg); }
+#pagestrip .ps-list { flex: 1; overflow-y: auto; padding: 2px 8px 10px; display: flex; flex-direction: column; gap: 10px; }
+#pagestrip .ps-page { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; border-radius: 8px; border: 2px solid transparent; background: none; cursor: pointer; }
+#pagestrip .ps-page:hover { background: var(--surface-2); }
+#pagestrip .ps-page.current { border-color: var(--accent); }
+#pagestrip .ps-sheet { display: block; box-shadow: 0 1px 3px rgba(0,0,0,.22); background: #fff; line-height: 0; }
+#pagestrip .ps-num { font-size: 11.5px; color: var(--text-2); }
+body.presenting #pagestrip { display: none; }
+/* Arabic keeps the page navigator on the left, so the strip goes to the right */
+[dir="rtl"] #pagestrip { left: auto; right: 12px; }
+/* a phone: a slimmer strip with smaller pictures, so the page beside it stays readable */
+@media (max-width: 699px) {
+  #pagestrip { width: 100px; left: 6px; top: 52px; bottom: 150px; }
+  #pagestrip .ps-head { padding: 4px 2px 2px 8px; }
+  #pagestrip .ps-list { padding: 2px 4px 8px; gap: 6px; }
+  [dir="rtl"] #pagestrip { left: auto; right: 6px; }
+}

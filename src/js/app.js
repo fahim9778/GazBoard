@@ -29,6 +29,7 @@ import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { initPresentBar, syncPresentBar } from './ui/present.js';
 import { ClassTimer } from './ui/timer.js';
+import { PageStrip } from './ui/pagestrip.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
 import { closePopover, popoverOpen, openPopover, h } from './ui/popover.js';
@@ -75,7 +76,7 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', arrowRoute: 'straight', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, pageStrip: false, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -214,6 +215,7 @@ class App {
     translatePage();
     window.board?.setLanguage?.(currentLanguage());
     this.store = new Store();
+    this.store.onFrozen = () => this.hintViewMode();
     // arrows look up the things they hold on to on this board
     useConnectorStore(this.store);
     setConnectorBounds(connectorBounds);
@@ -222,6 +224,7 @@ class App {
     // colour rather than a white flash that corrects itself a moment later.
     this.applyTheme();
     this.surface = new Surface(document.getElementById('c'), this.store, { lowLatency: !!this.settings.lowLatencyInk });
+    this.pageStrip = new PageStrip(this);
     this.surface.showGroupOutlines = this.settings.showGroupOutlines !== false;
     // Windows paints the last sliver of pen ink itself when this is on. Off
     // by default while it is an experiment; see inktrail.js.
@@ -255,6 +258,7 @@ class App {
     // Presenting and the class timer. Neither is part of the board: both
     // belong to the lesson, so they live on the app and outlast a board switch.
     this.presenting = false;
+    this.viewMode = false;        // look around only: see toggleViewMode()
     this.presentToolsPinned = false;
     initPresentBar(this);
     this.timer = new ClassTimer(document.getElementById('stage'), {
@@ -686,19 +690,29 @@ class App {
    * assets folder, say) becomes a visible gap rather than a silent one, and
    * the reference is KEPT: put the file back and the picture returns.
    */
-  async resolveAssets(data) {
+  async resolveAssets(data, getAsset = (id) => window.board.assets.get(id)) {   // getAsset: the suite times the fetches with its own
     if (!data || !Array.isArray(data.objects) || !window.board.assets) return data;
-    const objects = [];
+    /*
+     * Pictures (and the pages of an imported PDF, Word, PowerPoint or Excel file, which are pictures)
+     * are kept as files beside the board and fetched when it opens. Fetched a few at a time rather than
+     * one after another: from a boards folder in Google Drive or OneDrive every file has its own wait
+     * before it starts, and twenty pages waiting in a queue add up; side by side they mostly overlap.
+     * The order on the board does not change - each picture goes back exactly where it came from.
+     */
+    const objects = data.objects.slice();
     let missing = 0;
-    for (const o of data.objects) {
-      const ref = o && o.type === 'image' && typeof o.src === 'string' && o.src.startsWith('asset:');
-      if (!ref) { objects.push(o); continue; }
-      const id = o.src.slice(6);
+    const jobs = [];
+    data.objects.forEach((o, i) => {
+      if (o && o.type === 'image' && typeof o.src === 'string' && o.src.startsWith('asset:')) jobs.push(i);
+    });
+    const one = async (i) => {
+      const o = data.objects[i], id = o.src.slice(6);
       let url = null;
-      try { url = await window.board.assets.get(id); } catch { url = null; }
-      if (url) objects.push({ ...o, src: url, assetId: id });
-      else { missing++; objects.push({ ...o, src: '', assetId: id, missing: true }); }
-    }
+      try { url = await getAsset(id); } catch { url = null; }
+      if (url) objects[i] = { ...o, src: url, assetId: id };
+      else { missing++; objects[i] = { ...o, src: '', assetId: id, missing: true }; }
+    };
+    for (let k = 0; k < jobs.length; k += 6) await Promise.all(jobs.slice(k, k + 6).map(one));
     if (missing) {
       this.toast(missing === 1
         ? t('One picture could not be found - its place is kept on the board')
@@ -857,6 +871,7 @@ class App {
    *   that was open before.
    */
   newBoard(silent = false, opts = {}) {
+    if (this.viewMode) this.toggleViewMode(false);
     this.store.reset();
     this.surface.selection.clear();
     this.applyCanvasDefaults();
@@ -1036,6 +1051,7 @@ class App {
     // reopen, it does not get to land on top of that.
     if (!opts.startup) this.boardOpenedExplicitly = true;
     if (!opts.startup) await this.saveBeforeLeaving();
+    this.surface.ghosts.length = 0;     // View mode highlights belong to the board they were made on
     // A board arriving from a file has to be given its own place to live before
     // anything is written, or the first autosave lands on somebody else's board.
     // `claimed` means the caller has already decided which board on this
@@ -1087,6 +1103,7 @@ class App {
    * since cannot have stray content in the first place.
    */
   async checkStrayContent(data) {
+    if (this.viewMode) return;          // a question whose answers all change the board: asked again once editing
     if ((data?.schema ?? 1) >= 2) return;
     if (!this.pageCount) return;
     const stray = this.offPageObjects({ edges: true });
@@ -1107,6 +1124,8 @@ class App {
   static PLACING = ['note', 'text', 'shape', 'emoji', 'table'];
 
   setTool(tool) {
+    // View mode keeps only the hand, the laser and the highlighter (whose marks fade)
+    if (this.viewMode && !App.VIEW_TOOLS.includes(tool)) { this.hintViewMode(); this.syncUI(); return; }
     if (tool === 'pen' || tool === 'highlighter') this.lastInkTool = tool;
     if (this.tool === tool) return;
     /*
@@ -1144,6 +1163,7 @@ class App {
   setSelection(ids, additive = false, { whole = true } = {}) {
     const sel = this.surface.selection;
     if (!additive) sel.clear();
+    if (this.viewMode) ids = [];          // nothing is picked up in View mode, so nothing is selected
     const wanted = whole ? withGroups(this.store, ids, this.openGroup) : ids;
     for (const id of wanted) if (this.store.has(id)) sel.add(id);
     // Stepping outside the opened group closes it again, so the next click on
@@ -2137,6 +2157,78 @@ class App {
    *  Presenting
    * ================================================================= */
 
+  /* ---------------- View mode ----------------
+   *
+   * Looking at a board without any risk of changing it: a finished lesson
+   * opened to revise from, a board handed round a class, a big mind map being
+   * walked through. The hand moves and zooms freely, the laser points, and the
+   * highlighter marks things the way a marker marks a sheet of glass laid
+   * over the page - the mark fades by itself a few seconds later and is never
+   * saved. Everything else that could change the board is refused, here and,
+   * as a last guard, in the store itself.
+   *
+   * Ctrl+Alt+V (Cmd+Option+V) turns it on and off: three keys, so it is never
+   * hit by accident, and not Ctrl+Shift+V, which most programs use to paste.
+   */
+  static VIEW_TOOLS = ['pan', 'laser', 'highlighter'];
+
+  toggleViewMode(on = !this.viewMode) {
+    on = !!on;
+    if (on === this.viewMode) return;
+    if (on) {
+      this.interaction?.cancelGesture?.();
+      this.commitTextEdit();
+      this.mathEditor?.close?.();
+      closePopover();
+      this.viewToolBefore = this.tool;
+      this.setSelection([]);
+      this.viewMode = true;
+      this.store.frozen = true;
+      if (!App.VIEW_TOOLS.includes(this.tool)) this.setTool('pan');
+      document.body.classList.add('view-mode');
+      this.toast(t('View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.'), 'eye', 4200);
+    } else {
+      this.interaction?.cancelGesture?.();
+      this.viewMode = false;
+      this.store.frozen = false;
+      this.surface.ghosts.length = 0;
+      this.surface._ghostLayer = null;     // a whole screen's worth of pixels, only needed in View mode
+      document.body.classList.remove('view-mode');
+      // the hand was only lent for View mode; a tool chosen inside it stays chosen
+      const back = this.viewToolBefore;
+      this.viewToolBefore = null;
+      if (back && this.tool === 'pan' && back !== 'pan') this.setTool(back);
+      this.toast(t('View mode off — editing again'), 'pen', 2000);
+    }
+    this.syncViewPill();
+    this.syncUI();
+    this.surface.invalidate();
+  }
+
+  /** Said once in a while, not on every refused key press. */
+  hintViewMode() {
+    const now = Date.now();
+    if (now - (this._viewHintAt || 0) < 1500) return;
+    this._viewHintAt = now;
+    this.toast(t('View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.'), 'eye', 3200);
+  }
+
+  /** The "View mode · Done" pill at the top of the board, so a finger can get out too. */
+  syncViewPill() {
+    let el = document.getElementById('viewPill');
+    if (!el) {
+      if (!this.viewMode) return;
+      el = h('div', { id: 'viewPill', role: 'status' });
+      const done = h('button', { type: 'button', class: 'view-done' }, t('Done'));
+      done.addEventListener('click', () => this.toggleViewMode(false));
+      el.append(h('span', { html: icon('eye', 15), style: 'display:flex' }), h('span', { class: 'view-label' }, t('View mode')), done);
+      (document.getElementById('stage') || document.body).appendChild(el);
+    }
+    el.classList.toggle('show', this.viewMode);
+    const title = document.getElementById('boardTitle');
+    if (title) title.readOnly = this.viewMode;
+  }
+
   /**
    * The board, the whole screen, and nothing else.
    *
@@ -2247,6 +2339,7 @@ class App {
   }
 
   applyTemplate(tpl) {
+    if (this.viewMode) { this.hintViewMode(); return false; }
     // a canvas-size template only sets the page; it adds nothing to the board
     if (tpl.page) { this.setPageSize(tpl.page.paper, tpl.page.orientation); return; }
     const objs = tpl.build();
@@ -2271,8 +2364,13 @@ class App {
   }
 
   /* ---------------- commands ---------------- */
+  /** Commands that change the board, refused in View mode. Looking, copying out and exporting stay. */
+  static VIEW_BLOCKED = /^(undo|redo|edit\.(?!copy\b|copyPicture|copyText)|arrow\.|table\.|order\.|insert\.|curtain\.|page\.(add|duplicate|delete|fitContent)$)/;
+
   command(id, arg = null) {
     const s = this.store, sf = this.surface;
+    if (id === 'view.viewMode') { this.toggleViewMode(); return; }
+    if (this.viewMode && App.VIEW_BLOCKED.test(id)) { this.hintViewMode(); return; }
     switch (id) {
       case 'undo': case 'edit.undo': this.textEditor.commit(); s.undo(); this.pruneSelection(); break;
       case 'redo': case 'edit.redo': this.textEditor.commit(); s.redo(); this.pruneSelection(); break;
@@ -2760,6 +2858,7 @@ class App {
   }
 
   async pasteAt(wp) {
+    if (this.viewMode) { this.hintViewMode(); return false; }
     if (!wp) wp = this.pastePoint();
     const held = this.clipboard.length;
     const now = await this.clipboardNow();
@@ -2836,6 +2935,7 @@ class App {
     syncToolbar(this);
     syncPresentBar(this);
     updateSelectionBar(this);
+    this.pageStrip?.sync();
     this.syncZoom();
     this.interaction?.refreshInkCursor?.();
   }
@@ -2865,6 +2965,7 @@ class App {
     if (label) label.textContent = t('Page {n} of {total}', { n: i + 1, total: n });
     bar.querySelector('[data-page="prev"]').disabled = i <= 0;
     bar.querySelector('[data-page="next"]').disabled = i >= n - 1;
+    this.pageStrip?.markCurrent();
   }
 
   /**
@@ -3205,6 +3306,7 @@ class App {
    * @param {string} paperId  a PAPER id, or 'infinite'
    */
   async setPageSize(paperId, orientation = 'portrait') {
+    if (this.viewMode) { this.hintViewMode(); return false; }
     const { pageWorldSize, paperById } = await import('./ui/pdfdialog.js');
 
     if (paperId === 'infinite' || !paperId) {
@@ -3431,6 +3533,7 @@ class App {
    * moved - this must never re-centre someone's writing. One undo.
    */
   bringOntoPages(stray = this.offPageObjects(), margin = 24) {
+    if (this.viewMode) { this.hintViewMode(); return false; }
     const pages = this.pages;
     if (!pages.length || !stray.length) return false;
     const rects = pageRects(pages);
@@ -3463,6 +3566,7 @@ class App {
    * @returns {boolean} false when there was nothing to do
    */
   fitContentToPage(margin = 24) {
+    if (this.viewMode) { this.hintViewMode(); return false; }
     const pages = this.pages;
     if (!pages.length) { this.toast(t('This board has no page — it is an infinite canvas')); return false; }
     const rects = pageRects(pages);
@@ -3981,6 +4085,7 @@ class App {
       [t('Link to another board'), t('@ on the board, or in words')], [t('Follow a link with any tool'), 'Ctrl+click'],
       ['h', t('Teaching')],
       [t('Present'), 'F5'], [t('Stop presenting'), 'Esc'],
+      [t('View mode (look only; laser and fading highlighter)'), 'Ctrl+Alt+V'],
       [t('Next / previous page while presenting'), t('Page Down / Page Up, or the arrows')],
       [t('Lift an answer cover'), t('Tap it with the pen, a finger or the laser')],
       ['h', t('Files')],
@@ -4267,7 +4372,8 @@ class App {
           this.commitTextEdit();
           await this.persist();
           await this.loadBoard(data, { asCopy: false });
-        } else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
+        } else if (this.viewMode && (isImagePath(path) || isDocPath(path))) this.hintViewMode();
+        else if (isImagePath(path)) await insertImagesFromPaths(this, [path]);
         else if (isDocPath(path)) await insertDocument(this, path);
         else this.toast(t('Choose a board, image, PDF, or supported document'), 'help');
       } catch (e) { this.toast(t('Could not open file: {error}', { error: e.message }), 'help'); }
@@ -4288,6 +4394,7 @@ class App {
     // paste from the system clipboard
     document.addEventListener('paste', async (e) => {
       if (this.textEditor.active) return;
+      if (this.viewMode && !(e.target instanceof Element && e.target.closest?.('input, textarea, [contenteditable]'))) { e.preventDefault(); this.hintViewMode(); return; }
       // Pasting into a box that takes typing - the maths editor, a sharing
       // code, a board name, a dialog's field - is that box's paste, not the board's.
       const el = e.target instanceof Element ? e.target : document.activeElement;
@@ -4401,6 +4508,13 @@ class App {
    */
   async dropFiles(files, at) {
     if (!files.length) return;
+    // View mode: a board dropped in still opens, but nothing is added to this one
+    if (this.viewMode) {
+      const boards = files.filter((f) => /\.(gazboard|openboard|json)$/i.test(f.name || ''));
+      if (boards.length < files.length) this.hintViewMode();
+      if (!boards.length) return;
+      files = boards;
+    }
     const pathOf = (f) => f.path || window.board.pathForFile?.(f) || '';
     const paths = files.map(pathOf);
     const name = (f) => f.name || '?';
@@ -4429,8 +4543,12 @@ class App {
     const imgs = paths.filter(isImagePath);
     const docs = paths.filter(isDocPath);
     const other = paths.filter((p) => !isImagePath(p) && !isDocPath(p) && p !== boardFile);
-    if (imgs.length) await insertImagesFromPaths(this, imgs, at);
-    for (const d of docs) await insertDocument(this, d);
+    // View mode: a board dropped in still opens, but nothing is added to this one
+    if (this.viewMode && (imgs.length || docs.length)) this.hintViewMode();
+    else {
+      if (imgs.length) await insertImagesFromPaths(this, imgs, at);
+      for (const d of docs) await insertDocument(this, d);
+    }
     if (boardFile) window.dispatchEvent(new CustomEvent('gazboard:import-file', { detail: boardFile }));
     if (other.length) this.toast(t('Could not add {names} - drop a picture, a document or a board', { names: other.map(base).join(', ') }), 'help', 6000);
   }
@@ -4443,6 +4561,9 @@ class App {
     const mod = e.ctrlKey || e.metaKey;
 
     if (e.code === 'Space') { this.interaction.spaceDown = true; e.preventDefault(); return; }
+
+    // View mode: Ctrl+Alt+V, or Cmd+Option+V. By key code, because Alt (Option on a Mac) changes the letter typed.
+    if (mod && e.altKey && !e.shiftKey && e.code === 'KeyV') { e.preventDefault(); this.toggleViewMode(); return; }
 
     // F5 presents, as it does in every slide program; Shift+F5 too.
     if (e.key === 'F5') { e.preventDefault(); if (!this.presenting) this.command('view.present'); return; }
@@ -4492,6 +4613,10 @@ class App {
       return;
     }
 
+    // nothing is selected in View mode, so these have nothing to act on but the board
+    if (this.viewMode && ['Delete', 'Backspace', 'F2', '@'].includes(e.key)) { e.preventDefault(); this.hintViewMode(); return; }
+    if (this.viewMode && e.key >= '1' && e.key <= '9') { this.hintViewMode(); return; }
+
     switch (e.key) {
       case 'Delete': case 'Backspace': e.preventDefault(); this.command('edit.delete'); return;
       case 'Escape': {
@@ -4508,6 +4633,8 @@ class App {
         if (this.interaction?.cancelGesture?.()) return;
         // Presenting: Escape is how everyone expects to get out of it.
         if (this.presenting) { this.stopPresenting(); return; }
+        // not a way out: one stray press (or a clicker's Esc) must not turn editing back on
+        if (this.viewMode) { this.hintViewMode(); return; }
         // 2. A tool is armed and waiting to drop something - a note, a text
         //    box, a shape, an emoji. Changing your mind before the drop puts
         //    you back where you were, which is the pen if you were writing and

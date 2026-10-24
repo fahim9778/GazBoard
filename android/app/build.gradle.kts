@@ -18,7 +18,22 @@ val productVersion = product["version"].toString()
  * Both come from the environment when the release workflow sets them, and fall
  * back to sensible values so a plain `assembleRelease` on a laptop still works.
  */
-val androidBuild = (System.getenv("ANDROID_BUILD_NUMBER") ?: "1").toInt()
+val androidBuild = (System.getenv("ANDROID_BUILD_NUMBER")
+  ?: project.findProperty("gazboard.androidBuild") as String? ?: "1").toInt()
+
+/*
+ * Which shop this build is for: "github" (the APK on the Releases page, which
+ * may look at GitHub for a newer one when asked), "play" or "fdroid". A store
+ * build never checks GitHub or offers a download - the store it came from
+ * updates it, and Google Play allows no other way. Decided when the app is
+ * BUILT, not guessed when it runs: an F-Droid APK saved from a browser, or a
+ * Play bundle installed by hand, still knows what it is.
+ *
+ *   ./gradlew :app:bundleRelease -Pgazboard.distribution=play
+ *   ./gradlew :app:assembleRelease -Pgazboard.distribution=fdroid -Pgazboard.androidBuild=2
+ */
+val distribution = (project.findProperty("gazboard.distribution") as String?)
+  ?.takeIf { it in setOf("github", "play", "fdroid") } ?: "github"
 val androidVersionName = System.getenv("ANDROID_VERSION_NAME") ?: "$productVersion-android.$androidBuild"
 val androidVersionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: run {
   // 2.6.5 build 1 -> 2 06 05 01. Two digits each, so it only ever increases.
@@ -62,6 +77,16 @@ android {
     versionCode = androidVersionCode
     versionName = androidVersionName
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("String", "DISTRIBUTION", "\"$distribution\"")
+  }
+  /*
+   * No Google dependency report inside the APK. It is an encrypted block only
+   * Google can read; F-Droid's scanner rejects APKs that carry one, and the
+   * GitHub APK has no use for it. The Play bundle keeps it, where Play uses it.
+   */
+  dependenciesInfo {
+    includeInApk = false
+    includeInBundle = true
   }
   buildFeatures { buildConfig = true }
   signingConfigs {

@@ -904,6 +904,7 @@ function buildMenu() {
         // page also has to hear it while presenting, and a menu that claimed
         // the key would stop it getting there.
         { label: T('Present'), accelerator: 'F5', registerAccelerator: false, click: cmd('view.present') },
+        { label: T('View mode'), accelerator: 'CmdOrCtrl+Alt+V', registerAccelerator: false, click: cmd('view.viewMode') },
         { label: T('Class timer'), click: cmd('timer.open') },
         { label: T('Cover answers again'), click: cmd('curtain.coverAll') },
         { type: 'separator' },

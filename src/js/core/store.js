@@ -99,10 +99,20 @@ export class Store {
     }
   }
 
+  /**
+   * View mode's last guard. While frozen nothing is applied: every edit comes
+   * through commit(), undo() or redo(), so refusing here means a path that the
+   * app forgot to close still cannot change the board. onFrozen is told, so
+   * the person hears why nothing happened.
+   */
+  frozen = false;
+  onFrozen = null;
+
   /** Run ops as one undoable transaction. */
   commit(label, ops) {
     ops = ops.filter(Boolean);
     if (!ops.length) return;
+    if (this.frozen) { this.onFrozen?.(label); return; }
     const inverse = [];
     for (const op of ops) { inverse.unshift(this._invert(op)); this._apply(op); }
     this.undoStack.push({ label, ops, inverse });
@@ -153,6 +163,7 @@ export class Store {
   applyRemote(ops) { for (const op of ops) this._apply(op); this.emit('remote'); }
 
   undo() {
+    if (this.frozen) { this.onFrozen?.('undo'); return false; }
     const tx = this.undoStack.pop();
     if (!tx) return false;
     for (const op of tx.inverse) this._apply(op);
@@ -162,6 +173,7 @@ export class Store {
   }
 
   redo() {
+    if (this.frozen) { this.onFrozen?.('redo'); return false; }
     const tx = this.redoStack.pop();
     if (!tx) return false;
     for (const op of tx.ops) this._apply(op);
@@ -300,6 +312,8 @@ export class Store {
   }
 
   commitSnapshot(label, snap) {
+    // frozen: whatever a gesture moved on screen goes back where it was
+    if (this.frozen) { if (this.restoreSnapshot(snap)) this.emit('restore'); this.onFrozen?.(label); return; }
     const ops = [];
     for (const [id, before] of snap) {
       const now = this.get(id);

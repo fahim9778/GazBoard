@@ -344,6 +344,7 @@ function initPagebar(app) {
   const bar = document.getElementById('pagebar');
   if (!bar) return;
   const btn = (k) => bar.querySelector(`[data-page="${k}"]`);
+
   btn('prev').innerHTML = icon('back', 18);
   btn('next').innerHTML = `<span style="display:flex;transform:rotate(180deg)">${icon('back', 18)}</span>`;
   btn('add').innerHTML = icon('insert', 18);
@@ -357,6 +358,9 @@ function initPagebar(app) {
   btn('more').addEventListener('click', (e) => {
     const last = app.pageCount <= 1;
     openPopover(e.currentTarget, h('div', { class: 'menu' },
+      // the page strip: small pictures of every page down the side of the board
+      menuItem(app.pageStrip?.open ? t('Hide page pictures') : t('Show page pictures'), 'grid', () => app.pageStrip?.toggle()),
+      h('div', { class: 'menu-sep' }),
       menuItem(t('Add a page after this one'), 'insert', () => app.command('page.add')),
       menuItem(t('Duplicate this page'), 'duplicate', () => app.command('page.duplicate')),
       menuItem(t('Fit the whole pad in the window'), 'fit', () => app.command('view.fitAllPages')),
@@ -751,6 +755,8 @@ function teachingItems(app) {
   const lifted = app.store.objects.some((o) => o.type === 'curtain' && o.revealed);
   return [
     menuItem(app.presenting ? t('Stop presenting') : t('Present'), 'present', () => app.command('view.present'), { key: app.presenting ? 'Esc' : 'F5' }),
+    // the shortcut is only shown where there is a keyboard to press it on
+    menuItem(app.viewMode ? t('Leave View mode') : t('View mode'), 'eye', () => app.command('view.viewMode'), { key: isPhoneLayout() ? '' : 'Ctrl+Alt+V' }),
     menuItem(app.timer?.visible ? t('Close the class timer') : t('Class timer'), 'timer', () => app.command('timer.open')),
     menuItem(t('Cover answers again'), 'curtain', () => app.command('curtain.coverAll'), { disabled: !lifted })
   ];
@@ -820,6 +826,7 @@ export function openExportPopover(app, anchor) {
  * popover instead of switching pens. The id says which pen without ambiguity.
  */
 export function choosePen(app, id, anchor) {
+  if (app.viewMode) { app.hintViewMode(); return; }      // the pen is put down in View mode; its colour stays as it was
   const s = app.settings;
   const pen = penById(s, id);
   if (!pen) return;

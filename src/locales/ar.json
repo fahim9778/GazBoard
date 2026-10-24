@@ -1145,5 +1145,16 @@
  "Could not delete this board": "تعذّر حذف هذه اللوحة",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "عند الإيقاف: لوحة اللمس تمرّر، وفي اللوحات ذات الصفحات (A4، A5…) تمرّر عجلة الفأرة بين الصفحات. Ctrl+العجلة يكبّر دائمًا.",
  "Opening “{name}”…": "جارٍ فتح «{name}»…",
- "Straight line": "خط مستقيم"
+ "Straight line": "خط مستقيم",
+ "Music staff": "مدرج موسيقي",
+ "Guitar tab": "تابلاتورة غيتار",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "يبلغ ارتفاع كل مدرج نحو {mm} مم عند الطباعة. تستخدم اللوحات الجديدة هذا الحجم أيضًا.",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "وضع العرض — تنقّل بحرية. لن يتغيّر شيء على اللوحة. Ctrl+Alt+V للخروج.",
+ "View mode off — editing again": "تم إيقاف وضع العرض — يمكنك التحرير مجددًا",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "وضع العرض — لا يمكن تغيير اللوحة. اضغط Ctrl+Alt+V أو «تم» للتحرير مجددًا.",
+ "View mode": "وضع العرض",
+ "Leave View mode": "الخروج من وضع العرض",
+ "View mode (look only; laser and fading highlighter)": "وضع العرض (مشاهدة فقط؛ مؤشر الليزر وقلم تمييز يتلاشى)",
+ "Show page pictures": "عرض صور الصفحات",
+ "Hide page pictures": "إخفاء صور الصفحات"
 }

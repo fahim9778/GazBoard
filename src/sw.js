@@ -85,6 +85,7 @@ const PRECACHE_ASSETS = [
   './js/ui/pdfdialog.js',
   './js/ui/popover.js',
   './js/ui/present.js',
+  './js/ui/pagestrip.js',
   './js/ui/textedit.js',
   './js/ui/thumb.js',
   './js/ui/timer.js',

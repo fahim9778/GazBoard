@@ -133,6 +133,7 @@ export class Interaction {
       // before this existed - the feature is simply not gained there, and
       // nothing that used to work is lost.
       this.rightPan = null;
+      if (this.app.viewMode) return;        // its every entry changes the board
       this.app.showContextMenu(e);
     });
 
@@ -143,7 +144,19 @@ export class Interaction {
   get ruler() { return this.app.ruler; }
 
   /* ------------------------------------------------------------ */
+  /**
+   * In View mode the board can only be looked at: the hand moves it, the laser
+   * points, and the highlighter makes a mark that fades by itself. Whatever
+   * else a press would have meant - a pen tail erasing, a mouse dragging a
+   * note - it moves the board instead.
+   */
   effectiveTool(e) {
+    const tool = this.toolFor(e);
+    if (!this.app.viewMode) return tool;
+    return tool === 'laser' || tool === 'highlighter' || tool === 'pan' ? tool : 'pan';
+  }
+
+  toolFor(e) {
     if (this.spaceDown || e.button === 1) return 'pan';
     if (e.pointerType === 'pen' && (e.buttons & 32 || e.button === 5)) return 'eraser';  // pen tail
     /*
@@ -340,7 +353,7 @@ export class Interaction {
         this.app.openBoardRef(link.ref);
         return;
       }
-      const target = pick(this.store, wp, 8 / this.surface.cam.z);
+      const target = this.app.viewMode ? null : pick(this.store, wp, 8 / this.surface.cam.z);
       if (target) {
         this.app.chooseObject(target.id, true);
         this.action = null;
@@ -382,7 +395,7 @@ export class Interaction {
     // pressed before that commit still belongs to the object being edited.
     if (handleSelection) this.app.setSelection([...handleSelection]);
     // a visible handle is always draggable, whatever tool is active
-    if (!this.spaceDown && e.button !== 1 && tool !== 'select' && this.startHandleGesture(sp, wp, handleKey)) {
+    if (!this.spaceDown && e.button !== 1 && tool !== 'select' && !this.app.viewMode && this.startHandleGesture(sp, wp, handleKey)) {
       this.actionId = e.pointerId;
       this.surface.invalidate();
       return;
@@ -533,11 +546,11 @@ export class Interaction {
      * answer cover can only mean "show me". Remember what they landed on;
      * onUp decides whether it was a tap.
      */
-    if (this.action && (tool === 'laser' || tool === 'mousePointer') && !this.spaceDown && e.button === 0) {
-      this.action.cover = curtainAt(this.store, wp, 8 / this.surface.cam.z);
+    if (this.action && (tool === 'laser' || tool === 'mousePointer' || (this.app.viewMode && tool === 'pan')) && !this.spaceDown && e.button === 0) {
+      this.action.cover = this.app.viewMode ? null : curtainAt(this.store, wp, 8 / this.surface.cam.z);
       this.action.downSp = sp;
       // while presenting, a tap on a link to another board follows it
-      if (!this.action.cover && this.app.presenting) {
+      if (!this.action.cover && (this.app.presenting || this.app.viewMode)) {
         const link = this.linkAt(wp);
         if (link) { this.action.link = link; this.action.linkSp = sp; }
       }
@@ -990,7 +1003,7 @@ export class Interaction {
         PencilSound.stop();
         // A tap can dismiss a selection, or pick something up with a finger.
         // Neither should become ink or an undo entry. See tappedAnObject().
-        if (!this.tappedAnObject(a, e)) this.finishStroke(a);
+        if (this.app.viewMode || !this.tappedAnObject(a, e)) this.finishStroke(a);
         break;
       case 'erase': this.finishErase(a); break;
       case 'marquee': {
@@ -1301,6 +1314,7 @@ export class Interaction {
    */
   armHoldToMove(e, sp, wp) {
     this.cancelHold();
+    if (this.app.viewMode) return;          // nothing can be picked up while only looking
     // A finger or a stylus. A mouse has a right button and does not need this.
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
     // Bare board first, and before the test below. That test asks whether this
@@ -1775,6 +1789,17 @@ export class Interaction {
     }
     this.surface.wet = null;
     this.surface.wetPieces = null;
+    /*
+     * View mode: the highlighter points rather than writes. Its mark is held
+     * over the board for a moment and then fades - never in the document,
+     * never in undo, never saved - like a marker on a sheet of glass laid over
+     * the page.
+     */
+    if (this.app.viewMode) {
+      for (const piece of [...(a.pieces || []), obj]) if (piece.points.length) this.surface.addGhost(piece);
+      this.surface.invalidate();
+      return;
+    }
     /*
      * A line the ruler cut in two (or three). Each piece is real ink and they
      * go in together, as one entry in the history - and none of them is offered
@@ -2698,6 +2723,7 @@ export class Interaction {
   }
 
   onDoubleClick(e) {
+    if (this.app.viewMode) return;
     if (this.fitTextToWords(this.surface.screenPoint(e))) return;
     const wp = this.surface.toWorld(e);
     const hit = pick(this.store, wp, 8 / this.surface.cam.z);

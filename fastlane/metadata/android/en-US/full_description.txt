@@ -1,0 +1,30 @@
+GazBoard is a whiteboard for teaching and thinking out loud. It works fully offline: no account, no sign-in, no cloud, no ads and no tracking. Your boards stay on your device.
+
+<b>Write like on paper</b>
+• Six pens, a pencil, a highlighter and a partial eraser. Ink stays exactly as you wrote it, with pressure from your stylus.
+• The pen draws and your finger moves the board, both at once. On a Galaxy S Pen, hold the side button to erase.
+• Hold Shift (with a keyboard) for a perfectly straight line.
+
+<b>Paper for every subject</b>
+• An infinite canvas, or a pad of A4, Letter, A3, A5 or Legal pages.
+• Grid, dots, lines, columns, graph paper, notebook paper with the date, music staff and guitar tab.
+• A page strip with a picture of every page, to jump straight to one.
+
+<b>More than ink</b>
+• Sticky notes, text with bold, italic and colour, shapes and arrows that snap to things, tables, emoji.
+• Maths typed in LaTeX, drawn beautifully.
+• Bring in PDF pages and pictures, then write on top of them.
+• Link one board to another with @.
+
+<b>Made for the classroom</b>
+• Present mode, a laser pointer, answer covers to lift one at a time and a class timer.
+• View mode: move around a finished board freely while nothing on it can change. The laser still points and the highlighter's marks fade away by themselves.
+
+<b>Yours to keep</b>
+• My boards, with coloured folders.
+• Export to PNG, PDF or SVG, or save a copy as a file.
+• Share a board with another GazBoard on the same Wi-Fi, device to device, with nothing going through the internet.
+
+In English, বাংলা, العربية, 简体中文, 繁體中文, Español, Português (Brasil) and Deutsch.
+
+GazBoard is free and open source (MIT). Also on Windows, macOS and Linux: https://github.com/fahim9778/GazBoard

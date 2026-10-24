@@ -1145,5 +1145,16 @@
  "Could not delete this board": "無法刪除此白板",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "關閉時：觸控板捲動；在有頁面的白板（A4、A5…）上，滑鼠滾輪在頁面間捲動。Ctrl+滾輪一律縮放。",
  "Opening “{name}”…": "正在開啟「{name}」…",
- "Straight line": "直線"
+ "Straight line": "直線",
+ "Music staff": "五線譜",
+ "Guitar tab": "吉他六線譜",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "列印時每行譜高約 {mm} 公釐。新白板也會使用這個尺寸。",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "檢視模式 — 隨意瀏覽，白板上的內容不會被改動。按 Ctrl+Alt+V 離開。",
+ "View mode off — editing again": "已離開檢視模式 — 可以繼續編輯",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "檢視模式 — 白板無法變更。按 Ctrl+Alt+V 或「完成」即可繼續編輯。",
+ "View mode": "檢視模式",
+ "Leave View mode": "離開檢視模式",
+ "View mode (look only; laser and fading highlighter)": "檢視模式（只看；可用雷射筆和會自動消失的螢光筆）",
+ "Show page pictures": "顯示頁面縮圖",
+ "Hide page pictures": "隱藏頁面縮圖"
 }

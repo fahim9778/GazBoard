@@ -31,6 +31,7 @@ export class Surface {
     this.overlays = [];        // fn(ctx, surface) drawn in screen space
     this.wet = null;           // in-progress stroke object
     this.laser = [];           // pointer trail: {x,y,t} world points, never saved
+    this.ghosts = [];          // View mode highlighter marks: {obj,t}, fade by themselves, never saved
     /*
      * What an empty board says before anything is on it. Drawn over the board
      * rather than placed on it, the way the laser is: it is not an object, so
@@ -330,6 +331,21 @@ export class Surface {
   static LASER_LIFE = 520;       // ms a point stays visible
   static FADE_MS = 260;          // ms a lifted answer cover takes to melt away
 
+  static GHOST_HOLD = 2600;      // ms a View mode highlight stays at full strength
+  static GHOST_FADE = 900;       // ms it then takes to fade away
+
+  /** A highlighter mark made in View mode: shown, then faded, never put on the board. */
+  addGhost(obj) {
+    this.ghosts.push({ obj, t: performance.now() });
+    this.dirty = true;
+  }
+
+  pruneGhosts() {
+    if (!this.ghosts.length) return;
+    const cut = performance.now() - Surface.GHOST_HOLD - Surface.GHOST_FADE;
+    this.ghosts = this.ghosts.filter((g) => g.t > cut);
+  }
+
   /** Drop trail points that have faded out. */
   pruneLaser() {
     if (!this.laser.length) return;
@@ -344,6 +360,7 @@ export class Surface {
     this.resize();                 // cheap no-op unless the box or DPR moved
     // a fading trail has to keep repainting even when nothing else changed
     if (this.laser.length) { this.pruneLaser(); this.dirty = true; }
+    if (this.ghosts.length) { this.pruneGhosts(); this.dirty = true; }
     if (this._fades.size) this.dirty = true;
     if (!this.dirty) return;
     this.dirty = false;
@@ -566,7 +583,7 @@ export class Surface {
       this._warming = null;
       // Something is being drawn: the live path owns the copy and builds its
       // own. Stepping in here would repaint the board underneath a moving pen.
-      if (this.wet || this.laser.length) return;
+      if (this.wet || this.laser.length || this.ghosts.length) return;
       const key = this.freezeKey();
       if (this._ink && this._ink.key === key) return;
       this._ink = this._freezeScene(key);
@@ -576,8 +593,44 @@ export class Surface {
       : setTimeout(run, 120);
   }
 
+  /**
+   * View mode highlights. Each is painted onto a layer of its own and laid
+   * over the board at its own strength, because a highlighter already sets
+   * its own see-through-ness when it draws - fading it has to happen on top.
+   */
+  _drawGhosts(ctx) {
+    const now = performance.now();
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    let layer = this._ghostLayer;
+    if (!layer || layer.width !== W || layer.height !== H) {
+      layer = this._ghostLayer = document.createElement('canvas');
+      layer.width = W; layer.height = H;
+    }
+    const g = layer.getContext('2d');
+    // every mark still at full strength shares one pass; only the fading ones need one each
+    const groups = [];
+    for (const ghost of this.ghosts) {
+      const age = now - ghost.t;
+      const strength = age < Surface.GHOST_HOLD ? 1 : 1 - (age - Surface.GHOST_HOLD) / Surface.GHOST_FADE;
+      if (strength <= 0) continue;
+      if (strength === 1 && groups.length && groups[0].strength === 1) groups[0].objs.push(ghost.obj);
+      else if (strength === 1) groups.unshift({ strength, objs: [ghost.obj] });
+      else groups.push({ strength, objs: [ghost.obj] });
+    }
+    for (const { strength, objs } of groups) {
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, W, H);
+      for (const obj of objs) this._drawWet(g, obj);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = strength;
+      ctx.drawImage(layer, 0, 0);
+      ctx.restore();
+    }
+  }
+
   /** The stroke under the pen, clipped to its own sheet. */
-  _drawWet(ctx) {
+  _drawWet(ctx, only = undefined) {
     const cam = this.cam, pages = this.store.doc.pages;
     ctx.setTransform(this.dpr * cam.z, 0, 0, this.dpr * cam.z, this.dpr * cam.x, this.dpr * cam.y);
     const onload = () => this.invalidate();
@@ -597,6 +650,7 @@ export class Surface {
      * lift - so they are painted here alongside the live one, or the first half
      * of the line would vanish the moment the pen came out the other side.
      */
+    if (only !== undefined) { one(only); return; }
     if (this.wetPieces) for (const piece of this.wetPieces) one(piece);
     one(this.wet);
   }
@@ -626,11 +680,22 @@ export class Surface {
      * second for a trail that is a dozen points long is what made the laser
      * crawl on a heavy board; it now blits the same frozen copy a stroke uses.
      */
-    if (this.wet || this.laser.length) {
+    if (this.wet || this.laser.length || this.ghosts.length) {
       const key = this.freezeKey();
-      if (!this._ink || this._ink.key !== key) this._ink = this._freezeScene(key);
+      // View mode highlights while the hand moves the board: slide the copy along, as an ordinary pan does
+      const sliding = this.ghosts.length && !this.wet && !this.laser.length && this._ink && this._ink.key !== key && this._slideFrozen();
+      if (!sliding && (!this._ink || this._ink.key !== key)) this._ink = this._freezeScene(key);
+      if (sliding) {
+        // and painted in full once the hand stops, exactly as after an ordinary pan
+        clearTimeout(this._slideSettle);
+        this._slideSettle = setTimeout(() => {
+          this.slideSettles = (this.slideSettles || 0) + 1;
+          if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._ink = null; this.invalidate(); }
+        }, 300);
+      }
       this.screenTransform();
       ctx.drawImage(this._ink.canvas, 0, 0, w, h);
+      if (this.ghosts.length) this._drawGhosts(ctx);
       if (this.wet) this._drawWet(ctx);
     } else if (this._bandOnly && this._band && this._painted && !this.showsGreeting() && !this._fades.size) {
       /*
@@ -697,7 +762,7 @@ export class Surface {
 
     // The board is drawn and nothing is in flight: a good moment to have the
     // frozen copy ready for whatever comes next. See warmFreeze().
-    if (!this.wet && !this.laser.length
+    if (!this.wet && !this.laser.length && !this.ghosts.length
         && (!this._ink || this._ink.key !== this.freezeKey())) this.warmFreeze();
 
     // ---- screen-space overlays (CSS pixels) ----

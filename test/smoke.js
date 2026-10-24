@@ -16753,6 +16753,178 @@ module.exports.run = async (win, app) => {
       `strokes: ${r.strokes} (wanted 2); with Shift: rises ${r.straightSpread} units over ${r.straightLen} (wanted 0, over 300), even pressure: ${r.evenPressure}; without Shift it rises ${r.freeSpread} (wanted more than 10 - left as drawn)`);
   }
 
+  /* ---- a board's pictures are fetched six at a time, and every one goes back exactly where it was ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {};
+      let now = 0, most = 0; const asked = [];
+      const get = async (id) => { asked.push(id); now++; most = Math.max(most, now);
+        await new Promise((res) => setTimeout(res, 40)); now--; return id === 'p7' ? null : 'data:image/png;base64,iVBORw0KGgo=#' + id; };
+      const objects = [];
+      for (let i = 0; i < 14; i++) objects.push(i % 3 === 1 ? { id: 'n' + i, type: 'note', text: String(i) } : { id: 'i' + i, type: 'image', src: 'asset:p' + i });
+      const t0 = performance.now();
+      const out = await a.resolveAssets({ objects }, get);
+      const ms = Math.round(performance.now() - t0);
+      const images = objects.filter((o) => o.type === 'image').length;
+      return { most, ms, images, asked: asked.length,
+        order: out.objects.map((o) => o.id).join(',') === objects.map((o) => o.id).join(','),
+        srcs: out.objects.filter((o) => o.type === 'image').every((o) => o.id === 'i7' ? (o.missing === true && o.src === '') : o.src.endsWith('#p' + o.id.slice(1))),
+        notes: out.objects.filter((o) => o.type === 'note').every((o, k) => o.text === String(objects.filter((q) => q.type === 'note')[k].text)) };`);
+    check('a board\'s pictures are fetched six at a time, each goes back to its own place, and a missing one keeps its place',
+      r.most > 1 && r.most <= 6 && r.asked === r.images && r.order && r.srcs && r.notes && r.ms < r.images * 40,
+      `at most ${r.most} fetched together (wanted 2-6); asked for ${r.asked} of ${r.images} pictures; order kept: ${r.order}; every picture got its own file and the missing one is marked: ${r.srcs}; notes untouched: ${r.notes}; took ${r.ms} ms (one by one would be about ${r.images * 40} ms)`);
+  }
+
+  /* ---- music staff and guitar tab paper: five or six lines a group, with room between, true to size on paper ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const R = await import('app://board/js/core/render.js');
+      await a.setPageSize('a4', 'portrait');
+      const out = {};
+      for (const pat of ['staff', 'tab']) {
+        a.store.setBackground({ pattern: pat, spacing: 40 });
+        const box = a.store.doc.pages.length ? (await import('app://board/js/core/pages.js')).pageRects(a.store.doc.pages)[0] : null;
+        const c = a.surface.renderTo(box, 1, true, true);
+        const g = c.getContext('2d');
+        // walk down the middle of the sheet and note every row that is ruled
+        const x = Math.round(c.width / 2), col = g.getImageData(x, 0, 1, c.height).data;
+        const rows = []; for (let y = 0; y < c.height; y++) { const v = col[y * 4]; if (v < 235) rows.push(y); }
+        const lines = []; for (const y of rows) { if (!lines.length || y - lines[lines.length - 1].end > 1) lines.push({ start: y, end: y }); else lines[lines.length - 1].end = y; }
+        const L = R.staffLayout(pat, 40);
+        const groups = []; let cur = [];
+        for (const ln of lines) { if (cur.length && ln.start - cur[cur.length - 1].start > L.gap * 1.6) { groups.push(cur.length); cur = []; } cur.push(ln); }
+        if (cur.length) groups.push(cur.length);
+        // the T of TAB sits on a clear patch at the start of each tab staff
+        let letters = null;
+        if (pat === 'tab') {
+          const tx = Math.round(L.side + L.gap * 1.3), ty = Math.round(L.top + L.gap * 1);
+          const d = g.getImageData(tx - 4, ty - 4, 9, 9).data; let dark = 0; for (let i = 0; i < d.length; i += 4) if (d[i] < 200) dark++;
+          letters = dark;
+        }
+        out[pat] = { groups, gap: +L.gap.toFixed(2), staffMm: +(L.height / (96 / 25.4)).toFixed(1), letters };
+      }
+      a.store.setBackground({ pattern: 'staff' });
+      a.panels.background(); await new Promise((res) => setTimeout(res, 150));
+      out.tiles = [...document.querySelectorAll('.pat-grid .pat')].map((b) => b.dataset.pattern);
+      out.note = [...document.querySelectorAll('#panel p')].map((p) => p.textContent).find((s) => /staff/i.test(s)) || '';
+      a.panels.close();
+      a.store.setBackground({ pattern: 'staff' }); await a.setPageSize('infinite');
+      a.surface.invalidate(); a.surface.draw();
+      const sc = a.surface.canvas, sg = sc.getContext('2d');
+      const scol = sg.getImageData(Math.round(sc.width / 2), 0, 1, sc.height).data; let ruled = 0; for (let y = 0; y < sc.height; y++) if (scol[y * 4] < 235) ruled++;
+      out.infiniteRuled = ruled;
+      a.newBoard(true); return out;`);
+    const allFive = r.staff.groups.length >= 5 && r.staff.groups.every((n) => n === 5);
+    const allSix = r.tab.groups.length >= 5 && r.tab.groups.every((n) => n === 6);
+    check('music staff paper rules groups of five lines and guitar tab groups of six, with T-A-B at the start, true to size (Normal staff about 15 mm), and both are offered in Canvas',
+      allFive && allSix && r.staff.staffMm > 13 && r.staff.staffMm < 17 && r.tab.letters > 3
+        && r.tiles.includes('staff') && r.tiles.includes('tab') && /15/.test(r.note) && r.infiniteRuled > 10,
+      `staff groups down the A4 sheet: ${JSON.stringify(r.staff.groups)} (wanted at least 5, each 5); tab groups: ${JSON.stringify(r.tab.groups)} (wanted at least 5, each 6); staff ${r.staff.staffMm} mm tall (wanted 13-17), line gap ${r.staff.gap}; dark pixels where the T of TAB goes: ${r.tab.letters} (wanted more than 3); pattern tiles: ${JSON.stringify(r.tiles)}; spacing note: "${r.note}" (wanted it to say about 15 mm); ruled rows on the infinite canvas: ${r.infiniteRuled} (wanted more than 10)`);
+  }
+
+  /* ---- View mode: Ctrl+Alt+V, roam freely, the laser points, the highlighter fades, and nothing on the board changes ---- */
+  {
+    const setup = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true); a.settings.inkToShape = false;
+      window.__mouseWas = a.settings.inkWithMouse; a.settings.inkWithMouse = 'yes';
+      a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
+      a.store.add({ id: 'vmNote', type: 'note', x: 260, y: 220, w: 200, h: 200, color: '#ffd94a', text: 'look, do not touch', rotation: 0, align: 'center', font: 'ui' });
+      a.setTool('pen'); a.surface.invalidate();
+      const r = a.surface.canvas.getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top) };`);
+    const wc = win.webContents;
+    const chord = async () => { wc.focus(); wc.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control', 'alt'] }); wc.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control', 'alt'] }); await sleep(120); };
+    const key = async (k) => { wc.sendInputEvent({ type: 'keyDown', keyCode: k }); wc.sendInputEvent({ type: 'keyUp', keyCode: k }); await sleep(80); };
+    const drag = async (x0, y0, x1, y1) => {
+      wc.sendInputEvent({ type: 'mouseDown', x: x0, y: y0, button: 'left', clickCount: 1 }); await sleep(30);
+      for (let i = 1; i <= 12; i++) { wc.sendInputEvent({ type: 'mouseMove', x: Math.round(x0 + (x1 - x0) * i / 12), y: Math.round(y0 + (y1 - y0) * i / 12), button: 'left', modifiers: ['leftbuttondown'] }); await sleep(16); }
+      wc.sendInputEvent({ type: 'mouseUp', x: x1, y: y1, button: 'left', clickCount: 1 }); await sleep(120);
+    };
+    await chord();
+    const on = await js(`const a = window.app; window.__vmRev = a.store.rev; window.__vmCount = a.store.count;
+      return { view: a.viewMode, tool: a.tool, body: document.body.classList.contains('view-mode'), pill: !!document.querySelector('#viewPill.show') };`);
+    // a drag that starts on the note moves the board, not the note
+    await drag(setup.left + 360, setup.top + 320, setup.left + 460, setup.top + 380);
+    const moved = await js(`const a = window.app; const n = a.store.get('vmNote');
+      a.setTool('eraser'); const afterEraser = a.tool; a.setTool('note'); const afterNote = a.tool;
+      a.command('edit.selectAll'); a.command('insert.table'); a.command('undo'); a.store.add({ id: 'sneak', type: 'note', x: 0, y: 0, w: 10, h: 10, color: '#fff', text: '', rotation: 0 });
+      a.setTool('laser'); const laser = a.tool; a.setTool('highlighter');
+      a.surface.constructor.__hold = a.surface.constructor.GHOST_HOLD; a.surface.constructor.__fade = a.surface.constructor.GHOST_FADE;
+      a.surface.constructor.GHOST_HOLD = 250; a.surface.constructor.GHOST_FADE = 250;
+      return { noteX: n.x, noteY: n.y, camX: Math.round(a.surface.cam.x), camY: Math.round(a.surface.cam.y), afterEraser, afterNote, laser, hl: a.tool, sel: a.surface.selection.size };`);
+    await key('Delete');
+    await drag(setup.left + 120, setup.top + 520, setup.left + 420, setup.top + 530);
+    const marked = await js(`const a = window.app; return { ghosts: a.surface.ghosts.length, strokes: a.store.objects.filter((o) => o.type === 'stroke').length };`);
+    await sleep(800);
+    const faded = await js(`const a = window.app; const S = a.surface.constructor; const out = { ghosts: a.surface.ghosts.length, rev: a.store.rev - window.__vmRev, count: a.store.count - window.__vmCount, note: !!a.store.get('vmNote') };
+      S.GHOST_HOLD = S.__hold; S.GHOST_FADE = S.__fade; return out;`);
+    await key('Escape');
+    const afterEsc = await js(`return window.app.viewMode;`);
+    await js(`document.querySelector('#viewPill .view-done').click();`);
+    const off = await js(`const a = window.app; const out = { view: a.viewMode, tool: a.tool, body: document.body.classList.contains('view-mode'), pill: !!document.querySelector('#viewPill.show') };
+      a.setTool('select'); return out;`);
+    off.afterEsc = afterEsc;
+    await chord();
+    const again = await js(`const a = window.app; const out = { view: a.viewMode, tool: a.tool }; a.toggleViewMode(false); const back = a.tool;
+      a.settings.inkWithMouse = window.__mouseWas; a.newBoard(true); out.back = back; return out;`);
+    check('Ctrl+Alt+V turns View mode on: a drag moves the board even on a note, the laser and highlighter still work, every other tool and edit is refused, and nothing on the board changes',
+      on.view && on.tool === 'pan' && on.body && on.pill
+        && moved.noteX === 260 && moved.noteY === 220 && (moved.camX !== 0 || moved.camY !== 0)
+        && moved.afterEraser === 'pan' && moved.afterNote === 'pan' && moved.laser === 'laser' && moved.hl === 'highlighter' && moved.sel === 0
+        && faded.rev === 0 && faded.count === 0 && faded.note,
+      `on: ${JSON.stringify(on)} (wanted view true, tool pan, body class and pill); after the drag and the refused tools: ${JSON.stringify(moved)} (wanted the note still at 260,220, the camera moved, eraser and note refused leaving pan, laser and highlighter allowed, nothing selected); board changes while in View mode: rev +${faded.rev}, objects +${faded.count} (wanted 0 and 0), note still there: ${faded.note}`);
+    check('in View mode the highlighter mark is shown, never saved, and fades away by itself',
+      marked.ghosts === 1 && marked.strokes === 0 && faded.ghosts === 0,
+      `right after the highlighter drag: ${marked.ghosts} fading mark(s) on screen (wanted 1), ${marked.strokes} strokes on the board (wanted 0); after the fade: ${faded.ghosts} left (wanted 0)`);
+    check('Escape does not leave View mode by accident; Done leaves it keeping a tool chosen inside it; Ctrl+Alt+V turns it on and off again, giving back the tool from before',
+      off.afterEsc === true && !off.view && !off.body && !off.pill && off.tool === 'highlighter' && again.view && again.tool === 'pan' && again.back === 'select',
+      `after Escape then Done: ${JSON.stringify(off)} (wanted afterEsc true - still in View mode - then view off, no class, no pill, the highlighter chosen inside View mode kept); pressed again from Select: ${JSON.stringify(again)} (wanted view on with the hand in place of Select, and Select back when it ends)`);
+  }
+
+  /* ---- the page strip: a picture of every page, click to go there, and only a changed page is redrawn ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      a.settings.pageStrip = false;
+      const hiddenOnInfinite = !document.querySelector('#pagestrip.show');
+      await a.setPageSize('a4', 'portrait'); a.command('page.add'); a.command('page.add');
+      a.goToPage(0);
+      // opened the way a person opens it: the page navigator's menu, then Show page pictures
+      document.querySelector('#pagebar [data-page="more"]').click(); await wait(80);
+      const item = [...document.querySelectorAll('.popover .menu-item, .menu .menu-item')].find((b) => /Show page pictures/.test(b.textContent));
+      const menuItemFound = !!item; item?.click(); await wait(400);
+      const rows = [...document.querySelectorAll('#pagestrip .ps-page')];
+      const out = { hiddenOnInfinite, menuItemFound, rows: rows.length, open: a.pageStrip.open, remembered: a.settings.pageStrip,
+        firstCurrent: rows[0]?.classList.contains('current'), drawn: a.pageStrip.redraws,
+        sized: rows.map((b) => b.querySelector('canvas').width) };
+      rows[2].click(); await wait(150);
+      out.afterClick = a.currentPageIndex(); out.thirdCurrent = rows[2].classList.contains('current');
+      const before = a.pageStrip.redraws;
+      const P = await import('app://board/js/core/pages.js'); const second = P.pageRects(a.store.doc.pages)[1];
+      a.store.add({ id: 'psNote', type: 'note', x: second.x + 100, y: second.y + 100, w: 200, h: 200, color: '#ffd94a', text: 'two', rotation: 0, align: 'center', font: 'ui' });
+      await wait(1100);
+      out.redrawnAfterNote = a.pageStrip.redraws - before;
+      out.secondSig = a.pageStrip.items[1].drawnSig === a.pageStrip.items[1].sig;
+      a.startPresenting({ fullscreen: false }); await wait(60);
+      out.hiddenPresenting = !document.querySelector('#pagestrip.show') || getComputedStyle(document.getElementById('pagestrip')).display === 'none';
+      a.stopPresenting();
+      await a.setPageSize('infinite'); await wait(60);
+      out.hiddenAfterInfinite = !document.querySelector('#pagestrip.show');
+      await a.setPageSize('a4', 'portrait'); await wait(60);
+      out.backOnPaper = !!document.querySelector('#pagestrip.show');
+      out.tabWhileOpen = !!document.querySelector('#pagetab.show');
+      document.querySelector('#pagestrip .ps-close').click(); await wait(60);
+      out.closedByX = !document.querySelector('#pagestrip.show') && a.settings.pageStrip === false;
+      // folded away, the tab on the left edge is there to bring it back
+      const tab = document.querySelector('#pagetab.show'); out.tabWhenClosed = !!tab;
+      out.tabSide = tab ? Math.round(tab.getBoundingClientRect().left) : null;
+      tab?.click(); await wait(200);
+      out.tabOpens = !!document.querySelector('#pagestrip.show') && !document.querySelector('#pagetab.show');
+      a.pageStrip.toggle(false);
+      a.newBoard(true); return out;`);
+    check('the page strip shows every page of a paper board, follows the page you are on, takes you to a page on a click, and redraws only the page that changed',
+      r.hiddenOnInfinite && r.menuItemFound && r.rows === 3 && r.open && r.remembered === true && r.firstCurrent && r.drawn >= 3 && r.sized.every((w) => w > 50)
+        && r.afterClick === 2 && r.thirdCurrent && r.redrawnAfterNote === 1 && r.secondSig && r.hiddenPresenting && r.hiddenAfterInfinite && r.backOnPaper && r.closedByX && !r.tabWhileOpen && r.tabWhenClosed && r.tabSide === 0 && r.tabOpens,
+      JSON.stringify(r) + ' (wanted: hidden on an infinite board, Show page pictures in the page menu, 3 rows, open and remembered, page 1 outlined, 3+ pictures drawn wider than 50px, a click on row 3 goes to page index 2 and outlines it, exactly 1 picture redrawn after a note on page 2, hidden while presenting and on an infinite board, back on paper again, folded away by its arrow, and the left-edge tab (at x 0) hidden while open, shown when folded, and opening it again)');
+  }
+
   /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {};

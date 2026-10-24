@@ -1145,5 +1145,16 @@
  "Could not delete this board": "Não foi possível excluir este quadro",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "Desligado: o touchpad rola e, em quadros com páginas (A4, A5…), a roda do mouse percorre as páginas. Ctrl+roda sempre aplica zoom.",
  "Opening “{name}”…": "Abrindo “{name}”…",
- "Straight line": "Linha reta"
+ "Straight line": "Linha reta",
+ "Music staff": "Pauta musical",
+ "Guitar tab": "Tablatura de violão",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "Cada pauta fica com cerca de {mm} mm de altura impressa. Os quadros novos também usam este tamanho.",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "Modo visualização — mova-se à vontade. Nada no quadro vai mudar. Ctrl+Alt+V para sair.",
+ "View mode off — editing again": "Modo visualização desligado — edição liberada",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "Modo visualização — o quadro não pode ser alterado. Pressione Ctrl+Alt+V ou Concluído para editar de novo.",
+ "View mode": "Modo visualização",
+ "Leave View mode": "Sair do modo visualização",
+ "View mode (look only; laser and fading highlighter)": "Modo visualização (só olhar; laser e marca-texto que some)",
+ "Show page pictures": "Mostrar miniaturas das páginas",
+ "Hide page pictures": "Ocultar miniaturas das páginas"
 }

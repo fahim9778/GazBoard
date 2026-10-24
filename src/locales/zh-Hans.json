@@ -1145,5 +1145,16 @@
  "Could not delete this board": "无法删除此白板",
  "Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.": "关闭时：触控板滚动；在有页面的白板（A4、A5…）上，鼠标滚轮在页面间滚动。Ctrl+滚轮始终缩放。",
  "Opening “{name}”…": "正在打开“{name}”…",
- "Straight line": "直线"
+ "Straight line": "直线",
+ "Music staff": "五线谱",
+ "Guitar tab": "吉他六线谱",
+ "Each staff is about {mm} mm tall when printed. New boards use this size too.": "打印时每行谱高约 {mm} 毫米。新白板也会使用这个尺寸。",
+ "View mode — move around freely. Nothing on the board will change. Ctrl+Alt+V to leave.": "查看模式 — 随意浏览，白板上的内容不会被改动。按 Ctrl+Alt+V 退出。",
+ "View mode off — editing again": "已退出查看模式 — 可以继续编辑",
+ "View mode — the board cannot be changed. Press Ctrl+Alt+V, or Done, to edit again.": "查看模式 — 白板无法更改。按 Ctrl+Alt+V 或“完成”即可继续编辑。",
+ "View mode": "查看模式",
+ "Leave View mode": "退出查看模式",
+ "View mode (look only; laser and fading highlighter)": "查看模式（只看；可用激光笔和会自动消失的荧光笔）",
+ "Show page pictures": "显示页面缩略图",
+ "Hide page pictures": "隐藏页面缩略图"
 }

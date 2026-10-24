@@ -32,7 +32,9 @@ export const PATTERNS = [
   { id: 'lines', label: t('Lines') },
   { id: 'columns', label: t('Columns') },
   { id: 'graph', label: t('Graph') },
-  { id: 'notebook', label: t('Notebook') }
+  { id: 'notebook', label: t('Notebook') },
+  { id: 'staff', label: t('Music staff') },
+  { id: 'tab', label: t('Guitar tab') }
 ];
 
 export const SHAPES = [
