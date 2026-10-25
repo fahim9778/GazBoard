@@ -16984,6 +16984,316 @@ module.exports.run = async (win, app) => {
       JSON.stringify(r) + ' (wanted: hidden on an infinite board, Show page pictures in the page menu, 3 rows, open and remembered, page 1 outlined, 3+ pictures drawn wider than 50px, a click on row 3 goes to page index 2 and outlines it, exactly 1 picture redrawn after a note on page 2, hidden while presenting and on an infinite board, back on paper again, folded away by its arrow, and the left-edge tab (at x 0) hidden while open, shown when folded, and opening it again)');
   }
 
+  /* ---- the ruler's settings: a 45° and a 30°/60° set square, 0° pointing up, see-through plastic ---- */
+  {
+    const setup = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true); a.settings.inkToShape = false;
+      window.__mouseWas = a.settings.inkWithMouse; a.settings.inkWithMouse = 'yes';
+      window.__rulerWas = { kind: a.settings.rulerKind, zero: a.settings.rulerZero, op: a.settings.rulerOpacity };
+      a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
+      const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'black'); a.setTool('pen');
+      a.settings.rulerKind = 'ruler'; if (a.ruler.visible) a.toggleRuler(); a.toggleRuler();
+      const r = a.surface.canvas.getBoundingClientRect(); return { left: Math.round(r.left), top: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };`);
+    const wc = win.webContents;
+    const toScreen = (p) => js(`const c = window.app.surface.cam, r = window.app.surface.canvas.getBoundingClientRect(); const q = c.toScreen(${p.x}, ${p.y}); return { x: Math.round(q.x + r.left), y: Math.round(q.y + r.top) };`);
+    // the ⋯ button on the ruler opens its menu; choosing the 45° triangle swaps the ruler for it and remembers it
+    const btn = await js(`const a = window.app, T = a.interaction, { c, len, thick, angle } = T.rulerRect(), r = a.surface.canvas.getBoundingClientRect();
+      const u = -len / 2 + T.constructor.MENU_AT, v = thick / 2; return { x: Math.round(r.left + c.x + Math.cos(angle) * u - Math.sin(angle) * v), y: Math.round(r.top + c.y + Math.sin(angle) * u + Math.cos(angle) * v) };`);
+    wc.sendInputEvent({ type: 'mouseDown', x: btn.x, y: btn.y, button: 'left', clickCount: 1 }); wc.sendInputEvent({ type: 'mouseUp', x: btn.x, y: btn.y, button: 'left', clickCount: 1 });
+    await sleep(250);
+    const menu = await js(`const m = document.querySelector('.ruler-menu'); const out = { open: !!m, shapes: m ? [...m.querySelectorAll('[data-value]')].map((b) => b.dataset.value).join(',') : '', strokes: window.app.store.objects.filter((o) => o.type === 'stroke').length };
+      m?.querySelector('[data-value="set45"]')?.click(); await new Promise((r) => setTimeout(r, 80));
+      const a = window.app; out.kind = a.ruler.kind; out.saved = a.settings.rulerKind;
+      try { out.stored = JSON.parse(localStorage.getItem('gazboard.settings')).rulerKind; } catch { out.stored = '(unreadable)'; }
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      a.ruler.angle = 0.35; a.surface.invalidate();
+      const T = a.interaction, P = T.triCorners(), r = a.ruler, cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+      const w = (u, v) => ({ x: r.x + cos * u - sin * v, y: r.y + sin * u + cos * v });
+      out.corners = P.map((q) => w(q.u, q.v));
+      out.inside = T.underThePlastic(w((P[0].u * 2 + P[1].u) / 3, P[2].v / 4));
+      out.outside = T.underThePlastic(w(P[1].u + 40, -40));
+      return out;`);
+    // draw along the long slope and down the upright side, starting just outside each, with a wobbly hand
+    const along = async (p0, p1, off) => {
+      const n = 24, pts = [];
+      for (let i = 0; i <= n; i++) {
+        const t = 0.15 + 0.7 * i / n, x = p0.x + (p1.x - p0.x) * t, y = p0.y + (p1.y - p0.y) * t;
+        const L = Math.hypot(p1.x - p0.x, p1.y - p0.y), nx = (p1.y - p0.y) / L, ny = -(p1.x - p0.x) / L;
+        pts.push(await toScreen({ x: x + nx * (off + Math.sin(i) * 5), y: y + ny * (off + Math.sin(i) * 5) }));
+      }
+      wc.sendInputEvent({ type: 'mouseDown', x: pts[0].x, y: pts[0].y, button: 'left', clickCount: 1 }); await sleep(20);
+      for (const q of pts.slice(1)) { wc.sendInputEvent({ type: 'mouseMove', x: q.x, y: q.y, button: 'left', modifiers: ['leftbuttondown'] }); await sleep(12); }
+      wc.sendInputEvent({ type: 'mouseUp', x: pts.at(-1).x, y: pts.at(-1).y, button: 'left', clickCount: 1 }); await sleep(120);
+    };
+    const C = menu.corners;
+    await along(C[1], C[2], -10);      // the long slope, from just outside the plastic
+    await along(C[2], C[0], -10);      // the upright side
+    const lines = await js(`const a = window.app, r = a.ruler; const ss = a.store.objects.filter((o) => o.type === 'stroke');
+      const C = ${JSON.stringify(C)}, edges = [[C[1], C[2]], [C[2], C[0]]];
+      const dir = (o) => { const p = o.points, q0 = p[0], q1 = p[p.length - 1]; let d = (Math.atan2(q1.y - q0.y, q1.x - q0.x) - r.angle) * 180 / Math.PI; d = ((d % 180) + 180) % 180; return +d.toFixed(2); };
+      // how far each point sits off the set square's own edge (not off a line through the stroke's two ends,
+      // whose saved, rounded positions would tilt the yardstick itself)
+      const wobble = (o, i) => { const [q0, q1] = edges[i], L = Math.hypot(q1.x - q0.x, q1.y - q0.y);
+        return +Math.max(...o.points.map((q) => Math.abs((q.x - q0.x) * (q1.y - q0.y) - (q.y - q0.y) * (q1.x - q0.x)) / L)).toFixed(4); };
+      return { n: ss.length, dirs: ss.map(dir), wobble: ss.map(wobble) };`);
+    // the readout: 0° pointing right reads the ruler's own angle; pointing up turns a level ruler into 90°
+    const readout = await js(`const a = window.app, T = a.interaction;
+      a.settings.rulerZero = 'right'; const right = [T.rulerReadout(0), T.rulerReadout(-Math.PI / 2)];
+      a.settings.rulerZero = 'up'; const up = [T.rulerReadout(0), T.rulerReadout(-Math.PI / 2)];
+      return { right, up };`);
+    // see-through: the plastic over a dark mark is darker the more see-through it is
+    const shade = await js(`const a = window.app, sf = a.surface, r = a.ruler;
+      a.settings.rulerKind = 'ruler'; r.kind = 'ruler'; r.angle = 0; a.store.add({ id: 'darkpad', type: 'shape', kind: 'rect', x: r.x + 60, y: r.y + 20, w: 120, h: 40, rotation: 0, stroke: '#000000', fill: '#000000', lineWidth: 1 });
+      const at = sf.cam.toScreen(r.x + 120, r.y + 40), d = sf.dpr || 1;
+      const read = () => { sf.invalidate(); sf.draw(); return sf.canvas.getContext('2d').getImageData(Math.round(at.x * d), Math.round(at.y * d), 1, 1).data[0]; };
+      a.settings.rulerOpacity = 1; const solid = read(); a.settings.rulerOpacity = 0.3; const clear = read();
+      a.settings.rulerOpacity = 0.1; const floor = read();
+      return { solid, clear, floor };`);
+    await js(`const a = window.app, w = window.__rulerWas; a.settings.rulerKind = w.kind; a.settings.rulerZero = w.zero; a.settings.rulerOpacity = w.op; a.ruler.kind = 'ruler';
+      if (a.ruler.visible) a.toggleRuler(); a.settings.inkWithMouse = window.__mouseWas; a.newBoard(true);`);
+    check('the ruler\'s ⋯ button opens its menu, and choosing the 45° triangle swaps the ruler for a set square and remembers it',
+      menu.open && menu.shapes.startsWith('ruler,set45,set60') && menu.kind === 'set45' && menu.saved === 'set45' && menu.stored === 'set45' && menu.strokes === 0 && menu.inside === true && menu.outside === false,
+      `menu open: ${menu.open}, its choices: ${menu.shapes}; after choosing: ruler is "${menu.kind}", setting "${menu.saved}", saved to disk "${menu.stored}" (wanted set45 each); ink left by pressing the button: ${menu.strokes} (wanted 0); a point inside the triangle is under the plastic: ${menu.inside} (wanted true), one outside: ${menu.outside} (wanted false)`);
+    check('a pen against the 45° set square draws dead straight along its long slope and its upright side, at 45° and 90° to its base',
+      lines.n === 2 && Math.abs(lines.dirs[0] - 135) < 0.05 && Math.abs(lines.dirs[1] - 90) < 0.05 && lines.wobble.every((w) => w < 0.01),
+      `strokes: ${lines.n} (wanted 2); their angles to the base: ${JSON.stringify(lines.dirs)} (wanted 135 for the slope, 90 for the upright); furthest point off the set square's edge: ${JSON.stringify(lines.wobble)} px (wanted under 0.01; points are saved to the nearest 0.01 px, so the most rounding alone can add is 0.0071)`);
+    check('the angle can read from pointing right or from pointing up',
+      readout.right[0] === '0°' && readout.right[1] === '270°' && readout.up[0] === '90°' && readout.up[1] === '0°',
+      `0° to the right: level ${readout.right[0]}, upright ${readout.right[1]} (wanted 0° and 270°); 0° up: level ${readout.up[0]}, upright ${readout.up[1]} (wanted 90° and 0°)`);
+    check('the plastic can be made see-through, and never vanishes completely',
+      shade.solid > 200 && shade.clear < shade.solid - 100 && shade.floor === shade.clear,
+      `brightness over a black mark: solid ${shade.solid} (wanted over 200), 30% ${shade.clear} (wanted at least 100 darker), asking for 10% ${shade.floor} (wanted the same as 30%, the lowest allowed)`);
+  }
+
+  /* ---- the protractor: true degree marks, two scales that agree, a straight edge, a perfect arc and an exact measuring arm ---- */
+  {
+    const wc = win.webContents;
+    const setup = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true); a.settings.inkToShape = false;
+      window.__mouseWas = a.settings.inkWithMouse; a.settings.inkWithMouse = 'yes';
+      window.__rulerWas = { kind: a.settings.rulerKind, zero: a.settings.rulerZero, op: a.settings.rulerOpacity };
+      a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
+      const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'black'); a.setTool('pen');
+      a.settings.rulerKind = 'ruler'; a.settings.rulerOpacity = 0.92; if (a.ruler.visible) a.toggleRuler(); a.toggleRuler();
+      // choose it the way a person does: the ruler's menu, then Protractor
+      a.openRulerMenu({ x: 200, y: 200 }); await new Promise((r) => setTimeout(r, 80));
+      const m = document.querySelector('.ruler-menu'); const out = { offered: !!m?.querySelector('[data-value="protractor"]') };
+      m?.querySelector('[data-value="protractor"]')?.click(); await new Promise((r) => setTimeout(r, 80));
+      out.kind = a.ruler.kind; out.saved = a.settings.rulerKind;
+      try { out.stored = JSON.parse(localStorage.getItem('gazboard.settings')).rulerKind; } catch { out.stored = '(unreadable)'; }
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      // placed for this window, whatever its size: centred across, the dome in the middle
+      const v = a.surface.cam.viewport(a.surface.width, a.surface.height), r = a.ruler;
+      out.fitted = r.protR > 0 && r.y - r.protR >= v.y && r.y <= v.y + v.h;
+      r.protR = Math.min(v.h * 0.3, v.w * 0.35); r.x = v.x + v.w / 2; r.y = v.y + v.h * 0.5 + r.protR * 0.4; r.angle = 0.37; r.protArm = 60;
+      const T2 = a.interaction, cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+      const w = (u, vv) => ({ x: r.x + cos * u - sin * vv, y: r.y + sin * u + cos * vv });
+      out.inside = T2.underThePlastic(w(r.protR * 0.3, -r.protR * 0.3));
+      out.below = T2.underThePlastic(w(r.protR * 0.3, 12));
+      out.R = r.protR;
+      a.surface.invalidate();
+      return out;`);
+    const toScreen = (p) => js(`const c = window.app.surface.cam, r = window.app.surface.canvas.getBoundingClientRect(); const q = c.toScreen(${p.x}, ${p.y}); return { x: q.x + r.left, y: q.y + r.top };`);
+    // a point in protractor terms: angle in degrees from the right end, distance from the centre (world units)
+    const P = (deg, rho, sideways = 0) => js(`const r = window.app.ruler, th = ${deg} * Math.PI / 180, u = Math.cos(th) * ${rho} - Math.sin(th) * ${sideways}, v = -Math.sin(th) * ${rho} - Math.cos(th) * ${sideways};
+      return { x: r.x + Math.cos(r.angle) * u - Math.sin(r.angle) * v, y: r.y + Math.sin(r.angle) * u + Math.cos(r.angle) * v };`);
+    const drag = async (world) => {
+      const pts = []; for (const p of world) pts.push(await toScreen(p));
+      const R = (q) => ({ x: Math.round(q.x), y: Math.round(q.y) });
+      wc.sendInputEvent({ type: 'mouseDown', ...R(pts[0]), button: 'left', clickCount: 1 }); await sleep(20);
+      for (const q of pts.slice(1)) { wc.sendInputEvent({ type: 'mouseMove', ...R(q), button: 'left', modifiers: ['leftbuttondown'] }); await sleep(12); }
+      wc.sendInputEvent({ type: 'mouseUp', ...R(pts.at(-1)), button: 'left', clickCount: 1 }); await sleep(120);
+    };
+    const R = setup.R, n = 24;
+    // 1. the straight edge, drawn from just below it with a wobbly hand
+    { const w = []; for (let i = 0; i <= n; i++) { const u = -0.8 * R + 1.6 * R * i / n; w.push(await js(`const r = window.app.ruler, u = ${u}, v = ${10 + Math.sin(i) * 5}; return { x: r.x + Math.cos(r.angle) * u - Math.sin(r.angle) * v, y: r.y + Math.sin(r.angle) * u + Math.cos(r.angle) * v };`)); } await drag(w); }
+    // 2. round the curve, from 150° to 30°, wandering just outside it
+    { const w = []; for (let i = 0; i <= n * 2; i++) w.push(await P(150 - 120 * i / (n * 2), R + 9 + Math.sin(i) * 5)); await drag(w); }
+    // 3. turn the arm by its knob to a little past 37°, then draw along it, wobbling beside it
+    const before = await js(`return window.app.store.objects.filter((o) => o.type === 'stroke').length;`);
+    const knobFrom = await js(`const C = window.app.interaction.protControls(), z = window.app.surface.cam.z; return ${0} + Math.hypot(C.armKnob.u, C.armKnob.v) / z;`);
+    { const w = [await P(60, knobFrom)]; for (let i = 1; i <= 12; i++) w.push(await P(60 - (60 - 37.3) * i / 12, knobFrom)); await drag(w); }
+    const arm = await js(`const a = window.app; a.surface.invalidate(); a.surface.draw(); return { deg: a.ruler.protArm, reading: a.interaction.protReading, strokes: a.store.objects.filter((o) => o.type === 'stroke').length };`);
+    { const w = []; for (let i = 0; i <= n; i++) w.push(await P(37, R * (0.3 + 0.6 * i / n), 6 + Math.sin(i) * 4)); await drag(w); }
+    // 4. the arm straight up, and a line along it
+    await js(`window.app.ruler.protArm = 90; window.app.surface.invalidate();`);
+    { const w = []; for (let i = 0; i <= n; i++) w.push(await P(90, R * (0.3 + 0.6 * i / n), -6 - Math.sin(i) * 4)); await drag(w); }
+    const lines = await js(`const a = window.app, r = a.ruler, T = a.interaction, ss = a.store.objects.filter((o) => o.type === 'stroke');
+      const off = (q) => T.rulerOffsets(q);
+      const deg = (o) => { const p = o.points, q0 = p[0], q1 = p[p.length - 1]; let d = -(Math.atan2(q1.y - q0.y, q1.x - q0.x) - r.angle) * 180 / Math.PI; d = ((d % 180) + 180) % 180; return +d.toFixed(3); };
+      const ray = (o, th) => +Math.max(...o.points.map((q) => { const { along: u, perp: v } = off(q); return Math.abs(u * Math.sin(th) + v * Math.cos(th)); })).toFixed(4);
+      const s = ss.map((o) => o.points.length);
+      return { n: ss.length, pts: s,
+        baseOff: ss[0] ? +Math.max(...ss[0].points.map((q) => Math.abs(off(q).perp))).toFixed(4) : null, baseDeg: ss[0] ? Math.min(deg(ss[0]), +(180 - deg(ss[0])).toFixed(3)) : null,
+        arcErr: ss[1] ? +Math.max(...ss[1].points.map((q) => { const { along: u, perp: v } = off(q); return Math.abs(Math.hypot(u, v) - r.protR); })).toFixed(4) : null,
+        arcSpan: ss[1] ? ss[1].points.map((q) => { const { along: u, perp: v } = off(q); return Math.atan2(-v, u) * 180 / Math.PI; }).filter((_, i, A) => i === 0 || i === A.length - 1).map((d) => +d.toFixed(1)) : null,
+        armDeg: ss[2] ? deg(ss[2]) : null, armRay: ss[2] ? ray(ss[2], 37 * Math.PI / 180) : null,
+        upDeg: ss[3] ? deg(ss[3]) : null, upRay: ss[3] ? ray(ss[3], Math.PI / 2) : null };`);
+    // 5. the printed marks, read back from the pixels: drawn big on a canvas of its own, tilted, a tick on every whole degree and none in between
+    const marks = await js(`const a = window.app, T = a.interaction, r = a.ruler, z = a.surface.cam.z;
+      const keep = { R: r.protR, arm: r.protArm }; r.protR = 400 / z; r.protArm = 37;
+      const cv = document.createElement('canvas'); cv.width = 1000; cv.height = 1000; const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 1000, 1000);
+      const c = a.surface.cam.toScreen(r.x, r.y); ctx.translate(500 - c.x, 500 - c.y); T.drawProtractor(ctx);
+      const img = ctx.getImageData(0, 0, 1000, 1000).data, Rz = r.protR * z;
+      const lum = (x, y) => { let m = 255; for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const i = ((Math.round(y) + dy) * 1000 + Math.round(x) + dx) * 4; m = Math.min(m, (img[i] + img[i + 1] + img[i + 2]) / 3); } return Math.round(m); };   // NaN off the canvas, which fails every test below
+      // ink is looked for in the 3x3 pixels round a spot (anti-aliasing smears a thin line), its absence in the spot's own pixel
+      const one = (x, y) => { const i = (Math.round(y) * 1000 + Math.round(x)) * 4; return Math.round((img[i] + img[i + 1] + img[i + 2]) / 3); };
+      const spot = (deg, inset = 3) => { const th = deg * Math.PI / 180, u = Math.cos(th) * (Rz - inset), v = -Math.sin(th) * (Rz - inset); return { x: 500 + Math.cos(r.angle) * u - Math.sin(r.angle) * v, y: 500 + Math.sin(r.angle) * u + Math.cos(r.angle) * v }; };
+      const missing = [], between = [], lengths = [];
+      for (let d = 0; d <= 180; d++) { const p = spot(d); const l = lum(p.x, p.y); if (!(l <= 190)) missing.push(d + ':' + l); }
+      for (let d = 1; d < 179; d++) { const p = spot(d + 0.5); const l = one(p.x, p.y); if (!(l >= 215)) between.push((d + 0.5) + ':' + l); }
+      // long ticks on the tens, middling on the fives, short on the rest, so a scale slid by whole degrees cannot pass
+      for (let d = 1; d < 180; d++) {
+        if (d === 37) continue;                                  // the arm lies along this one
+        const want8 = d % 5 === 0, want13 = d % 10 === 0, look = (w, x, y) => (w ? lum(x, y) : one(x, y));
+        const at8 = look(want8, spot(d, 8).x, spot(d, 8).y), at13 = look(want13, spot(d, 13).x, spot(d, 13).y);
+        if (Number.isNaN(at8 + at13) || (at8 < 190) !== want8 || (at13 < 190) !== want13) lengths.push(d + ':' + at8 + '/' + at13);
+      }
+      const L = T.protLabels || [], inner = L.filter((x) => x.ring === 'inner'), outer = L.filter((x) => x.ring === 'outer');
+      const sums = inner.map((x) => +x.text + +(outer.find((y) => y.mark === x.mark) || { text: NaN }).text);
+      const innerRight = inner.every((x) => +x.text === x.mark);
+      const placed = L.filter((x) => x.mark > 0 && x.mark < 180).map((x) => Math.abs(Math.atan2(-x.v, x.u) * 180 / Math.PI - x.mark)).reduce((m, e) => Math.max(m, e), 0);
+      r.protR = keep.R; r.protArm = keep.arm;
+      return { missing, between, lengths, inner: inner.length, outer: outer.length, sums: [...new Set(sums)], innerRight, rightEnd: (outer.find((y) => y.mark === 0) || {}).text, leftEnd: (outer.find((y) => y.mark === 180) || {}).text, placed: +placed.toFixed(4) };`);
+    await js(`const a = window.app, w = window.__rulerWas; a.settings.rulerKind = w.kind; a.settings.rulerZero = w.zero; a.settings.rulerOpacity = w.op; a.ruler.kind = 'ruler';
+      if (a.ruler.visible) a.toggleRuler(); a.settings.inkWithMouse = window.__mouseWas; a.saveSettings(); a.newBoard(true);`);
+    check('the ruler menu offers a protractor, and choosing it fits a half-circle in the window and remembers it',
+      setup.offered && setup.kind === 'protractor' && setup.saved === 'protractor' && setup.stored === 'protractor' && setup.fitted && setup.inside === true && setup.below === false,
+      `Protractor offered: ${setup.offered}; after choosing: ruler is "${setup.kind}", setting "${setup.saved}", saved to disk "${setup.stored}" (wanted protractor each); fitted in view: ${setup.fitted}; a point inside the half-circle is under the plastic: ${setup.inside} (wanted true), one just below the straight edge: ${setup.below} (wanted false)`);
+    check('every whole degree has a tick exactly where it belongs, with none in between, even with the protractor tilted',
+      marks.missing.length === 0 && marks.between.length === 0 && marks.lengths.length === 0,
+      `degrees with no tick where expected (degree:brightness, wanted none brighter than 190): ${JSON.stringify(marks.missing)}; half-degrees with ink on them (wanted none darker than 215): ${JSON.stringify(marks.between.slice(0, 20))}; ticks of the wrong length (degree:brightness 8px/13px in, wanted dark at 8px only on the fives, at 13px only on the tens): ${JSON.stringify(marks.lengths.slice(0, 20))}`);
+    check('both printed scales are right: the blue one counts from the right end, the dark one from the left, they always add up to 180, and every number sits on its own mark',
+      marks.inner === 19 && marks.outer === 19 && marks.sums.length === 1 && marks.sums[0] === 180 && marks.innerRight && marks.rightEnd === '180' && marks.leftEnd === '0' && marks.placed < 0.001,
+      `numbers on each scale: inner ${marks.inner}, outer ${marks.outer} (wanted 19 each); inner + outer at each mark: ${JSON.stringify(marks.sums)} (wanted only 180); blue number equals its mark everywhere: ${marks.innerRight}; dark number at the right end ${marks.rightEnd} (wanted 180), at the left end ${marks.leftEnd} (wanted 0); worst angle between a number and its mark: ${marks.placed}° (wanted under 0.001)`);
+    check('a pen along the straight edge draws a dead-straight line through the centre, and round the curve a perfect arc around it',
+      lines.n === 4 && lines.baseOff < 0.01 && lines.baseDeg < 0.01 && lines.arcErr < 0.01 && lines.arcSpan && lines.arcSpan[0] > 140 && lines.arcSpan[1] < 40,
+      `strokes: ${lines.n} (wanted 4) with ${JSON.stringify(lines.pts)} points; straight edge: furthest point off the line through the centre ${lines.baseOff} (wanted under 0.01), its angle to the edge ${lines.baseDeg}° (wanted 0); curve: furthest point off the circle ${lines.arcErr} (wanted under 0.01), running from ${JSON.stringify(lines.arcSpan)}° (wanted from about 150° to about 30°); protractor radius ${R}`);
+    check('the measuring arm turns in whole degrees and reads both angles, and a pen along it draws out of the centre at exactly that angle',
+      arm.deg === 37 && arm.reading && arm.reading.inner === 37 && arm.reading.outer === 143 && arm.strokes === before
+        && Math.abs(lines.armDeg - 37) < 0.01 && lines.armRay < 0.01 && Math.abs(lines.upDeg - 90) < 0.01 && lines.upRay < 0.01,
+      `arm after dragging its knob to about 37.3°: ${arm.deg}° (wanted 37), reading ${JSON.stringify(arm.reading)} (wanted inner 37, outer 143); ink left by the drag: ${arm.strokes - before} (wanted 0); line along the arm at 37°: ${lines.armDeg}° to the straight edge (wanted 37.00), furthest point off the ray from the centre ${lines.armRay}; arm at 90°: ${lines.upDeg}° (wanted 90.00), off the ray ${lines.upRay} (wanted under 0.01 each)`);
+  }
+
+  /* ---- starting on a corner: the line follows the side the pen goes along, or the hand if it goes along neither ---- */
+  {
+    const wc = win.webContents;
+    await js(`const a = window.app; a.toast = () => {}; a.newBoard(true); a.settings.inkToShape = false;
+      window.__mouseWas = a.settings.inkWithMouse; a.settings.inkWithMouse = 'yes';
+      window.__rulerWas = { kind: a.settings.rulerKind, zero: a.settings.rulerZero, op: a.settings.rulerOpacity };
+      a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
+      const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'black'); a.setTool('pen');
+      if (a.ruler.visible) a.toggleRuler();`);
+    const toScreen = (p) => js(`const c = window.app.surface.cam, r = window.app.surface.canvas.getBoundingClientRect(); const q = c.toScreen(${p.x}, ${p.y}); return { x: Math.round(q.x + r.left), y: Math.round(q.y + r.top) };`);
+    const drag = async (world) => {
+      const pts = []; for (const p of world) pts.push(await toScreen(p));
+      wc.sendInputEvent({ type: 'mouseDown', x: pts[0].x, y: pts[0].y, button: 'left', clickCount: 1 }); await sleep(20);
+      for (const q of pts.slice(1)) { wc.sendInputEvent({ type: 'mouseMove', x: q.x, y: q.y, button: 'left', modifiers: ['leftbuttondown'] }); await sleep(12); }
+      wc.sendInputEvent({ type: 'mouseUp', x: pts.at(-1).x, y: pts.at(-1).y, button: 'left', clickCount: 1 }); await sleep(100);
+    };
+    // put a shape on screen, tilted, and hand back its corners and edges on the board
+    const place = (kind) => js(`const a = window.app, r = a.ruler; a.settings.rulerKind = '${kind}';
+      if (r.visible) a.toggleRuler(); a.toggleRuler(); r.angle = 0.15;
+      const v = a.surface.cam.viewport(a.surface.width, a.surface.height), T = a.interaction, cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+      const w = (u, vv) => ({ x: r.x + cos * u - sin * vv, y: r.y + sin * u + cos * vv });
+      if (r.kind === 'protractor') { r.protR = Math.min(v.h * 0.3, v.w * 0.3); r.protArm = 90; r.x = v.x + v.w / 2; r.y = v.y + v.h * 0.5 + r.protR * 0.4;
+        return { R: r.protR, centre: { x: r.x, y: r.y }, corners: [w(r.protR, 0), w(-r.protR, 0)] }; }
+      if (r.kind === 'ruler') { r.x = v.x + v.w / 2; r.y = v.y + v.h * 0.4; return { corners: [w(-r.length / 2, 0), w(r.length / 2, 0)], thick: r.thickness }; }
+      const tall = r.kind === 'set60' ? Math.tan(Math.PI / 6) : 1;
+      r.triBase = Math.min(v.w * 0.45, (v.h * 0.55) / tall); r.x = v.x + v.w / 2; r.y = v.y + v.h * 0.5 - r.triBase * tall / 2;
+      return { corners: T.triCorners().map((q) => w(q.u, q.v)) };`);
+    const results = [];
+    // the newest stroke, measured against a straight line (p0 to p1) or a circle (centre, radius)
+    const measure = (line, circle) => js(`const a = window.app, ss = a.store.objects.filter((o) => o.type === 'stroke'), o = ss[ss.length - 1];
+      if (!o) return null; const p = o.points;
+      const out = { n: ss.length, pts: p.length };
+      ${line ? `const q0 = ${JSON.stringify(line[0])}, q1 = ${JSON.stringify(line[1])}, L = Math.hypot(q1.x - q0.x, q1.y - q0.y);
+        out.off = +Math.max(...p.map((q) => Math.abs((q.x - q0.x) * (q1.y - q0.y) - (q.y - q0.y) * (q1.x - q0.x)) / L)).toFixed(4);
+        const dx = p[p.length - 1].x - p[0].x, dy = p[p.length - 1].y - p[0].y;
+        out.turn = +(Math.acos(Math.min(1, Math.abs(dx * (q1.x - q0.x) + dy * (q1.y - q0.y)) / (Math.hypot(dx, dy) * L))) * 180 / Math.PI).toFixed(3);` : ''}
+      ${circle ? `const c = ${JSON.stringify(circle.c)}; out.off = +Math.max(...p.map((q) => Math.abs(Math.hypot(q.x - c.x, q.y - c.y) - ${circle.R}))).toFixed(4);` : ''}
+      out.last = p[p.length - 1];
+      return out;`);
+    // from just outside a corner, along one of its sides, with a wobbly hand
+    const fromCorner = async (corner, other, opposite, len) => {
+      const L = Math.hypot(other.x - corner.x, other.y - corner.y), ux = (other.x - corner.x) / L, uy = (other.y - corner.y) / L;
+      // outward: away from the third corner, square to this side
+      let nx = -uy, ny = ux; if ((opposite.x - corner.x) * nx + (opposite.y - corner.y) * ny > 0) { nx = -nx; ny = -ny; }
+      const w = []; for (let i = 0; i <= 20; i++) { const t = len * i / 20, o = 3 + Math.sin(i) * 3; w.push({ x: corner.x + ux * t + nx * o, y: corner.y + uy * t + ny * o }); }
+      await drag(w);
+    };
+    for (const kind of ['set45', 'set60']) {
+      const { corners: P } = await place(kind);
+      const sides = [[0, 1], [1, 2], [2, 0]];                     // e0 base, e1 long slope, e2 upright
+      for (const [ci, name] of [[0, 'right angle'], [1, 'narrow corner'], [2, 'top corner']]) {
+        for (const [i, j] of sides.filter(([i, j]) => i === ci || j === ci)) {
+          const other = P[i === ci ? j : i], third = P[3 - i - j];
+          await fromCorner(P[ci], other, third, Math.hypot(other.x - P[ci].x, other.y - P[ci].y) * 0.5);
+          const m = await measure([P[i], P[j]]);
+          results.push({ what: kind + ' ' + name + ' along e' + sides.findIndex((s) => s[0] === i && s[1] === j), ok: !!m && m.off < 0.01 && m.turn < 0.01, off: m && m.off, turn: m && m.turn, pts: m && m.pts });
+        }
+      }
+    }
+    {
+      const g = await place('protractor');
+      // right-hand corner: along the straight edge to the left, and up round the curve
+      await fromCorner(g.corners[0], g.corners[1], { x: g.centre.x - Math.sin(0.15) * -g.R, y: g.centre.y - Math.cos(0.15) * g.R }, g.R * 0.6);
+      let m = await measure([g.corners[0], g.corners[1]]);
+      results.push({ what: 'protractor corner along the straight edge', ok: !!m && m.off < 0.01 && m.turn < 0.01, off: m && m.off, turn: m && m.turn });
+      const arcPts = []; for (let i = 0; i <= 20; i++) { const th = (i * 2.2) * Math.PI / 180, rho = g.R + 3 + Math.sin(i) * 3, u = Math.cos(th) * rho, v = -Math.sin(th) * rho;
+        arcPts.push({ x: g.centre.x + Math.cos(0.15) * u - Math.sin(0.15) * v, y: g.centre.y + Math.sin(0.15) * u + Math.cos(0.15) * v }); }
+      await drag(arcPts);
+      m = await measure(null, { c: g.centre, R: g.R });
+      results.push({ what: 'protractor corner up round the curve', ok: !!m && m.off < 0.01, off: m && m.off });
+    }
+    let away = null;
+    {
+      const g = await place('ruler');
+      // the straight ruler's end: along its edge stays straight; pulled straight off it, the line follows the hand
+      const P0 = g.corners[0], P1 = g.corners[1];
+      await fromCorner(P0, P1, { x: P0.x - Math.sin(0.15) * g.thick, y: P0.y + Math.cos(0.15) * g.thick }, 200);
+      const m = await measure([P0, P1]);
+      results.push({ what: 'ruler end along its edge', ok: !!m && m.off < 0.01 && m.turn < 0.01, off: m && m.off, turn: m && m.turn });
+      const up = { x: Math.sin(0.15), y: -Math.cos(0.15) }, w = [];
+      for (let i = 0; i <= 15; i++) w.push({ x: P0.x + 30 * Math.cos(0.15) + up.x * (2 + i * 6), y: P0.y + 30 * Math.sin(0.15) + up.y * (2 + i * 6) });
+      await drag(w);
+      const end = w.at(-1), m2 = await measure([P0, P1]);
+      away = { ended: m2 && +Math.hypot(m2.last.x - end.x, m2.last.y - end.y).toFixed(2), off: m2 && m2.off, pts: m2 && m2.pts };
+    }
+    // wobbly writing near the ruler stays wobbly: nothing pulls it onto the edge
+    let near = null;
+    {
+      const g = await place('ruler'), P0 = g.corners[0], dirx = Math.cos(0.15), diry = Math.sin(0.15), upx = Math.sin(0.15), upy = -Math.cos(0.15);
+      const at = (along, out) => ({ x: P0.x + dirx * along + upx * out, y: P0.y + diry * along + upy * out });
+      const pass = [at(120, 80)]; for (let i = 1; i <= 30; i++) pass.push(at(120 + i * 12, 5 + 15 * (0.5 + 0.5 * Math.sin(i * 0.7))));
+      await drag(pass);
+      const hand1 = []; for (const q of pass) hand1.push(await js(`const c = window.app.surface.cam, r = window.app.surface.canvas.getBoundingClientRect(); const s = c.toScreen(${q.x}, ${q.y}); return c.toWorld(Math.round(s.x + r.left) - r.left, Math.round(s.y + r.top) - r.top);`));
+      const m1 = await js(`const ss = window.app.store.objects.filter((o) => o.type === 'stroke'), o = ss[ss.length - 1], H = ${JSON.stringify(hand1)};
+        const seg = (q, a, b) => { const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((q.x - a.x) * dx + (q.y - a.y) * dy) / L2)); return Math.hypot(q.x - a.x - dx * t, q.y - a.y - dy * t); };
+        return o ? +Math.max(...o.points.map((q) => Math.min(...H.slice(1).map((h, i) => seg(q, H[i], h))))).toFixed(2) : null;`);
+      const wob = []; for (let i = 0; i <= 30; i++) wob.push(at(150 + i * 10, 20 + Math.sin(i) * 4));
+      await drag(wob);
+      const m2 = await js(`const ss = window.app.store.objects.filter((o) => o.type === 'stroke'), o = ss[ss.length - 1], T = window.app.interaction;
+        if (!o) return null; const v = o.points.map((q) => T.rulerOffsets(q).perp); return +(Math.max(...v) - Math.min(...v)).toFixed(2);`);
+      near = { offHand: m1, spread: m2 };
+    }
+    const readout = await js(`const a = window.app, T = a.interaction; a.ruler.angle = 0.6; a.surface.invalidate(); a.surface.draw(); return { at: T.rulerReadoutAt, thick: a.ruler.thickness * a.surface.cam.z };`);
+    await js(`const a = window.app, w = window.__rulerWas; a.settings.rulerKind = w.kind; a.settings.rulerZero = w.zero; a.settings.rulerOpacity = w.op; a.ruler.kind = 'ruler';
+      if (a.ruler.visible) a.toggleRuler(); a.settings.inkWithMouse = window.__mouseWas; a.saveSettings(); a.newBoard(true);`);
+    const bad = results.filter((r) => !r.ok);
+    check('starting right on a corner, the pen follows the side it is drawn along - on both set squares, every corner, both sides, and the protractor\'s ends',
+      results.length === 15 && bad.length === 0,
+      `cases: ${results.length} (wanted 15); wrong ones (wanted none, each within 0.01 px of its side and 0.01° of its direction): ${JSON.stringify(bad)}; all: ${JSON.stringify(results.map((r) => r.what + ' ' + r.off + '/' + r.turn))}`);
+    check('a line pulled straight off the end of the ruler follows the hand instead of being dragged along the edge',
+      away && away.ended < 1.5 && away.off > 40,
+      `${JSON.stringify(away)} (wanted the line to end within 1.5 px of where the hand stopped, and to reach over 40 px from the ruler's edge)`);
+    check('writing that passes near the ruler, or starts a little way off it, keeps its own wobble: the edge does not pull it in',
+      near && near.offHand !== null && near.offHand < 1.5 && near.spread > 5,
+      `${JSON.stringify(near)} (wanted: a wobbly line dipping to 5-20 px from the edge stays within 1.5 px of the path the hand took (offHand), and a wobbly line started 20 px off the edge keeps more than 5 px of its wobble (spread))`);
+    check('the straight ruler shows its angle in the middle',
+      readout.at && readout.at.u === 0 && readout.at.v > readout.thick / 2 && readout.at.v < readout.thick && readout.at.text === '34°',
+      `readout drawn at ${JSON.stringify(readout.at)} on a ruler ${readout.thick} px thick (wanted across the middle, u 0, in the lower half of the plastic, reading 34° for a tilt of 0.6 radians)`);
+  }
+
   /* ---- My boards as a full page: folder tiles with colours, board pictures, and opening on it ---- */
   {
     const r = await js(`const a = window.app; a.toast = () => {};

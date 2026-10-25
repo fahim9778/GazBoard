@@ -1601,3 +1601,11 @@ body.presenting #pagestrip { display: none; }
   #pagestrip .ps-list { padding: 2px 4px 8px; gap: 6px; }
   [dir="rtl"] #pagestrip { left: auto; right: 6px; }
 }
+
+/* the ruler's own menu: shape, which way 0° points, how see-through */
+.ruler-menu { min-width: 260px; padding: 10px 12px 12px; }
+.ruler-menu h5 { margin: 8px 2px 6px; font-size: 11px; letter-spacing: .4px; text-transform: uppercase; color: var(--text-2); }
+.ruler-menu h5:first-child { margin-top: 2px; }
+.ruler-seg { display: flex; flex-wrap: wrap; gap: 6px; }
+.ruler-seg .btn { padding: 6px 10px; font-size: 13px; }
+.ruler-menu input[type="range"] { width: 100%; }

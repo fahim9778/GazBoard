@@ -133,6 +133,8 @@ export class Interaction {
       // before this existed - the feature is simply not gained there, and
       // nothing that used to work is lost.
       this.rightPan = null;
+      // a right-click on the ruler offers the ruler's own settings
+      if (this.ruler.visible && this.rulerZone(this.surface.screenPoint(e))) { this.app.openRulerMenu({ x: e.clientX, y: e.clientY }); return; }
       if (this.app.viewMode) return;        // its every entry changes the board
       this.app.showContextMenu(e);
     });
@@ -368,9 +370,22 @@ export class Interaction {
     // ruler interaction takes priority when it is showing
     if (this.ruler.visible) {
       const zone = this.rulerZone(sp);
+      // the ruler's own settings button: shape, which way 0° points, how see-through
+      if (zone === 'menu') {
+        this.action = null; this.actionId = null; this.cancelHold?.();
+        this.app.openRulerMenu({ x: e.clientX, y: e.clientY });
+        return;
+      }
       // Whichever pointer grabbed the ruler owns it until it lifts, exactly as
       // for every other gesture. Without that, a palm settling on the glass
       // dragged the ruler, and a palm lifting ended the drag.
+      // the protractor's measuring arm turns round its centre
+      if (zone === 'arm') {
+        this.action = { type: 'protArm' };
+        this.actionId = e.pointerId;
+        this.surface.invalidate();
+        return;
+      }
       if (zone === 'rotate') {
         const d = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x) - this.ruler.angle;
         const flip = Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > Math.PI / 2;
@@ -729,6 +744,8 @@ export class Interaction {
          * simply never arrived.
          */
         const offer = (raw) => {
+          // a stroke that started on the ruler: which edge, if any, is settled by where the pen goes
+          if (a.edgePending) this.settleRuledEdge(a, raw);
           /*
            * The plastic is in the way.
            *
@@ -947,6 +964,7 @@ export class Interaction {
         this.ruler.y = a.y0 + (wp.y - a.start.y);
         break;
       }
+      case 'protArm': this.aimProtArm(wp, mods.shift); break;
       case 'rulerRotate': {
         // Grabbing the far end turns it the same way round, not upside down.
         const ang = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x) + (a.flip ? Math.PI : 0);
@@ -1600,9 +1618,10 @@ export class Interaction {
     // Whether this stroke is a RULED one is decided here, once, by where it
     // starts - and so is which of the ruler's two edges it belongs to. See
     // snapToRuler() for why that cannot be left to the points as they arrive.
-    const startEdge = this.ruler.visible && this.ruler.snap ? this.rulerEdgeAt(wp) : null;
+    const startEdges = this.ruler.visible && this.ruler.snap ? this.rulerEdgesAt(wp) : [];
     const act = { type: 'draw', obj, snapAxis: null, sheet,
-      ruled: startEdge !== null, ruledEdge: startEdge || 0 };
+      ruled: startEdges.length > 0, ruledEdge: startEdges.length ? startEdges[0] : 0,
+      edgePending: startEdges.length ? { from: { x: wp.x, y: wp.y }, cands: startEdges, raw: [{ ...wp, p: this.pressure(e) }] } : null };
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
     if (obj.effect === 'pencil') {
       act.tiltSum = this.tilt(e); act.tiltN = 1;
@@ -2506,7 +2525,8 @@ export class Interaction {
       const zone = this.rulerZone(sp);
       // Only the parts that actually do something say so. The body under a pen
       // draws, and a "move" cursor over it would be the same old lie.
-      if (zone === 'rotate') cursor = 'grab';
+      if (zone === 'rotate' || zone === 'arm') cursor = 'grab';
+      else if (zone === 'menu') cursor = 'pointer';
       else if (zone === 'move') cursor = 'move';
       else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
     }
@@ -2768,6 +2788,8 @@ export class Interaction {
 
   /** Where the grip that always moves the ruler sits, in ruler coordinates. */
   static MOVE_GRIP = { halfLen: 34, pad: 11 };
+  /** How far in from the left end the ruler's settings button sits. */
+  static MENU_AT = 44;
 
   /*
    * The turning knob: how far in from each end it sits, and how big it is.
@@ -2784,7 +2806,95 @@ export class Interaction {
     return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   }
 
+  /*
+   * Triangles (set squares).
+   *
+   * Besides the straight ruler there are two set squares, the plastic
+   * triangles from a geometry box: one with a right angle and two 45° corners,
+   * one with a right angle, a 30° and a 60° corner. Both hang below their long
+   * base edge the way the ruler's body hangs below its top edge, with the right
+   * angle at the left end of the base, so every edge is a straight line to draw
+   * along: the base, the upright side at exactly 90° to it, and the long slope
+   * at 45° (or 30°). Turning and moving work as for the ruler; the pen is held
+   * to whichever edge a stroke starts on, and nothing is drawn under the
+   * plastic. The straight ruler keeps its own, unchanged code.
+   */
+  get rulerIsTriangle() { const k = this.ruler.kind; return k === 'set45' || k === 'set60'; }
+
+  /** The triangle's corners in ruler space (along the base, down from it), in world units. */
+  triCorners() {
+    const r = this.ruler, b = r.triBase || r.length * 0.5;
+    const h = r.kind === 'set60' ? b * Math.tan(Math.PI / 6) : b;
+    return [{ u: -b / 2, v: 0 }, { u: b / 2, v: 0 }, { u: -b / 2, v: h }];   // right angle, the narrow corner, the top of the upright
+  }
+
+  /** Is (u, v) inside the triangle, and how far inside (negative outside), in world units. */
+  triInside(u, v) {
+    const P = this.triCorners();
+    let inside = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const a = P[i], b = P[(i + 1) % 3], c = P[(i + 2) % 3];
+      const ex = b.u - a.u, ey = b.v - a.v, L = Math.hypot(ex, ey);
+      // signed distance from this edge, positive towards the third corner
+      const side = ((c.u - a.u) * ey - (c.v - a.v) * ex) > 0 ? 1 : -1;
+      const d = side * ((u - a.u) * ey - (v - a.v) * ex) / L;
+      inside = Math.min(inside, d);
+    }
+    return inside;
+  }
+
+  /** The triangle edges a point could belong to ('e0' base, 'e1' long slope, 'e2' upright), with their distances. */
+  triEdgesAt(pt) {
+    const z = this.surface.cam.z, reach = 40 / z;
+    const { along: u, perp: v } = this.rulerOffsets(pt);
+    const P = this.triCorners();
+    const found = [];
+    for (let i = 0; i < 3; i++) {
+      const a = P[i], b = P[(i + 1) % 3];
+      const ex = b.u - a.u, ey = b.v - a.v, L = Math.hypot(ex, ey);
+      const t = ((u - a.u) * ex + (v - a.v) * ey) / (L * L);
+      if (t < -reach / L || t > 1 + reach / L) continue;           // past the end of this edge
+      found.push({ edge: 'e' + i, d: Math.abs((u - a.u) * ey - (v - a.v) * ex) / L });
+    }
+    return { found, inside: this.triInside(u, v) > 0 };
+  }
+
+  /** The point, moved onto the line of one triangle edge. */
+  triProject(pt, edge) {
+    const r = this.ruler, P = this.triCorners(), i = Number(String(edge).slice(1)) || 0;
+    const a = P[i], b = P[(i + 1) % 3];
+    const { along: u, perp: v } = this.rulerOffsets(pt);
+    const ex = b.u - a.u, ey = b.v - a.v, L2 = ex * ex + ey * ey;
+    const t = ((u - a.u) * ex + (v - a.v) * ey) / L2;
+    const pu = a.u + ex * t, pv = a.v + ey * t;
+    const cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+    return { x: r.x + cos * pu - sin * pv, y: r.y + sin * pu + cos * pv, p: pt.p };
+  }
+
+  /** Where the triangle's own controls sit, in screen pixels in ruler space. */
+  triControls() {
+    const z = this.surface.cam.z, P = this.triCorners().map((q) => ({ u: q.u * z, v: q.v * z }));
+    const cu = (P[0].u + P[1].u + P[2].u) / 3, cv = (P[0].v + P[1].v + P[2].v) / 3;
+    const h = P[2].v;
+    return {
+      knobs: [{ u: P[1].u - Math.max(46, h * 0.06 + 46), v: 11 }, { u: P[0].u + 16, v: 14 }],
+      grip: { u: cu, v: cv },
+      menu: { u: P[0].u + 22, v: Math.min(h - 18, 54) },
+      readout: { u: cu, v: cv + 30 }
+    };
+  }
+
+  /** The angle the ruler shows: measured from pointing right, or (if chosen) from pointing up. */
+  rulerReadout(angle = this.ruler.angle) {
+    let deg = ((angle * 180) / Math.PI) % 360;
+    if (this.app.settings.rulerZero === 'up') deg += 90;
+    deg = ((deg % 360) + 360) % 360;
+    return Math.round(deg) % 360 + '°';
+  }
+
   rulerZone(sp) {
+    if (this.ruler.kind === 'set45' || this.ruler.kind === 'set60') return this.triZone(sp);
+    if (this.rulerIsProtractor) return this.protZone(sp);
     const { c, len, thick, angle } = this.rulerRect();
     const dx = sp.x - c.x, dy = sp.y - c.y;
     const along = dx * Math.cos(angle) + dy * Math.sin(angle);
@@ -2802,6 +2912,8 @@ export class Interaction {
       const kx = end * (len / 2 - kb.inset);
       if (Math.hypot(along - kx, perp - thick / 2) < reach) return 'rotate';
     }
+    // the little settings button: shape, which way 0° points, how see-through
+    if (Math.hypot(along - (-len / 2 + Interaction.MENU_AT), perp - thick / 2) < reach) return 'menu';
     /*
      * A grip in the middle that moves the ruler whatever is being held.
      *
@@ -2820,6 +2932,127 @@ export class Interaction {
     if (Math.abs(along) < gr.halfLen && perp >= -gr.pad && perp <= thick + gr.pad) return 'move';
     if (Math.abs(along) <= len / 2 && perp >= -2 && perp <= thick) return 'body';
     return null;
+  }
+
+  triZone(sp) {
+    const { c, angle } = this.rulerRect();
+    const dx = sp.x - c.x, dy = sp.y - c.y;
+    const u = dx * Math.cos(angle) + dy * Math.sin(angle);
+    const v = -dx * Math.sin(angle) + dy * Math.cos(angle);
+    const C = this.triControls(), reach = this.coarsePointer ? 24 : 15, z = this.surface.cam.z;
+    for (const k of C.knobs) if (Math.hypot(u - k.u, v - k.v) < reach) return 'rotate';
+    if (Math.hypot(u - C.menu.u, v - C.menu.v) < reach) return 'menu';
+    if (Math.abs(u - C.grip.u) < 34 && Math.abs(v - C.grip.v) < 20) return 'move';
+    if (this.triInside(u / z, v / z) > -2 / z) return 'body';
+    return null;
+  }
+
+  /*
+   * The protractor.
+   *
+   * A half-circle like the one in every geometry box, sitting on its straight
+   * edge. The middle of that edge is the ruler's anchor, so the centre the
+   * angles are measured from is exactly the point the protractor is moved and
+   * turned by: put the crosshair on a vertex and it stays on it while you turn.
+   *
+   * Angles: θ is measured from the right-hand end of the straight edge, round
+   * over the top to the left-hand end (0° to 180°). The inner, blue scale reads
+   * θ; the outer, dark scale reads from the left, so it shows 180° − θ. That is
+   * how a real protractor is printed, and why the two numbers at any mark always
+   * add up to 180.
+   *
+   * Three things draw: the straight edge (a straight line), the curved edge (a
+   * perfect arc around the centre, as a compass would) and the measuring arm, a
+   * thin needle turned around the centre in whole degrees; a pen along it draws
+   * a line out of the centre at exactly the arm's angle.
+   */
+  get rulerIsProtractor() { return this.ruler.kind === 'protractor'; }
+
+  /** The protractor's radius (world units) and its arm's angle in whole degrees, 0 to 180. */
+  protGeom() {
+    const r = this.ruler;
+    const R = r.protR > 0 ? r.protR : r.length * 0.3;
+    const armDeg = Number.isFinite(r.protArm) ? Math.min(180, Math.max(0, Math.round(r.protArm))) : 60;
+    return { R, armDeg, arm: (armDeg * Math.PI) / 180 };
+  }
+
+  /** The point at angle θ (radians, protractor scale) and distance ρ from the centre, in ruler space. */
+  static protAt(theta, rho) { return { u: Math.cos(theta) * rho, v: -Math.sin(theta) * rho }; }
+
+  /** Is (u, v) on the plastic itself: above the straight edge and inside the curve. */
+  protInside(u, v) {
+    const { R } = this.protGeom();
+    return v < 0 && Math.hypot(u, v) < R;
+  }
+
+  /** The protractor edges a point could belong to ('pb' the straight edge, 'pc' the curve, 'pa' the arm), with their distances. */
+  protEdgesAt(pt) {
+    const z = this.surface.cam.z, band = 26 / z, reach = 40 / z, ext = Interaction.PROT_ARM_EXT / z;
+    const { R, arm } = this.protGeom();
+    const { along: u, perp: v } = this.rulerOffsets(pt);
+    const rho = Math.hypot(u, v);
+    const found = [];
+    if (Math.abs(u) <= R + reach) found.push({ edge: 'pb', d: Math.abs(v) });
+    if (v <= band) found.push({ edge: 'pc', d: Math.abs(rho - R) });
+    const c = Math.cos(arm), s = Math.sin(arm), t = u * c - v * s;
+    if (t > 0 && t <= R + ext + reach) found.push({ edge: 'pa', d: Math.abs(u * s + v * c) });
+    return { found, inside: v < 0 && rho < R };
+  }
+
+  /** The point, moved onto one protractor edge: along the straight edge, round the curve, or along the arm. */
+  protProject(pt, edge) {
+    const r = this.ruler, { R, arm } = this.protGeom();
+    const { along: u, perp: v } = this.rulerOffsets(pt);
+    let pu = u, pv = 0;
+    if (edge === 'pc') {
+      const rho = Math.hypot(u, v);
+      if (rho > 1e-9) { pu = (u / rho) * R; pv = (v / rho) * R; } else { pu = R; pv = 0; }
+    } else if (edge === 'pa') {
+      const c = Math.cos(arm), s = Math.sin(arm), t = u * c - v * s;
+      pu = c * t; pv = -s * t;
+    }
+    const cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+    return { x: r.x + cos * pu - sin * pv, y: r.y + sin * pu + cos * pv, p: pt.p };
+  }
+
+  /** How far beyond the curve the arm reaches, and where its knob sits past the curve, in screen pixels. */
+  static PROT_ARM_EXT = 40;
+  static PROT_ARM_KNOB = 24;
+
+  /** Where the protractor's controls sit, in screen pixels in ruler space. */
+  protControls() {
+    const z = this.surface.cam.z, { R, arm } = this.protGeom(), Rz = R * z;
+    return {
+      Rz,
+      knobs: [{ u: Rz * 0.6, v: -14 }, { u: -Rz * 0.6, v: -14 }],
+      menu: { u: -Rz * 0.44, v: -14 },
+      grip: { u: 0, v: -Rz * 0.58 },
+      readout: { u: 0, v: -Rz * 0.58 + 30 },
+      armKnob: Interaction.protAt(arm, Rz + Interaction.PROT_ARM_KNOB)
+    };
+  }
+
+  protZone(sp) {
+    const { c, angle } = this.rulerRect();
+    const dx = sp.x - c.x, dy = sp.y - c.y;
+    const u = dx * Math.cos(angle) + dy * Math.sin(angle);
+    const v = -dx * Math.sin(angle) + dy * Math.cos(angle);
+    const C = this.protControls(), reach = this.coarsePointer ? 24 : 15;
+    if (Math.hypot(u - C.armKnob.u, v - C.armKnob.v) < reach) return 'arm';
+    for (const k of C.knobs) if (Math.hypot(u - k.u, v - k.v) < reach) return 'rotate';
+    if (Math.hypot(u - C.menu.u, v - C.menu.v) < reach) return 'menu';
+    if (Math.abs(u - C.grip.u) < 34 && Math.abs(v - C.grip.v) < 20) return 'move';
+    if (v <= 2 && Math.hypot(u, v) <= C.Rz + 2) return 'body';
+    return null;
+  }
+
+  /** Turn the arm to point at a world point: whole degrees, 0 to 180 (5° steps with Shift). */
+  aimProtArm(wp, coarse) {
+    const { along: u, perp: v } = this.rulerOffsets(wp);
+    let deg = (Math.atan2(-v, u) * 180) / Math.PI;
+    if (deg < 0) deg = deg < -90 ? 180 : 0;          // below the straight edge: the nearer end
+    const step = coarse ? 5 : 1;
+    this.ruler.protArm = Math.min(180, Math.max(0, Math.round(deg / step) * step));
   }
 
   /** How far along the ruler's edge a point sits, and how far off it. */
@@ -2853,13 +3086,94 @@ export class Interaction {
    * side, the full thickness for the far one.
    */
   rulerEdgeAt(pt) {
+    const list = this.rulerEdgesAt(pt);
+    return list.length ? list[0] : null;
+  }
+
+  /**
+   * Every edge a point is close enough to, nearest first.
+   *
+   * Usually that is one. Near a corner it is two, and which one the pen means
+   * cannot be told from where it lands - only from which way it then goes.
+   * Inside the plastic, well away from every edge, it is the nearest one, as
+   * the solid body has always caught everything (see above).
+   */
+  rulerEdgesAt(pt) {
+    // How close outside the plastic still counts as touching the edge: a nib's width
+    // with a mouse or pen, a little more for a fingertip. Not more - writing that
+    // merely starts near a ruler is writing, not a ruled line.
+    const z = this.surface.cam.z, band = (this.coarsePointer ? Interaction.RULE_TOUCH_FINGER : Interaction.RULE_TOUCH) / z;
+    let found, inside;
+    if (this.rulerIsTriangle) ({ found, inside } = this.triEdgesAt(pt));
+    else if (this.rulerIsProtractor) ({ found, inside } = this.protEdgesAt(pt));
+    else {
+      const r = this.ruler, { along, perp } = this.rulerOffsets(pt);
+      if (Math.abs(along) > r.length / 2 + 40 / z) return [];   // past the ends
+      found = [{ edge: 0, d: Math.abs(perp) }, { edge: r.thickness, d: Math.abs(perp - r.thickness) }];
+      inside = perp > 0 && perp < r.thickness;
+    }
+    found.sort((a, b) => a.d - b.d);
+    const near = found.filter((f) => f.d <= band);
+    return (near.length ? near : inside && found.length ? [found[0]] : []).map((f) => f.edge);
+  }
+
+  /** Which way an edge runs at a point, as a unit vector on the board. */
+  edgeDirection(edge, pt) {
     const r = this.ruler;
-    const z = this.surface.cam.z;
-    const band = 26 / z;                     // a little grace beyond the plastic
-    const { along, perp } = this.rulerOffsets(pt);
-    if (Math.abs(along) > r.length / 2 + 40 / z) return null;   // past the ends
-    if (perp < -band || perp > r.thickness + band) return null; // clear of it
-    return perp < r.thickness / 2 ? 0 : r.thickness;
+    let du = 1, dv = 0;
+    if (edge === 'pc') {
+      const { along: u, perp: v } = this.rulerOffsets(pt), rho = Math.hypot(u, v) || 1;
+      du = -v / rho; dv = u / rho;                   // along the curve: square to the line from the centre
+    } else if (edge === 'pa') {
+      const { arm } = this.protGeom(); du = Math.cos(arm); dv = -Math.sin(arm);
+    } else if (typeof edge === 'string' && edge[0] === 'e') {
+      const P = this.triCorners(), i = Number(edge.slice(1)) || 0, a = P[i], b = P[(i + 1) % 3], L = Math.hypot(b.u - a.u, b.v - a.v);
+      du = (b.u - a.u) / L; dv = (b.v - a.v) / L;
+    }
+    const cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+    return { x: cos * du - sin * dv, y: sin * du + cos * dv };
+  }
+
+  /**
+   * Which edge a stroke that started on the ruler belongs to: decided by where it goes, not where it landed.
+   *
+   * At a corner the pen lands within reach of two edges at once, and picking the
+   * nearer one by a pixel sent the line off along the side you were not drawing
+   * on. And a stroke that starts at an edge and heads away from it was dragged
+   * along the edge anyway. So the first few pixels are only watched: once the
+   * pen has moved RULE_DECIDE screen pixels, the stroke is held to whichever
+   * candidate edge runs closest to that direction - or, if none is within
+   * RULE_TOLERANCE degrees of it, it is ordinary ink that follows the hand. The
+   * points drawn while it was being decided are redrawn the chosen way.
+   */
+  static RULE_DECIDE = 16;
+  static RULE_TOUCH = 12;
+  static RULE_TOUCH_FINGER = 18;
+  static RULE_TOLERANCE = 35;
+
+  settleRuledEdge(a, raw) {
+    const pend = a.edgePending;
+    pend.raw.push(raw);
+    const mx = raw.x - pend.from.x, my = raw.y - pend.from.y, m = Math.hypot(mx, my);
+    if (m * this.surface.cam.z < Interaction.RULE_DECIDE) return;
+    let best = null, bestCos = Math.cos((Interaction.RULE_TOLERANCE * Math.PI) / 180);
+    for (const edge of pend.cands) {
+      const d = this.edgeDirection(edge, pend.from), c = Math.abs(mx * d.x + my * d.y) / m;
+      if (c >= bestCos) { bestCos = c; best = edge; }
+    }
+    a.edgePending = null;
+    const kept = [];
+    const take = (q) => { const prev = kept[kept.length - 1]; if (!prev || dist(prev, q) * this.surface.cam.z > 1.2) kept.push(q); };
+    if (best !== null) {
+      a.ruledEdge = best;
+      for (const q of pend.raw.slice(0, -1)) take(this.rulerProject(q, best));
+    } else {
+      // let go: ordinary ink from here on, never deflected, and nothing under the plastic
+      a.ruled = false; a.released = true;
+      for (const q of pend.raw.slice(0, -1)) if (!this.underThePlastic(q)) take(q);
+    }
+    a.obj.points.length = 0;
+    a.obj.points.push(...kept);
   }
 
   /**
@@ -2875,11 +3189,14 @@ export class Interaction {
     const r = this.ruler;
     if (!r.visible) return false;
     const { along, perp } = this.rulerOffsets(pt);
+    if (this.rulerIsTriangle) return this.triInside(along, perp) > 0;
+    if (this.rulerIsProtractor) return this.protInside(along, perp);
     return Math.abs(along) <= r.length / 2 && perp > 0 && perp < r.thickness;
   }
 
   /** The point, moved sideways onto one of the ruler's edges. */
   rulerProject(pt, edge = 0) {
+    if (typeof edge === 'string') return edge[0] === 'p' ? this.protProject(pt, edge) : this.triProject(pt, edge);
     const r = this.ruler;
     const { along } = this.rulerOffsets(pt);
     const cos = Math.cos(r.angle), sin = Math.sin(r.angle);
@@ -2909,8 +3226,8 @@ export class Interaction {
    * never hop from one side of the ruler to the other halfway along.
    *
    * A stroke that merely RUNS ACROSS the ruler is a different thing and must
-   * not latch: it is deflected while it is against the plastic and let go on
-   * the far side, exactly as a real pen would be. Latching that one would turn
+   * not latch: it stops at the plastic and carries on from the far side,
+   * exactly as a real pen would. Latching that one would turn
    * a circle drawn over the ruler into a straight line for the rest of its
    * length, which is a far worse bug than the one being fixed.
    */
@@ -2918,8 +3235,15 @@ export class Interaction {
     const r = this.ruler;
     if (!r.visible || !r.snap) return pt;
     if (action && action.ruled) return this.rulerProject(pt, action.ruledEdge);
-    const edge = this.rulerEdgeAt(pt);
-    return edge === null ? pt : this.rulerProject(pt, edge);
+    /*
+     * Anything else is the hand's own line, untouched. This used to pull every
+     * point within 26 pixels of an edge onto it, so wobbly writing that merely
+     * passed near the ruler came out with a straight stretch in it, as if the
+     * edge were a magnet. A real ruler does not reach out for the pen; it only
+     * stops it going through the plastic, and points under the plastic are not
+     * taken at all (see underThePlastic).
+     */
+    return pt;
   }
 
   /* ------------------------------------------------------------ *
@@ -3084,7 +3408,10 @@ export class Interaction {
   }
 
   drawRuler(ctx) {
+    if (this.rulerIsTriangle) return this.drawTriangle(ctx);
+    if (this.rulerIsProtractor) return this.drawProtractor(ctx);
     const { c, len, thick, angle } = this.rulerRect();
+    const op = rulerOpacity(this.app.settings);
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.rotate(angle);
@@ -3092,8 +3419,8 @@ export class Interaction {
     // underneath it any more (see underThePlastic), so there is nothing hiding
     // down there that needs covering up.
     const g = ctx.createLinearGradient(0, 0, 0, thick);
-    g.addColorStop(0, 'rgba(255,255,255,0.92)');
-    g.addColorStop(1, 'rgba(233,231,229,0.92)');
+    g.addColorStop(0, `rgba(255,255,255,${op})`);
+    g.addColorStop(1, `rgba(233,231,229,${op})`);
     ctx.fillStyle = g;
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1;
@@ -3121,13 +3448,14 @@ export class Interaction {
         if (major && stepPx > 6) ctx.fillText(String(Math.abs(i * stepWorld)), x, 24);
       }
     }
-    // The angle readout belongs beside the thing that changes it, not in the
-    // middle of the ruler where the move grip now lives - and where it was
-    // sitting on top of the centre tick's own label besides.
-    const degv = ((angle * 180) / Math.PI + 360) % 360;
-    ctx.fillStyle = 'rgba(0,0,0,0.75)';
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.fillText(degv.toFixed(0) + '°', len / 2 - 52, thick / 2 + 4);
+    // The angle sits in the middle, where the eye already is when lining the
+    // ruler up: on the move grip, below its three lines and well clear of the
+    // centre tick's own label above them.
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    ctx.font = 'bold 13px system-ui, sans-serif';
+    ctx.fillText(this.rulerReadout(angle), 0, thick - 10);
+    this.rulerReadoutAt = { u: 0, v: thick - 10, text: this.rulerReadout(angle) };
+    drawMenuButton(ctx, -len / 2 + Interaction.MENU_AT, thick / 2, this.coarsePointer);
     const kb = Interaction.ROTATE_KNOB;
     const kr = this.coarsePointer ? kb.r + 3 : kb.r;
     for (const end of [1, -1]) {
@@ -3159,6 +3487,183 @@ export class Interaction {
     }
     ctx.restore();
   }
+
+  /** A set square: the plastic, its edges, millimetre-style ticks on both straight sides, its corners' angles, and its controls. */
+  drawTriangle(ctx) {
+    const { c, angle } = this.rulerRect();
+    const z = this.surface.cam.z, op = rulerOpacity(this.app.settings);
+    const P = this.triCorners().map((q) => ({ u: q.u * z, v: q.v * z }));
+    const C = this.triControls();
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(angle);
+    ctx.beginPath(); ctx.moveTo(P[0].u, P[0].v); ctx.lineTo(P[1].u, P[1].v); ctx.lineTo(P[2].u, P[2].v); ctx.closePath();
+    const g = ctx.createLinearGradient(0, 0, 0, P[2].v);
+    g.addColorStop(0, `rgba(255,255,255,${op})`); g.addColorStop(1, `rgba(233,231,229,${op})`);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    // ticks every 10 world px along the base and down the upright side, from the right angle
+    const stepPx = 10 * z;
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.font = '9px system-ui, sans-serif'; ctx.textAlign = 'center';
+    if (stepPx > 3) {
+      const base = P[1].u - P[0].u, up = P[2].v;
+      for (let i = 0; i * stepPx <= base - 8; i++) {
+        const x = P[0].u + i * stepPx, major = i % 10 === 0, mid = i % 5 === 0;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, major ? 13 : mid ? 9 : 5); ctx.stroke();
+        if (major && i && stepPx > 6) ctx.fillText(String(i * 10), x, 24);
+      }
+      ctx.textAlign = 'left';
+      for (let i = 1; i * stepPx <= up - 8; i++) {
+        const y = i * stepPx, major = i % 10 === 0, mid = i % 5 === 0;
+        ctx.beginPath(); ctx.moveTo(P[0].u, y); ctx.lineTo(P[0].u + (major ? 13 : mid ? 9 : 5), y); ctx.stroke();
+        if (major && stepPx > 6) ctx.fillText(String(i * 10), P[0].u + 16, y + 3);
+      }
+    }
+    // each corner's angle, small and grey, just inside it
+    const narrow = this.ruler.kind === 'set60' ? ['30°', '60°'] : ['45°', '45°'];
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'right'; ctx.fillText(narrow[0], P[1].u - 30, 32);
+    ctx.textAlign = 'left'; ctx.fillText(narrow[1], P[0].u + 30, P[2].v - 34);
+    ctx.fillText('90°', P[0].u + 30, 40);
+    // the angle readout under the move grip
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(this.rulerReadout(angle), C.readout.u, C.readout.v + 4);
+    // the turning knobs, the move grip and the settings button, as on the ruler
+    const kb = Interaction.ROTATE_KNOB, kr = this.coarsePointer ? kb.r + 3 : kb.r;
+    for (const k of C.knobs) {
+      ctx.beginPath(); ctx.arc(k.u, k.v, kr, 0, Math.PI * 2);
+      ctx.fillStyle = '#0078d4'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.6; ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(C.grip.u - 34, C.grip.v - 16, 68, 32, 3); else ctx.rect(C.grip.u - 34, C.grip.v - 16, 68, 32);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)'; ctx.lineWidth = 1.6;
+    for (const dx2 of [-7, 0, 7]) { ctx.beginPath(); ctx.moveTo(C.grip.u + dx2, C.grip.v - 9); ctx.lineTo(C.grip.u + dx2, C.grip.v + 9); ctx.stroke(); }
+    drawMenuButton(ctx, C.menu.u, C.menu.v, this.coarsePointer);
+    ctx.restore();
+  }
+
+  /**
+   * The protractor: the plastic, a tick for every degree, the two printed
+   * scales, the centre crosshair, the measuring arm with the two angles it makes
+   * with the straight edge, and its controls.
+   *
+   * Every mark is placed from the same protAt() the pen snaps with, so what is
+   * printed and what is drawn can never disagree. The labels actually printed
+   * are kept in protLabels, which is what the tests read back.
+   */
+  drawProtractor(ctx) {
+    const { c, angle } = this.rulerRect();
+    const op = rulerOpacity(this.app.settings);
+    const { armDeg, arm } = this.protGeom();
+    const C = this.protControls(), Rz = C.Rz, at = Interaction.protAt;
+    const BLUE = '#0063b1', DARK = 'rgba(0,0,0,0.78)';
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.rotate(angle);
+    // the plastic
+    ctx.beginPath(); ctx.arc(0, 0, Rz, Math.PI, Math.PI * 2); ctx.closePath();
+    const g = ctx.createLinearGradient(0, -Rz, 0, 0);
+    g.addColorStop(0, `rgba(255,255,255,${op})`); g.addColorStop(1, `rgba(233,231,229,${op})`);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+    // a tick for every degree (every 5° when the protractor is too small for that), longer at 5° and 10°
+    const perDeg = (Rz * Math.PI) / 180, every = perDeg >= 2.2 ? 1 : 5;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    for (let d = 0; d <= 180; d += every) {
+      const len = d % 10 === 0 ? 15 : d % 5 === 0 ? 10 : 6, th = (d * Math.PI) / 180;
+      const p0 = at(th, Rz), p1 = at(th, Rz - len);
+      ctx.lineWidth = d % 10 === 0 ? 1.2 : 0.9;
+      ctx.beginPath(); ctx.moveTo(p0.u, p0.v); ctx.lineTo(p1.u, p1.v); ctx.stroke();
+    }
+    // the two scales: outer (dark) counts from the left end, inner (blue) from the right end
+    const labels = [];
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const font = (Rz < 230 ? 9 : 10) + 'px system-ui, sans-serif';
+    const ring = (rho, colour, value, name) => {
+      ctx.fillStyle = colour; ctx.font = font;
+      for (let d = 0; d <= 180; d += 10) {
+        const th = (d * Math.PI) / 180, p = at(th, rho), text = String(value(d));
+        // Each number stands on its own mark, turned to face out from the centre. The two at
+        // the ends would then lie across the straight edge, so they stand level just above it,
+        // still centred over their mark.
+        if (d === 0 || d === 180) ctx.fillText(text, p.u, -7);
+        else { ctx.save(); ctx.translate(p.u, p.v); ctx.rotate(Math.PI / 2 - th); ctx.fillText(text, 0, 0); ctx.restore(); }
+        labels.push({ ring: name, mark: d, text, u: p.u / Rz, v: (d === 0 || d === 180 ? 0 : p.v) / Rz });
+      }
+    };
+    ring(Rz - 25, DARK, (d) => 180 - d, 'outer');
+    ring(Rz - 41, BLUE, (d) => d, 'inner');
+    this.protLabels = labels;
+    // the measuring arm and the two angles it makes with the straight edge
+    const tip = at(arm, Rz + Interaction.PROT_ARM_EXT);
+    ctx.strokeStyle = '#d13438'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(tip.u, tip.v); ctx.stroke();
+    const wedge = (from, to, colour, value) => {
+      ctx.strokeStyle = colour; ctx.lineWidth = 1.2;
+      if (to > from) { ctx.beginPath(); ctx.arc(0, 0, 26, -to, -from); ctx.stroke(); }
+      const w = to - from, rho = Math.max(46, Math.min(Rz * 0.28, w > 0 ? 12 / Math.sin(w / 2) : Infinity));
+      const lift = Math.asin(Math.min(1, 9 / rho));
+      const th = Math.min(Math.PI - lift, Math.max(lift, (from + to) / 2));
+      const p = at(th, rho);
+      ctx.fillStyle = colour; ctx.font = 'bold 12px system-ui, sans-serif';
+      ctx.fillText(value + '°', p.u, p.v);
+    };
+    wedge(0, arm, BLUE, armDeg);
+    wedge(arm, Math.PI, DARK, 180 - armDeg);
+    this.protReading = { inner: armDeg, outer: 180 - armDeg };
+    // the centre: a small ring with a cross through it, on the straight edge
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(10, 0); ctx.moveTo(0, 0); ctx.lineTo(0, -10); ctx.stroke();
+    // the arm's knob, just past the curve
+    const kb = Interaction.ROTATE_KNOB, kr = this.coarsePointer ? kb.r + 3 : kb.r;
+    ctx.beginPath(); ctx.arc(C.armKnob.u, C.armKnob.v, kr, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff'; ctx.fill();
+    ctx.strokeStyle = '#d13438'; ctx.lineWidth = 2.4; ctx.stroke();
+    // turning knobs, move grip, the protractor's own tilt and the settings button, as on the ruler
+    for (const k of C.knobs) {
+      ctx.beginPath(); ctx.arc(k.u, k.v, kr, 0, Math.PI * 2);
+      ctx.fillStyle = '#0078d4'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1.6; ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(C.grip.u - 34, C.grip.v - 16, 68, 32, 3); else ctx.rect(C.grip.u - 34, C.grip.v - 16, 68, 32);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)'; ctx.lineWidth = 1.6;
+    for (const dx2 of [-7, 0, 7]) { ctx.beginPath(); ctx.moveTo(C.grip.u + dx2, C.grip.v - 9); ctx.lineTo(C.grip.u + dx2, C.grip.v + 9); ctx.stroke(); }
+    // The protractor's own tilt shows only while it is being turned: a second angle sitting
+    // beside the measurement all the time would be one number too many to read off it.
+    if (this.action && this.action.type === 'rulerRotate') {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText(this.rulerReadout(angle), C.readout.u, C.readout.v);
+    }
+    ctx.textBaseline = 'alphabetic';
+    drawMenuButton(ctx, C.menu.u, C.menu.v, this.coarsePointer);
+    ctx.restore();
+  }
 }
 
 function drawGhostShape(ctx, o) { drawShape(ctx, o); }
+
+/** How solid the ruler's plastic is: 0.3 (mostly see-through) to 1, from Settings; 0.92 as it always was. */
+function rulerOpacity(settings) {
+  const v = Number(settings && settings.rulerOpacity);
+  return Number.isFinite(v) ? Math.min(1, Math.max(0.3, v)) : 0.92;
+}
+
+/** The ruler's settings button: a small round button with three dots. */
+function drawMenuButton(ctx, x, y, coarse) {
+  const r = coarse ? 12 : 9;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  for (const dx of [-r * 0.42, 0, r * 0.42]) { ctx.beginPath(); ctx.arc(x + dx, y, Math.max(1.3, r * 0.13), 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+}

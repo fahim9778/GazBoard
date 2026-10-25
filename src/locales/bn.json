@@ -1160,5 +1160,12 @@
  "A table in this board had an impossible size and has been mended": "এই বোর্ডের একটি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে",
  "{n} tables in this board had impossible sizes and have been mended": "এই বোর্ডের {n}টি টেবিলের মাপ অসম্ভব ছিল, ঠিক করে দেওয়া হয়েছে",
  "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "View mode — ইচ্ছেমতো ঘুরে দেখুন। বোর্ডের কিছুই বদলাবে না। বের হতে \"হয়ে গেছে\" চাপুন।",
- "View mode — the board cannot be changed. Tap Done to edit again.": "View mode — বোর্ড বদলানো যাবে না। আবার এডিট করতে \"হয়ে গেছে\" চাপুন।"
+ "View mode — the board cannot be changed. Tap Done to edit again.": "View mode — বোর্ড বদলানো যাবে না। আবার এডিট করতে \"হয়ে গেছে\" চাপুন।",
+ "Triangle 45°": "ত্রিভুজ ৪৫°",
+ "Triangle 30°/60°": "ত্রিভুজ ৩০°/৬০°",
+ "Protractor": "চাঁদা",
+ "0° points": "০° কোন দিকে",
+ "Right →": "ডানে →",
+ "Up ↑": "উপরে ↑",
+ "See-through": "স্বচ্ছতা"
 }

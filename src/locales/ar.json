@@ -1160,5 +1160,12 @@
  "A table in this board had an impossible size and has been mended": "كان لجدول في هذه اللوحة حجم غير ممكن وقد تم إصلاحه",
  "{n} tables in this board had impossible sizes and have been mended": "كان لـ {n} جداول في هذه اللوحة أحجام غير ممكنة وقد تم إصلاحها",
  "View mode — move around freely. Nothing on the board will change. Tap Done to leave.": "وضع العرض — تنقّل بحرية. لن يتغيّر شيء على اللوحة. اضغط «تم» للخروج.",
- "View mode — the board cannot be changed. Tap Done to edit again.": "وضع العرض — لا يمكن تغيير اللوحة. اضغط «تم» للتحرير مجددًا."
+ "View mode — the board cannot be changed. Tap Done to edit again.": "وضع العرض — لا يمكن تغيير اللوحة. اضغط «تم» للتحرير مجددًا.",
+ "Triangle 45°": "مثلث 45°",
+ "Triangle 30°/60°": "مثلث 30°/60°",
+ "Protractor": "منقلة",
+ "0° points": "اتجاه الصفر°",
+ "Right →": "يمين →",
+ "Up ↑": "أعلى ↑",
+ "See-through": "الشفافية"
 }
