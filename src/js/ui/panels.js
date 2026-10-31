@@ -1329,6 +1329,11 @@ export function createPanels(app) {
         storage ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), storage) : null,
         backup ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), backup) : null,
         h('div', { class: 'section' },
+          h('h5', {}, t('Backup')),
+          h('div', { style: 'font-size:12px;color:var(--text-2);line-height:1.6' },
+            t('One ZIP file with every board, its pictures and its folders. Keep it somewhere safe; Restore adds its boards back and never replaces one you have.')),
+          backupButtons()),
+        h('div', { class: 'section' },
           h('h5', {}, t('Canvas')),
           row(t('Mouse wheel zooms'), mkToggle(() => s.wheelZoom, (v) => (s.wheelZoom = v)), t('Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.')),
           row(t('Auto-pan at the edges'), mkToggle(() => s.edgePan, (v) => (s.edgePan = v)),
@@ -1340,6 +1345,10 @@ export function createPanels(app) {
             app.surface.showGroupOutlines = v;
             app.surface.invalidate();
           }), t('A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.')),
+          row(t('Stoic quote on empty boards'), mkToggle(() => s.stoicQuotes !== false, (v) => {
+            s.stoicQuotes = v;
+            app.surface.showQuote = v;
+          }), t('A short line from Marcus Aurelius, Epictetus or Seneca under Happy Inking, until you start drawing. Each board keeps its own. It is not part of the board, so it never appears in a picture, a PDF or a print.')),
           row(t('Right-drag pans the canvas'), mkToggle(() => s.rightDragPans !== false, (v) => (s.rightDragPans = v)),
             t('Hold the right mouse button and drag to move around — useful on a laptop with no pen and no middle button. A right click that does not move still opens the usual menu.')),
           app.storeName()
@@ -1461,6 +1470,13 @@ export function createPanels(app) {
    * they can never disagree. No storage permission is ever asked for: the
    * picker hands over that one folder and nothing else.
    */
+  /** Every board in one file, and back again. The same two buttons wherever the boards are listed. */
+  function backupButtons() {
+    return h('div', { class: 'backup-row', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
+      h('button', { class: 'btn', onclick: () => app.command('boards.backup') }, t('Back up all my boards…')),
+      h('button', { class: 'btn', onclick: () => app.command('boards.restore') }, t('Restore from a backup…')));
+  }
+
   function safeCopy({ full = false } = {}) {
     const box = h('div', { class: 'safe-copy' });
     let timer = null;
@@ -1955,7 +1971,7 @@ export function createPanels(app) {
             if (window.board.openBoardsFolder) window.board.openBoardsFolder();
             else window.board.showItem(i.boardsDir || i.userData + '/boards');
           } }, t('Open that folder')));
-        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
+        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); foot.appendChild(backupButtons()); main.appendChild(foot);
       } else if (i.isAndroid) {
         offerSafeCopy(main, all.length);
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
@@ -1967,14 +1983,14 @@ export function createPanels(app) {
           window.board.backup ? h('div', { style: 'margin:8px 0 12px' }, safeCopy()) :
             h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, t('Save current board…')));
-        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
+        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); foot.appendChild(backupButtons()); main.appendChild(foot);
       } else {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, all.length === 1
             ? t('{n} board, stored in browser persistence:', { n: all.length })
             : t('{n} boards, stored in browser persistence:', { n: all.length })),
           h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData));
-        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); main.appendChild(foot);
+        main.appendChild(h('p', { class: 'gal-note' }, t('Choose boards to export. One saves as a .gazboard file; several save together in a ZIP. Extract the ZIP to open its boards.'))); foot.appendChild(backupButtons()); main.appendChild(foot);
       }
     });
 
@@ -2402,7 +2418,7 @@ export function createPanels(app) {
             if (window.board.openBoardsFolder) window.board.openBoardsFolder();
             else window.board.showItem(i.boardsDir || i.userData + '/boards');
           } }, t('Open that folder')));
-        host.appendChild(foot);
+        foot.appendChild(backupButtons()); host.appendChild(foot);
       } else if (i.isAndroid) {
         offerSafeCopy(host, all.length);
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
@@ -2414,14 +2430,14 @@ export function createPanels(app) {
           window.board.backup ? h('div', { style: 'margin:8px 0 12px' }, safeCopy()) :
             h('p', {}, t('Uninstalling GazBoard or clearing its app storage deletes these local boards. Export copies you want to keep; exports are separate from autosave.')),
           h('button', { class: 'btn', style: 'width:100%', onclick: () => { app.command('board.save'); close(); } }, t('Save current board…')));
-        host.appendChild(foot);
+        foot.appendChild(backupButtons()); host.appendChild(foot);
       } else {
         const foot = h('div', { style: 'margin-top:16px;padding-top:12px;border-top:1px solid var(--stroke);font-size:12px;color:var(--text-2);line-height:1.6' },
           h('div', {}, all.length === 1
             ? t('{n} board, stored in browser persistence:', { n: all.length })
             : t('{n} boards, stored in browser persistence:', { n: all.length })),
           h('code', { style: 'font-size:11px;display:block;margin:4px 0 8px;word-break:break-all' }, i.userData));
-        host.appendChild(foot);
+        foot.appendChild(backupButtons()); host.appendChild(foot);
       }
     });
 

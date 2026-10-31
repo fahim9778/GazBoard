@@ -4,6 +4,7 @@ import { boundsOf, worldBounds, strokeDrawWidth, tableDim } from './store.js';
 import { pageRects as worldPageRects } from './pages.js';
 import { hexToRgba, readableText, wrapText, fitFontSize, clamp } from './util.js';
 import { inkPath, inkRuns, strokeWeight, hasPressureVariation } from './ink.js';
+import { drawGraph } from './graph.js';
 import { objectRuns, layoutRich, fitRichSize, drawRichLines, needsRich, watchChips } from './richtext.js';
 import { mathEntry, hasMaths } from './maths.js';
 import { drawConnector } from './connectors.js';
@@ -1290,6 +1291,7 @@ export function drawObject(ctx, o, onload, editing = null) {
     case 'image': drawImage(ctx, o, onload); break;
     case 'emoji': drawEmoji(ctx, o); break;
     case 'math': drawMath(ctx, o, onload); break;
+    case 'graph': drawGraph(ctx, o, onload, FONT); break;
     case 'table': drawTable(ctx, o, hideCell); break;
     case 'curtain': drawCurtain(ctx, o); break;
     case 'connector': drawConnector(ctx, o, (c) => inkPaint(c)); break;

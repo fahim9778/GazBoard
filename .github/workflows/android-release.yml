@@ -171,7 +171,7 @@ jobs:
           AAB_NAME: ${{ steps.version.outputs.aab }}
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p dist play
           APK="$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)"
           AAB="$(find android/app/build/outputs/bundle/release -name '*.aab' | head -1)"
           test -n "$APK" || { echo "::error::No APK was produced"; exit 1; }
@@ -186,7 +186,10 @@ jobs:
           esac
 
           cp "$APK" "dist/$APK_NAME"
-          cp "$AAB" "dist/$AAB_NAME"
+          # The AAB goes to Google Play only, never onto the GitHub release:
+          # nobody can install it, and a file there invites people to try.
+          # It is kept as a build artifact of its own instead (see below).
+          cp "$AAB" "play/$AAB_NAME"
 
           APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner | sort | tail -1)"
           "$APKSIGNER" verify --print-certs --verbose "dist/$APK_NAME"
@@ -201,6 +204,15 @@ jobs:
           name: GazBoard-Android-${{ steps.version.outputs.version }}-v${{ steps.version.outputs.build }}
           path: dist/
           retention-days: 14
+
+      # The AAB for uploading to Google Play: downloaded from this run's
+      # Artifacts, kept for 90 days, and never attached to the release.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GazBoard-Android-${{ steps.version.outputs.version }}-v${{ steps.version.outputs.build }}-for-Google-Play
+          path: play/
+          retention-days: 90
 
       # Only a tag publishes. A manual run has done its job by getting here.
       - name: Publish the release
@@ -230,7 +242,7 @@ jobs:
             echo
             echo "**Opening board files:** .gazboard and .openboard are GazBoard's own formats, so open them from inside GazBoard with Open board. GazBoard does not register as a general file viewer, so it will not appear in Open with for PDFs, images or other files."
             echo
-            echo "The .aab is for Google Play and cannot be installed directly. Runs on this device: no account, no sign-in, no cloud."
+            echo "Runs on this device: no account, no sign-in, no cloud."
           } > "$NOTES"
           # --latest=false leaves the "Latest" badge on the desktop release.
           # gh marks every new non-prerelease as the latest by default, so

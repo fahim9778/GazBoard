@@ -7,6 +7,8 @@ import { Store, withAttached, withGroups, groupMembers, worldBounds, boundsOf, s
 import { useConnectorStore, connectorBounds, ROUTES, holds } from './core/connectors.js';
 import { setBoardDirectory, setCurrentBoard, lookupBoard, onDirectoryChange, refLabel, refsAsWords, linkedRefs, allBoards, remapBoardIds } from './core/boardrefs.js';
 import { exportBoards } from './board-export.js';
+import { backupAllBoards, restoreBackup } from './backup.js';
+import { openReplay, closeReplay } from './replay.js';
 import { openBoardPicker } from './ui/boardpicker.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
@@ -25,10 +27,14 @@ import { folderOf, folderPath, folderList, createFolder, renameFolder, moveBoard
 import * as Recent from './core/recent.js';
 import { TextEditor } from './ui/textedit.js';
 import { MathEditor } from './ui/mathedit.js';
+import { GraphEditor } from './ui/graphedit.js';
+import { defaultGraph } from './core/plot.js';
 import { mathReady, mathsReady, naturalSize, sizeOfBox, onMathArrived } from './core/maths.js';
 import { initToolbar, syncToolbar } from './ui/toolbar.js';
 import { initPresentBar, syncPresentBar } from './ui/present.js';
 import { ClassTimer } from './ui/timer.js';
+import { Spotlight } from './ui/spotlight.js';
+import { SpinnerWheel } from './ui/spinner.js';
 import { PageStrip } from './ui/pagestrip.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
@@ -76,6 +82,8 @@ export const DEFAULT_SETTINGS = {
   shapeKind: 'rect', arrowRoute: 'straight', shapeStroke: '#201f1e', shapeFill: 'none', shapeLineWidth: 3, shapeDash: null,
   inkToShape: false, pressure: true, wheelZoom: false, returnToSelect: true, autosave: true,
   showGroupOutlines: true,
+  // a Stoic line under "Happy Inking !!" on an empty board, never on the board itself (core/quotes.js)
+  stoicQuotes: true,
   edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, pageStrip: false, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
@@ -226,6 +234,7 @@ class App {
     this.surface = new Surface(document.getElementById('c'), this.store, { lowLatency: !!this.settings.lowLatencyInk });
     this.pageStrip = new PageStrip(this);
     this.surface.showGroupOutlines = this.settings.showGroupOutlines !== false;
+    this.surface.showQuote = this.settings.stoicQuotes !== false;
     // Windows paints the last sliver of pen ink itself when this is on. Off
     // by default while it is an experiment; see inktrail.js.
     this.inkTrail = new InkTrail(this.surface.canvas);
@@ -237,6 +246,7 @@ class App {
     this.ruler = { visible: false, x: 0, y: 0, angle: 0, length: 900, thickness: 78, snap: true, kind: 'ruler' };
     this.textEditor = new TextEditor(this);
     this.mathEditor = new MathEditor(this);
+    this.graphEditor = new GraphEditor(this);
     // Maths in text arrives a moment after the words around it: one repaint per frame catches it all up.
     let mathFrame = 0;
     onMathArrived(() => {
@@ -264,6 +274,15 @@ class App {
     this.timer = new ClassTimer(document.getElementById('stage'), {
       box: this.settings.timerBox,
       onPlace: (box) => { this.settings.timerBox = box; this.saveSettings(); }
+    });
+    // the spotlight and the spinner wheel are the lesson's too: over the board, never on it
+    this.spotlight = new Spotlight(document.getElementById('stage'), {
+      radius: this.settings.spotlightR,
+      onResize: (r) => { this.settings.spotlightR = r; this.saveSettings(); }
+    });
+    this.spinner = new SpinnerWheel(document.getElementById('stage'), {
+      names: this.settings.spinnerNames, box: this.settings.spinnerBox, removeWinner: this.settings.spinnerRemove,
+      onSave: (st) => { Object.assign(this.settings, { spinnerNames: st.names, spinnerBox: st.box, spinnerRemove: st.removeWinner }); this.saveSettings(); }
     });
     this.wireGlobalEvents();
     this.initDismissal();
@@ -1520,6 +1539,32 @@ class App {
     return mathsReady(objects).catch(() => {});
   }
 
+  /**
+   * A formula graph: made in the middle of the view with a first formula to
+   * change, and its editor opened on it. Cancelling straight away takes it back.
+   */
+  insertGraph() {
+    if (this.viewMode) { this.hintViewMode(); return null; }
+    this.textEditor.cancel?.();
+    const view = this.surface.cam.viewport(this.surface.width, this.surface.height);
+    // about half the width of the window, in the proportions of a sheet of graph paper
+    const w = Math.max(240, Math.min(720, view.w * 0.5)), hh = w * 0.72;
+    const o = { id: uid('gr'), type: 'graph', x: view.x + view.w / 2 - w / 2, y: view.y + view.h / 2 - hh / 2, w, h: hh, rotation: 0, ...defaultGraph() };
+    this.interaction?.placeOnPaper?.(o);
+    this.store.add(o, 'graph');
+    this.setTool('select');
+    this.setSelection([o.id]);
+    this.graphEditor.open(this.store.get(o.id), { fresh: true });
+    return o;
+  }
+
+  beginGraphEdit(obj) {
+    if (!obj || obj.locked) return;
+    this.textEditor.cancel?.();
+    this.setSelection([obj.id]);
+    this.graphEditor.open(obj);
+  }
+
   /** Open the maths editor on a box, or (with null) for a new box in the middle of the view. */
   beginMathEdit(obj) {
     this.textEditor.cancel?.();
@@ -2471,6 +2516,7 @@ class App {
 
       case 'insert.image': pickAndInsertImage(this); break;
       case 'insert.math': this.beginMathEdit(null); break;
+      case 'insert.graph': return this.insertGraph();
       case 'insert.document': pickAndInsertDocument(this); break;
       case 'insert.table': this.addTable(); break;
       case 'insert.curtain': this.addCurtain(); break;
@@ -2481,6 +2527,16 @@ class App {
       case 'view.present': this.presenting ? this.stopPresenting() : this.startPresenting(); break;
       case 'view.stopPresenting': this.stopPresenting(); break;
       case 'timer.open': this.timer.toggle(); break;
+      case 'spinner.open': this.spinner.toggle(); break;
+      case 'spotlight': {
+        const on = this.spotlight.toggle();
+        if (on && !(this.settings.hintsSeen || {}).spotlight) {
+          this.settings.hintsSeen = { ...(this.settings.hintsSeen || {}), spotlight: 1 };
+          this.saveSettings();
+          this.toast(t('Spotlight on. [ and ] change its size; Esc or {key} turns it off.', { key: navigator.platform?.startsWith('Mac') ? '⌘⌥S' : 'Ctrl+Alt+S' }), 'eye', 5000);
+        }
+        break;
+      }
 
       case 'export.png': this.checkOffPageBeforeExport().then((go) => go && exportPng(this, { scale: 2 })); break;
       case 'export.pngSelection': exportPng(this, { scale: 2, selectionOnly: true }); break;
@@ -2497,6 +2553,9 @@ class App {
       case 'page.prev': this.prevPage(); break;
       case 'page.fitContent': this.fitContentToPage(); break;
       case 'board.save': this.saveBoardCopy(); break;
+      case 'boards.backup': return backupAllBoards(this).catch((e) => { this.toast(t('Could not back up: {error}', { error: e.message || String(e) }), 'help', 6000); return null; });
+      case 'boards.restore': return restoreBackup(this);
+      case 'board.replay': return openReplay(this);
       // these two answer with a promise of whether anything happened, so My boards can stay up on Cancel
       case 'board.open': return openBoardFile(this, { folder: arg && arg.folder });
       case 'board.new':
@@ -2728,7 +2787,9 @@ class App {
 
   cloneBatch(objs, dx, dy) {
     const ids = new Map();
-    const copies = objs.map((o) => { const c = this.cloneWithOffset(o, dx, dy); ids.set(o.id, c.id); return c; });
+    const made = Date.now();
+    // a copy is made now, not when the thing it copies was: the replay shows it arriving now
+    const copies = objs.map((o) => { const c = this.cloneWithOffset(o, dx, dy); c.at = made; ids.set(o.id, c.id); return c; });
     for (const c of copies) {
       if (!c.attachedTo) continue;
       if (ids.has(c.attachedTo)) c.attachedTo = ids.get(c.attachedTo);
@@ -3191,6 +3252,8 @@ class App {
     this.settings = { ...DEFAULT_SETTINGS, ...keep };
     this.saveSettings();
     this.inkTrail?.setEnabled(!!this.settings.inkTrail);
+    this.surface.showGroupOutlines = this.settings.showGroupOutlines !== false;
+    this.surface.showQuote = this.settings.stoicQuotes !== false;
     this.interaction.hideInkPointer();
     this.setTool(this.tool);
     this.surface.invalidate();
@@ -4444,6 +4507,7 @@ class App {
       } catch (e) { this.toast(t('Could not open file: {error}', { error: e.message }), 'help'); }
     });
     window.addEventListener('gazboard:back', () => {
+      if (this.replay) { closeReplay(this); return; }
       if (document.getElementById('overlay')?.classList.contains('show')) { this.dismissOverlay(); return; }
       if (popoverOpen()) { closePopover(); return; }
       if (this.textEditor.active) { this.textEditor.commit(); return; }
@@ -4629,6 +4693,9 @@ class App {
 
     // View mode: Ctrl+Alt+V, or Cmd+Option+V. By key code, because Alt (Option on a Mac) changes the letter typed.
     if (mod && e.altKey && !e.shiftKey && e.code === 'KeyV') { e.preventDefault(); this.toggleViewMode(); return; }
+    // The spotlight: Ctrl+Alt+S, or Cmd+Option+S. [ and ] size it while it is on.
+    if (mod && e.altKey && !e.shiftKey && e.code === 'KeyS') { e.preventDefault(); this.command('spotlight'); return; }
+    if (this.spotlight?.on && !mod && (e.key === '[' || e.key === ']')) { e.preventDefault(); this.spotlight.resize(e.key === ']' ? 1.15 : 1 / 1.15); return; }
 
     // F5 presents, as it does in every slide program; Shift+F5 too.
     if (e.key === 'F5') { e.preventDefault(); if (!this.presenting) this.command('view.present'); return; }
@@ -4696,6 +4763,8 @@ class App {
         // 1. Something is being drawn right now. Abandon it; nothing was ever
         //    added to the board, so there is nothing to undo afterwards.
         if (this.interaction?.cancelGesture?.()) return;
+        // the spotlight first: it is the thing covering the board
+        if (this.spotlight?.on) { this.spotlight.close(); return; }
         // Presenting: Escape is how everyone expects to get out of it.
         if (this.presenting) { this.stopPresenting(); return; }
         // not a way out: one stray press (or a clicker's Esc) must not turn editing back on
@@ -4717,6 +4786,7 @@ class App {
         const o = this.selected[0];
         if (o && ['note', 'text', 'shape', 'table'].includes(o.type)) this.beginTextEdit(o);
         else if (o && o.type === 'math' && !o.locked) this.beginMathEdit(o);
+        else if (o && o.type === 'graph' && !o.locked) this.beginGraphEdit(o);
         return;
       }
       case 'ArrowLeft': case 'ArrowRight': case 'ArrowUp': case 'ArrowDown': {
@@ -4925,8 +4995,17 @@ class App {
      */
     const origin = 'sync:' + ((from && from.deviceId) || 'unknown') + '/' + (board.id || 'board');
 
+    /*
+     * The list is what tells "sent before" from "new", so a list that could not be read must not be
+     * taken for an empty one: that would offer to save the board as new instead of warning that it
+     * would replace one. A busy boards folder (a sync client or a virus scanner holding a file for a
+     * moment, on Windows) gets a couple more tries.
+     */
     let list = [];
-    try { list = (await window.board.boards.list()) || []; } catch { list = []; }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { list = (await window.board.boards.list()) || []; break; }
+      catch { list = []; await new Promise((res) => setTimeout(res, 200)); }
+    }
     // Sent before from this machine, or a board here that shares its identity.
     const mine = list.find((b) => b.origin && b.origin === origin)
       || list.find((b) => b.id === board.id) || null;

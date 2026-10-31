@@ -251,6 +251,7 @@ function initPhoneToolbar(app, bar) {
       menuItem(t('Sticky note'), 'note', pickTool('note')),
       menuItem(t('Text'), 'text', pickTool('text')),
       menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
+      menuItem(t('Formula graph'), 'graph', () => app.command('insert.graph')),
       menuItem(t('Emoji'), 'emoji', () => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, add, 'emoji'); }),
       // Shapes are a family, not one square. The chooser lives in the tool
       // popover, and on a phone there is no shape button to open it from - so
@@ -758,6 +759,8 @@ function teachingItems(app) {
     // the shortcut is only shown where there is a keyboard to press it on
     menuItem(app.viewMode ? t('Leave View mode') : t('View mode'), 'eye', () => app.command('view.viewMode'), { key: isPhoneLayout() || document.documentElement?.dataset.platform === 'android' ? '' : 'Ctrl+Alt+V' }),
     menuItem(app.timer?.visible ? t('Close the class timer') : t('Class timer'), 'timer', () => app.command('timer.open')),
+    menuItem(app.spotlight?.on ? t('Turn the spotlight off') : t('Spotlight'), 'laser', () => app.command('spotlight'), { key: isPhoneLayout() || document.documentElement?.dataset.platform === 'android' ? '' : 'Ctrl+Alt+S' }),
+    menuItem(app.spinner?.visible ? t('Close the spinner wheel') : t('Spinner wheel'), 'spinner', () => app.command('spinner.open')),
     menuItem(t('Cover answers again'), 'curtain', () => app.command('curtain.coverAll'), { disabled: !lifted })
   ];
 }
@@ -768,6 +771,7 @@ export function openInsertPopover(app, anchor) {
     menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
     menuItem(t('Table'), 'table', () => app.command('insert.table')),
     menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
+    menuItem(t('Formula graph'), 'graph', () => app.command('insert.graph')),
     menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain')),
     menuItem(t('Link to a board…'), 'link', () => app.command('insert.boardlink'), { key: '@' }),
     h('div', { class: 'menu-sep' }),
@@ -808,9 +812,13 @@ export function openExportPopover(app, anchor) {
     menuItem(t('Export as PDF…'), 'doc', () => app.command('export.pdf')),
     menuItem(t('Export as SVG…'), 'export', () => app.command('export.svg')),
     menuItem(t('Fit everything onto the paper'), 'shapes', () => app.command('page.fitContent'), { disabled: !app.store.pageCount }),
+    menuItem(t('Replay how this board was drawn…'), 'play', () => app.command('board.replay'), { disabled: !app.store.count }),
     h('div', { class: 'menu-sep' }),
     menuItem(t('Save a copy (.gazboard)…'), 'doc', () => app.command('board.save'), { key: 'Ctrl+S' }),
-    menuItem(t('Open a board file…'), 'board', () => app.command('board.open'), { key: 'Ctrl+O' })
+    menuItem(t('Open a board file…'), 'board', () => app.command('board.open'), { key: 'Ctrl+O' }),
+    h('div', { class: 'menu-sep' }),
+    menuItem(t('Back up all my boards…'), 'folder', () => app.command('boards.backup')),
+    menuItem(t('Restore from a backup…'), 'folderMove', () => app.command('boards.restore'))
   );
   openPopover(anchor, body, { key: 'export', placement: 'bottom', align: 'end' });
 }

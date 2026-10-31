@@ -803,6 +803,9 @@ body.presenting.view-mode #backPill { top: 54px; }
 }
 .toast-action:hover { background: rgba(255,255,255,.3); }
 .toast-action:active { background: rgba(255,255,255,.4); }
+/* a long job (a backup, a replay video): how far it has got, under the words */
+.toast-progress { display: block; height: 3px; border-radius: 2px; background: rgba(255,255,255,.22); overflow: hidden; }
+.toast-progress > span { display: block; height: 100%; background: #fff; transition: width .2s; }
 
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
 
@@ -1298,7 +1301,7 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 }
 #classTimer:active { cursor: grabbing; }
 #classTimer button, #classTimer input { cursor: pointer; }
-#classTimer input { cursor: text; }
+#classTimer input { cursor: text; user-select: text; -webkit-user-select: text; touch-action: auto; }
 #classTimer .ct-title { display: flex; color: var(--text-2); align-self: flex-start; padding-top: 8px; }
 #classTimer .ct-pick { display: flex; flex-direction: column; gap: 6px; }
 #classTimer .ct-presets { display: flex; gap: 4px; }
@@ -1561,6 +1564,37 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .mx-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .mx-tip { flex: 1; font-size: 11.5px; color: var(--text-2); }
 
+/* ---------------- the graph editor (same card as the maths editor) ---------------- */
+.graph-editor { width: min(460px, calc(100% - 16px)); max-height: calc(100% - 16px); overflow-y: auto; }
+.gx-rows { display: flex; flex-direction: column; gap: 6px; }
+.gx-line { display: flex; align-items: center; gap: 6px; }
+.gx-swatch { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--stroke); cursor: pointer; padding: 0; }
+.gx-src { flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: 14px/1.3 ui-monospace, Consolas, "Cascadia Mono", monospace; direction: ltr; }
+.gx-src:focus { outline: 2px solid var(--accent-2); outline-offset: -1px; }
+.gx-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--text-2); cursor: pointer; }
+.gx-icon:hover { background: var(--surface-2); color: var(--text); }
+.gx-icon.off { opacity: .4; }
+.gx-out { min-height: 0; padding: 0 0 0 30px; font-size: 15px; direction: ltr; overflow-x: auto; display: flex; align-items: center; gap: 8px; }
+.gx-out:empty { display: none; }
+.gx-out.bad { font-size: 12px; color: #c4314b; }
+.gx-kind { font-size: 11px; color: var(--text-2); border: 1px solid var(--stroke); border-radius: 10px; padding: 0 6px; }
+.gx-add { align-self: flex-start; }
+.gx-sliders { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 8px; background: var(--bg); }
+.gx-slider { display: flex; align-items: center; gap: 6px; }
+.gx-slider b { width: 16px; font: italic 600 15px/1 "Cambria Math", "STIX Two Math", serif; }
+.gx-slider input[type=range] { flex: 1; min-width: 60px; }
+.gx-num { width: 64px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: 12.5px/1.2 inherit; }
+.gx-lim { width: 46px; font-size: 11.5px; color: var(--text-2); }
+.gx-eq { color: var(--text-2); font-size: 12px; }
+.gx-ranges { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 12.5px; color: var(--text-2); }
+.gx-range { display: inline-flex; align-items: center; gap: 5px; }
+.gx-range > span:first-child { font: italic 600 14px/1 "Cambria Math", "STIX Two Math", serif; color: var(--text); min-width: 12px; }
+.gx-range-btns { display: inline-flex; gap: 6px; }
+.btn.gx-small { padding: 4px 9px; font-size: 12px; min-height: 0; }
+.gx-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.gx-toggles { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; }
+.gx-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+
 /* View mode: the tools that would change the board step back; the hand, the laser and the highlighter stay */
 body.view-mode #toolbar .pen:not([data-tool="highlighter"]),
 body.view-mode #toolbar .tool:not([data-tool="pan"]):not([data-tool="laser"]):not([data-pop="more"]):not([data-cmd="ruler"]),
@@ -1609,3 +1643,75 @@ body.presenting #pagestrip { display: none; }
 .ruler-seg { display: flex; flex-wrap: wrap; gap: 6px; }
 .ruler-seg .btn { padding: 6px 10px; font-size: 13px; }
 .ruler-menu input[type="range"] { width: 100%; }
+
+/* ---------------- board replay ---------------- */
+/* Over the board, under the toasts: a save in progress stays visible with its Cancel. */
+.replay-layer {
+  position: fixed; inset: 0; z-index: 44; display: flex; flex-direction: column;
+  background: var(--bg, #f5f5f8); color: var(--text);
+}
+.replay-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; position: relative; }
+.replay-canvas { box-shadow: var(--shadow-2); border-radius: 4px; background: #fff; touch-action: none; cursor: grab; }
+.replay-canvas:active { cursor: grabbing; }
+/* the whole board in the corner while zoomed in; touch it to look somewhere else */
+.replay-mini {
+  position: absolute; right: 20px; bottom: 20px; display: none; touch-action: none; cursor: pointer;
+  border-radius: 4px; box-shadow: var(--shadow-2); border: 1px solid var(--stroke); background: #fff;
+}
+.replay-zooms { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.replay-zoom { display: inline-flex; align-items: center; justify-content: center; min-width: 36px; }
+.replay-zoom-label { font-variant-numeric: tabular-nums; font-size: 12px; min-width: 44px; text-align: center; color: var(--text-2); }
+.replay-follow.on { background: var(--accent-soft, rgba(0,120,212,.14)); color: var(--accent-2, #0078d4); }
+.replay-bar {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--stroke); background: var(--surface, #fff);
+}
+.replay-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.replay-slider { flex: 1; min-width: 120px; }
+.replay-time { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 88px; color: var(--text-2); }
+.replay-play, .replay-close { display: inline-flex; align-items: center; justify-content: center; min-width: 40px; }
+.replay-speeds { display: inline-flex; gap: 4px; }
+.replay-speed.on { background: var(--accent-soft, rgba(0,120,212,.14)); color: var(--accent-2, #0078d4); }
+
+/* ---------------- the spotlight: dark all round a soft circle of light ---------------- */
+#spotlight {
+  position: absolute; inset: 0; z-index: 16; pointer-events: none;
+  background: radial-gradient(circle var(--sr, 170px) at var(--sx, 50%) var(--sy, 50%), rgba(0,0,0,0) 0%, rgba(0,0,0,0) 80%, rgba(0,0,0,.78) 100%);
+  animation: spotIn .25s ease-out;
+}
+@keyframes spotIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ---------------- the spinner wheel: a card like the class timer ---------------- */
+#spinnerWheel {
+  position: absolute; z-index: 27; transform-origin: 0 0; width: 300px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 14px 14px;
+  background: var(--surface); border: 1px solid var(--stroke); border-radius: 16px; box-shadow: var(--shadow-2);
+  color: var(--text); user-select: none; touch-action: none; cursor: grab;
+}
+#spinnerWheel:active { cursor: grabbing; }
+#spinnerWheel button, #spinnerWheel textarea, #spinnerWheel input { cursor: pointer; }
+#spinnerWheel textarea { cursor: text; user-select: text; -webkit-user-select: text; touch-action: auto; }
+#spinnerWheel .sw-head { align-self: stretch; display: flex; align-items: center; gap: 2px; }
+#spinnerWheel .sw-head b { flex: 1; font-size: 13.5px; }
+#spinnerWheel .ct-btn { width: 30px; height: 30px; border-radius: 6px; display: grid; place-items: center; color: var(--text-2); }
+#spinnerWheel .ct-btn:hover { background: var(--surface-2); color: var(--text); }
+#spinnerWheel .sw-wrap { position: relative; width: 270px; height: 270px; }
+#spinnerWheel .sw-wheel { width: 100%; height: 100%; border-radius: 50%; box-shadow: 0 6px 18px rgba(0,0,0,.18); cursor: pointer; }
+#spinnerWheel .sw-pointer { position: absolute; left: 50%; top: -6px; transform: translateX(-50%); width: 0; height: 0;
+  border-left: 14px solid transparent; border-right: 14px solid transparent; border-top: 24px solid #1b1a19; filter: drop-shadow(0 2px 2px rgba(0,0,0,.3)); }
+#spinnerWheel .sw-result { min-height: 40px; font-size: 30px; font-weight: 700; letter-spacing: -.5px; text-align: center; color: var(--text); max-width: 270px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#spinnerWheel.sw-spinning .sw-result { color: var(--text-2); }
+#spinnerWheel .sw-actions { display: flex; gap: 6px; }
+#spinnerWheel .ct-go { height: 38px; padding: 0 26px; border-radius: 10px; font-size: 15px; font-weight: 700; color: #fff; background: var(--accent); }
+#spinnerWheel .ct-go[disabled] { opacity: .5; }
+#spinnerWheel .sw-remove { height: 38px; padding: 0 12px; border-radius: 10px; font-size: 13px; font-weight: 600; color: var(--accent); background: var(--accent-soft); }
+#spinnerWheel .sw-editor { display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+#spinnerWheel .sw-editor small { font-size: 12px; color: var(--text-2); }
+#spinnerWheel .sw-names { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: 14px/1.45 inherit; resize: vertical; }
+#spinnerWheel .sw-keep { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
+#spinnerWheel .ct-resize {
+  position: absolute; right: 0; bottom: 0; width: calc(22px / var(--ct-s, 1)); height: calc(22px / var(--ct-s, 1));
+  cursor: nwse-resize; touch-action: none; opacity: .5; border-radius: 0 0 14px 0;
+  background: linear-gradient(135deg, transparent 45%, var(--text-2) 45%, var(--text-2) 52%, transparent 52%,
+    transparent 64%, var(--text-2) 64%, var(--text-2) 71%, transparent 71%, transparent 83%, var(--text-2) 83%, var(--text-2) 90%, transparent 90%);
+}

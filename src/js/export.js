@@ -1,5 +1,6 @@
 // Exporting: PNG bitmap, SVG vector, and the .gazboard document format.
 
+import { graphSvg } from './core/graph.js';
 import { worldBounds, tableDim } from './core/store.js';
 import { pageRects } from './core/pages.js';
 import { wrapText, boxesIntersect } from './core/util.js';
@@ -272,6 +273,9 @@ function svgObjects(objects, meas) {
         const x = Math.min(o.x, o.x + o.w) + (Math.abs(o.w) - dw) / 2, y = Math.min(o.y, o.y + o.h) + (Math.abs(o.h) - dh) / 2;
         parts.push(`<image x="${x}" y="${y}" width="${dw}" height="${dh}" href="${mathPng(e, dw, dh)}"${rot}><title>${esc(o.tex || '')}</title></image>`);
       }
+    } else if (o.type === 'graph') {
+      // a graph goes out as real lines and text, so it stays sharp at any size; its typeset labels as sharp pictures
+      try { parts.push(graphSvg(o, rot, esc(faceOf('ui')).replace(/"/g, "'"), mathPng)); } catch { /* a graph that cannot be drawn is left out */ }
     } else if (o.type === 'image') {
       parts.push(`<image x="${o.x}" y="${o.y}" width="${o.w}" height="${o.h}" href="${o.src}" preserveAspectRatio="none"${rot}/>`);
     } else if (o.type === 'curtain') {

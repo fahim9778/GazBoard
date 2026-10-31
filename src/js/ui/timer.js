@@ -396,7 +396,8 @@ export class ClassTimer {
     el.addEventListener('pointerdown', (e) => {
       // the board underneath must not see presses meant for the clock
       e.stopPropagation();
-      if (e.button !== 0 || (e.target instanceof Element && e.target.closest('input'))) return;
+      // a press in a box you type in is for the text - selecting it, placing the caret - never for moving the card
+      if (e.button !== 0 || (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'))) return;
       if (drag) finish(null, true);             // a stale drag never outlives a new press
       const resize = e.target instanceof Element && !!e.target.closest('.ct-resize');
       drag = {

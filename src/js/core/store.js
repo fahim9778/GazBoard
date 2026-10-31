@@ -10,6 +10,7 @@
 import { uid, unionBox } from './util.js';
 import { pagesFrom, pageRects, cleanPage, DATE_RE } from './pages.js';
 import { t } from '../i18n.js';
+import { pickQuote, quoteId } from './quotes.js';
 
 export const CLIENT_ID = uid('c');
 
@@ -45,6 +46,8 @@ export function emptyDoc(name = t('Untitled board')) {
   return {
     id: uid('b'), name, schema: 2,
     created: Date.now(), modified: Date.now(),
+    // the Stoic line its empty board shows, picked once and kept (see quotes.js)
+    quote: pickQuote(),
     background: { color: '#ffffff', pattern: 'none', patternColor: '#c8c6c4' },
     pages: [],                     // [] = infinite canvas; [{w,h},…] = a strip of sheets
     camera: { x: 0, y: 0, z: 1 },
@@ -188,6 +191,18 @@ export class Store {
     return i;
   }
 
+  /**
+   * Change an object's fields for a live preview - an editor showing each
+   * change on the board as it is made. Like rawInsert: no op, no undo; the
+   * caller puts the fields back and commits once, when the editing ends.
+   */
+  rawPatch(id, patch) {
+    const o = this.doc.objects[id];
+    if (!o) return;
+    Object.assign(o, patch);
+    this.rev++;
+  }
+
   /** Apply ops from a remote peer - no undo entry, no rebroadcast. */
   applyRemote(ops) { for (const op of ops) this._apply(op); this.emit('remote'); }
 
@@ -215,8 +230,8 @@ export class Store {
   get canRedo() { return this.redoStack.length > 0; }
 
   /* ---------------- convenience mutations ---------------- */
-  add(obj, label = 'add') { this.commit(label, [{ t: 'add', obj }]); return obj; }
-  addMany(objs, label = 'add') { this.commit(label, objs.map((obj) => ({ t: 'add', obj }))); return objs; }
+  add(obj, label = 'add') { stamp(obj); this.commit(label, [{ t: 'add', obj }]); return obj; }
+  addMany(objs, label = 'add') { const now = Date.now(); for (const o of objs) stamp(o, now); this.commit(label, objs.map((obj) => ({ t: 'add', obj }))); return objs; }
 
   update(id, patch, label = 'update') {
     const o = this.get(id); if (!o) return;
@@ -372,6 +387,7 @@ export class Store {
     // Left undefined when there is none, so it never appears in the JSON.
     return { id: d.id, name: d.name, schema: 2, created: d.created, modified: d.modified,
       origin: d.origin || undefined,
+      quote: quoteId(d.quote),
       pageDates: d.pageDates && d.pageDates.length ? d.pageDates.slice() : undefined,
       background: d.background, pages: d.pages.map((p) => ({ ...p })), page: d.pages[0] || null,
       camera: d.camera, objects: d.order.map((id) => d.objects[id]).filter(Boolean), ...extra };
@@ -392,6 +408,11 @@ export class Store {
     d.created = data.created || Date.now();
     d.modified = data.modified || Date.now();
     if (data.origin) d.origin = data.origin;
+    // A board from before quotes has none, and must not be handed a random one
+    // here: it would change every time the board opened. Without one, quoteFor()
+    // works it out from the board id, which never changes.
+    d.quote = quoteId(data.quote);
+    if (d.quote === undefined) delete d.quote;
     d.background = { ...d.background, ...(data.background || {}) };
     d.pages = pagesFrom(data);
     // the days the sheets were started, kept while the board is an infinite canvas (see App.setPageSize)
@@ -409,6 +430,15 @@ export class Store {
     this.undoStack.length = 0; this.redoStack.length = 0; this.log.length = 0;
     this.emit('load');
   }
+}
+
+/*
+ * When an object was put on the board, for the replay (see replay.js). A stroke
+ * says when its pen went down; anything else is stamped as it is added. Only
+ * when it has no time yet: undo puts an object back with the time it had.
+ */
+function stamp(o, now = Date.now()) {
+  if (o && typeof o === 'object' && !Number.isFinite(o.at)) o.at = now;
 }
 
 function structuredCloneSafe(v) {

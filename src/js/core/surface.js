@@ -4,7 +4,8 @@ import { Camera } from './camera.js';
 import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint, setPageColor } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
-import { boxesIntersect } from './util.js';
+import { boxesIntersect, wrapText } from './util.js';
+import { quoteFor } from './quotes.js';
 import { currentLanguage } from '../i18n.js';
 import { route as connectorRoute, midPoint } from './connectors.js';
 
@@ -41,6 +42,10 @@ export class Surface {
      */
     this.greeting = 'Happy Inking !!';
     this._greetingDrawn = null;   // what the last frame drew, for the suite
+    // A Stoic line under the greeting, the board's own (see quotes.js). Drawn
+    // the same way and gone at the same moment. Settings turns it off.
+    this.showQuote = true;
+    this._quoteDrawn = null;
     // Answer covers on their way out: id -> { obj, t0 }. See fadeOut().
     this._fades = new Map();
     this._lockedRev = -1;      // revision the locked-object list was built for
@@ -969,6 +974,7 @@ export class Surface {
    */
   drawGreeting(ctx) {
     this._greetingDrawn = null;
+    this._quoteDrawn = null;
     if (!this.showsGreeting()) return;
     const w = this.width, h = this.height;
     const size = Math.round(Math.max(28, Math.min(72, Math.min(w, h) * 0.09)));
@@ -984,6 +990,59 @@ export class Surface {
     ctx.fillText(this.greeting, x, y);
     ctx.restore();
     this._greetingDrawn = { text: this.greeting, x, y, size, font, color };
+    this.drawQuote(ctx, size, color);
+  }
+
+  /**
+   * The board's quote, under the greeting: smaller, fainter and in italics,
+   * so the greeting stays the thing you see first. Wrapped to the window, so
+   * a phone gets more lines rather than words off the edge; and if a short
+   * window still has no room for it, the letters shrink a little before the
+   * quote is left out altogether - never drawn over the edge.
+   */
+  drawQuote(ctx, greetSize, color) {
+    this._quoteDrawn = null;
+    if (!this.showQuote) return;
+    const q = quoteFor(this.store && this.store.doc);
+    if (!q) return;
+    const w = this.width, h = this.height;
+    const maxW = Math.max(120, Math.min(w - 48, 520));
+    const top = h / 2 + greetSize * 0.75 + 10;
+    // clear of the toolbar along the bottom
+    const room = h - top - (h > 520 ? 90 : 60);
+    const by = '\u2014 ' + q.by + ', ' + q.ref;
+    let fit = null;
+    ctx.save();
+    ctx.direction = 'ltr';
+    for (let qs = Math.round(Math.max(14, Math.min(19, greetSize * 0.3))); qs >= 12; qs--) {
+      ctx.font = `italic 400 ${qs}px ${faceOf('serif')}`;
+      const lines = wrapText(ctx, q.text, maxW);
+      const lh = Math.round(qs * 1.4), bs = Math.max(11, Math.round(qs * 0.82));
+      const tall = lines.length * lh + 6 + bs * 1.4;
+      if (tall <= room) { fit = { qs, lines, lh, bs, tall }; break; }
+    }
+    if (!fit) { ctx.restore(); return; }
+    const x = w / 2;
+    const font = `italic 400 ${fit.qs}px ${faceOf('serif')}`;
+    const byFont = `400 ${fit.bs}px ${faceOf('serif')}`;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = font;
+    ctx.globalAlpha = 0.24;
+    let widest = 0;
+    fit.lines.forEach((line, i) => {
+      ctx.fillText(line, x, top + i * fit.lh);
+      widest = Math.max(widest, ctx.measureText(line).width);
+    });
+    const byY = top + fit.lines.length * fit.lh + 6;
+    ctx.font = byFont;
+    ctx.globalAlpha = 0.2;
+    ctx.fillText(by, x, byY);
+    widest = Math.max(widest, ctx.measureText(by).width);
+    ctx.restore();
+    this._quoteDrawn = { id: q.id, text: q.text, by, lines: fit.lines, size: fit.qs, font, x, top,
+      bottom: top + fit.tall, maxW, widest };
   }
 
   /**

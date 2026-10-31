@@ -2583,13 +2583,15 @@ async function run(win, app) {
     const perStroke = runs / bulk.length;
 
     const time = (fn) => { const t0 = performance.now(); fn(); return performance.now() - t0; };
+    // the middle of five redraws: one hiccup from the system (a virus scan, another window) is not the drawing's fault
+    const typical = () => { const runs = []; for (let i = 0; i < 5; i++) runs.push(time(() => { sf.invalidate(); sf.draw(); })); const sorted = runs.slice().sort((x, y) => x - y); return { ms: sorted[2], runs }; };
     sf.draw(); // warm
-    const withPressure = time(() => { sf.invalidate(); sf.draw(); });
+    const pr = typical(), withPressure = pr.ms, pressureRuns = pr.runs;
 
     // The same board with the pressure flattened out: the old single-width path.
     for (const o of bulk) { o.points = o.points.map((q) => ({ x: q.x, y: q.y, p: 0.5 })); }
     sf.draw();
-    const flat = time(() => { sf.invalidate(); sf.draw(); });
+    const flat = typical().ms;
 
     // And the highlighter must never take the varying route.
     const hl = { type: 'stroke', tool: 'highlighter', opacity: 0.38, width: 20,
@@ -2597,13 +2599,13 @@ async function run(win, app) {
     const hlVaries = ink.hasPressureVariation(hl.points);
 
     a.store.clear(); a.settings.autosave = true;
-    return { perStroke, withPressure, flat, hlVaries };
+    return { perStroke, withPressure, flat, hlVaries, pressureRuns };
   `);
   check('a pressure stroke stays a handful of draw calls, not one per sample',
     inkCost.perStroke < 12, inkCost.perStroke.toFixed(1) + ' runs per 30-point stroke');
   check('and a 300-stroke page of it still redraws in a frame',
     inkCost.withPressure < 16,
-    `${inkCost.withPressure.toFixed(1)} ms with pressure, ${inkCost.flat.toFixed(1)} ms without`);
+    `${inkCost.withPressure.toFixed(1)} ms with pressure (the middle of five: ${(inkCost.pressureRuns || []).map((x) => x.toFixed(1)).join(', ')} ms; allowed under 16), ${inkCost.flat.toFixed(1)} ms without`);
   // The highlighter's points DO vary - it is the renderer that must ignore
   // that, because translucent ink laid down twice is darker ink.
   check('the highlighter\'s own points do vary, so this is the renderer\'s job to ignore',
@@ -13086,13 +13088,18 @@ module.exports.run = async (win, app) => {
   await sleep(450);
   const again = await js(`
     const c = document.getElementById('overlayCard');
-    return { buttons: [...c.querySelectorAll('button')].map((b) => b.textContent), text: c.textContent };`);
+    let list = null, err = null;
+    try { list = (await window.board.boards.list()).map((b) => b.id + '<' + (b.origin || '-') + '>'); } catch (e) { err = e.message; }
+    return { buttons: [...c.querySelectorAll('button')].map((b) => b.textContent), text: c.textContent, list, err };`);
   check('the same board sent again warns before it can overwrite',
     JSON.stringify(again.buttons) === JSON.stringify(['Decline', 'Keep both', 'Replace my copy']),
-    again.buttons.join(' | '));
+    `${again.buttons.join(' | ')}; boards here now: ${again.list ? again.list.join(', ') : 'could not list: ' + again.err} ` +
+    `(the first one, sent as in-b1 from dev-classroom, must be in it)`);
   check('and says in plain words what replacing would cost', /would be gone/.test(again.text));
 
-  await js(`[...document.getElementById('overlayCard').querySelectorAll('button')].find((b) => b.textContent === 'Keep both').click();`);
+  // if the question was the wrong one, answer it anyway, so one failure does not stop every test after it
+  await js(`const bs = [...document.getElementById('overlayCard').querySelectorAll('button')];
+    (bs.find((b) => b.textContent === 'Keep both') || bs.find((b) => b.textContent === 'Save it') || bs[0])?.click();`);
   await js(`await window.__inc;`);
   await sleep(250);
   const kept = await js(`
@@ -13121,6 +13128,7 @@ module.exports.run = async (win, app) => {
     window.app.saveSettings();
     const list = await window.board.boards.list();
     const b = list.find((x) => x.origin === 'sync:dev-classroom/in-b1');
+    if (!b) return false;                                // reported above; the tests after this one still run
     const data = await window.board.boards.load(b.id);
     await window.app.loadBoard(data, { claimed: true, silent: true });
     return true;
@@ -14431,6 +14439,944 @@ module.exports.run = async (win, app) => {
   check('light ink on a dark board, dark ink on a light one',
     greet.darkColour === '#f3f2f1' && greet.lightColour === '#201f1e',
     `dark board: ${greet.darkColour} (wanted #f3f2f1), light board: ${greet.lightColour} (wanted #201f1e)`);
+
+  /* ---- a Stoic quote under the greeting: the board's own, for good ---- */
+  const stoic = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface, s = a.settings;
+    const Q = await import('app://board/js/core/quotes.js');
+    const r = {};
+    const inkWas = s.inkWithMouse, quoteWas = s.stoicQuotes;
+    a.newBoard(true); a.textEditor.cancel();
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const frame = () => { sf.invalidate(); sf.draw(); return sf._quoteDrawn; };
+    r.list = { n: Q.QUOTES.length, first: Q.FIRST_BATCH,
+      idsInOrder: Q.QUOTES.every((q, i) => q.id === i + 1),
+      unique: new Set(Q.QUOTES.map((q) => q.text)).size,
+      complete: Q.QUOTES.every((q) => q.text && q.by && q.ref),
+      longest: Math.max(...Q.QUOTES.map((q) => q.text.length)) };
+    r.newId = a.store.doc.quote;
+    r.shown = frame();
+    r.greeting = sf._greetingDrawn;
+    r.expected = Q.quoteFor(a.store.doc).id;
+    // the same board, saved and opened again, keeps the same quote
+    const saved = JSON.parse(JSON.stringify(a.store.toJSON()));
+    r.savedId = saved.quote;
+    a.store.load(saved);
+    r.reopened = frame()?.id;
+    // a board from before quotes: no id stored, one worked out from its board id, and never a random one
+    a.store.load({ id: 'b_classroom_2024', name: 'Old', objects: [] });
+    r.oldStored = a.store.doc.quote;
+    r.oldShown = frame()?.id;
+    a.store.load({ id: 'b_classroom_2024', name: 'Old', objects: [] });
+    r.oldAgain = frame()?.id;
+    // quotes added in a later version change nothing for boards already made
+    Q.QUOTES.push({ id: Q.QUOTES.length + 1, text: 'A quote from a later version.', by: 'Test', ref: '1' },
+                  { id: Q.QUOTES.length + 2, text: 'And another.', by: 'Test', ref: '2' });
+    r.oldAfterMore = Q.quoteFor({ id: 'b_classroom_2024' }).id;
+    r.newAfterMore = Q.quoteFor(saved).id;
+    r.otherOld = [Q.quoteFor({ id: 'b_old_board' }).id, Q.quoteFor({ id: 'x' }).id];
+    Q.QUOTES.length = Q.FIRST_BATCH;
+    // a quote id this version has never heard of (from a newer one): the board still gets a quote
+    r.unknownId = Q.quoteFor({ id: 'b_classroom_2024', quote: 999999 })?.id;
+    r.junkId = Q.quoteFor({ id: 'b_classroom_2024', quote: 'drop table' })?.id;
+    r.junkStored = (a.store.load({ id: 'b_j', name: 'J', objects: [], quote: 'x<1>' }), a.store.doc.quote);
+
+    // gone the moment the pen touches down, with the greeting
+    a.newBoard(true); a.setTool('pen'); s.inkWithMouse = 'yes';
+    frame();
+    const rect = sf.canvas.getBoundingClientRect();
+    const ev = (x, y) => ({ pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0.5 });
+    it.onDown(ev(200, 200)); it.onMove(ev(260, 240));
+    sf.draw();
+    r.whileInking = sf._quoteDrawn;
+    it.onUp(ev(260, 240)); it.action = null; it.pointers.clear();
+    r.afterStroke = frame();
+    a.command('edit.undo');
+    r.afterUndo = !!frame();
+
+    // the setting turns it off, and leaves Happy Inking alone
+    s.stoicQuotes = false; sf.showQuote = false;
+    r.offQuote = frame();
+    r.offGreeting = !!sf._greetingDrawn;
+    s.stoicQuotes = quoteWas; sf.showQuote = quoteWas !== false;
+    r.backOn = !!frame();
+
+    // never in a picture of the board
+    const v = sf.cam.viewport(sf.width, sf.height);
+    const shot = () => sf.renderTo({ x: v.x, y: v.y, w: v.w, h: v.h }, 1, true).toDataURL('image/png');
+    const withQ = shot(); sf.showQuote = false; const without = shot(); sf.showQuote = quoteWas !== false;
+    r.exportUntouched = withQ === without;
+    r.w = sf.width; r.h = sf.height;
+    s.inkWithMouse = inkWas; a.setTool('select'); a.newBoard(true);
+    return r;
+  `);
+  check('the quotes: 118 in the first batch, ids 1, 2, 3… in order, none repeated, each with its author and where it is from',
+    stoic.list.n === 118 && stoic.list.first === 118 && stoic.list.idsInOrder && stoic.list.unique === 118 &&
+    stoic.list.complete && stoic.list.longest <= 160,
+    JSON.stringify(stoic.list));
+  check('an empty board shows its Stoic quote under Happy Inking, smaller, in italics',
+    !!stoic.shown && !!stoic.greeting && stoic.shown.id === stoic.expected && /^italic /.test(stoic.shown.font) &&
+    stoic.shown.size < stoic.greeting.size && stoic.shown.top > stoic.greeting.y,
+    stoic.shown ? `quote #${stoic.shown.id} "${stoic.shown.text.slice(0, 50)}…" ${stoic.shown.by}; ${stoic.shown.size}px under a ` +
+      `${stoic.greeting && stoic.greeting.size}px greeting, from y=${Math.round(stoic.shown.top)} (greeting at ${stoic.greeting && stoic.greeting.y}); font ${stoic.shown.font.slice(0, 30)}…`
+      : 'no quote was drawn on an empty board');
+  check('a new board stores its quote, and keeps it when saved and opened again',
+    Number.isInteger(stoic.newId) && stoic.savedId === stoic.newId && stoic.reopened === stoic.newId,
+    `picked ${stoic.newId}, written to the file as ${stoic.savedId}, shown after opening again: ${stoic.reopened}`);
+  check('a board from before quotes gets one from its own id, the same every time, and is not given a random one',
+    stoic.oldStored === undefined && stoic.oldShown === 37 && stoic.oldAgain === 37,
+    `stored: ${stoic.oldStored} (must stay undefined), shown: ${stoic.oldShown} then ${stoic.oldAgain} (wanted 37 both times for b_classroom_2024)`);
+  check('adding quotes in a later version never changes the quote of a board already made',
+    stoic.oldAfterMore === 37 && stoic.newAfterMore === stoic.newId &&
+    stoic.otherOld[0] === 23 && stoic.otherOld[1] === 110,
+    `old board: ${stoic.oldAfterMore} (wanted 37); new board: ${stoic.newAfterMore} (wanted ${stoic.newId}); ` +
+    `two more old boards: ${stoic.otherOld.join(', ')} (wanted 23, 110)`);
+  check('a quote id from a newer version, or junk in the file, still gives the board a quote and is not kept',
+    stoic.unknownId === 37 && stoic.junkId === 37 && stoic.junkStored === undefined,
+    `unknown id → ${stoic.unknownId}, junk → ${stoic.junkId} (both wanted 37); junk kept in the board: ${JSON.stringify(stoic.junkStored)}`);
+  check('the quote goes the moment the pen touches down, and comes back on undo',
+    stoic.whileInking === null && stoic.afterStroke === null && stoic.afterUndo === true,
+    `while inking: ${stoic.whileInking ? 'still drawn' : 'gone'}; after the stroke: ${stoic.afterStroke ? 'still drawn' : 'gone'}; after undo: ${stoic.afterUndo ? 'back' : 'missing'}`);
+  check('Settings turns the quote off and leaves Happy Inking as it is',
+    stoic.offQuote === null && stoic.offGreeting === true && stoic.backOn === true,
+    `off: quote ${stoic.offQuote ? 'still drawn' : 'gone'}, greeting ${stoic.offGreeting ? 'still there' : 'gone too'}; on again: ${stoic.backOn}`);
+  check('the quote never reaches a picture of the board',
+    stoic.exportUntouched === true, `a picture with the quote on matches one with it off: ${stoic.exportUntouched}`);
+
+  // on a phone: wrapped to the screen, inside it, never off the edge
+  let phoneQuote = null;
+  try {
+    if (!win.webContents.debugger.isAttached()) win.webContents.debugger.attach('1.3');
+    const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
+    phoneQuote = [];
+    for (const [w, hh] of [[360, 740], [412, 915], [740, 360]]) {
+      await cdp('Emulation.setDeviceMetricsOverride', { width: w, height: hh, deviceScaleFactor: 2.625, mobile: true });
+      await sleep(400);
+      phoneQuote.push(await js(`
+        const a = window.app, sf = a.surface;
+        a.newBoard(true);
+        a.store.doc.quote = 18;          // one of the longest, so there is something to wrap
+        sf.resize?.(); sf.invalidate(); sf.draw();
+        const q = sf._quoteDrawn;
+        return { w: sf.width, h: sf.height, q: q && { lines: q.lines.length, widest: Math.round(q.widest), size: q.size, bottom: Math.round(q.bottom), top: Math.round(q.top) } };
+      `));
+    }
+    await cdp('Emulation.clearDeviceMetricsOverride');
+    win.webContents.debugger.detach();
+    await sleep(400);
+  } catch (e) { phoneQuote = { error: e.message }; }
+  check('on a phone the quote wraps to the screen and stays inside it',
+    Array.isArray(phoneQuote) && phoneQuote.length === 3 &&
+    phoneQuote.slice(0, 2).every((p) => p.q && p.q.lines >= 2 && p.q.widest <= p.w - 32 && p.q.bottom <= p.h && p.q.size >= 12) &&
+    (!phoneQuote[2].q || (phoneQuote[2].q.widest <= phoneQuote[2].w - 32 && phoneQuote[2].q.bottom <= phoneQuote[2].h)),
+    JSON.stringify(phoneQuote));
+
+  /* ---- Back up all my boards, and restore them ---- */
+  const bk = await js(`
+    const a = window.app, s = a.settings;
+    const B = await import('app://board/js/backup.js');
+    const F = await import('app://board/js/core/folders.js');
+    const r = {};
+    const was = { folders: s.folders, boardFolders: s.boardFolders, autosave: s.autosave };
+    s.autosave = false;
+    const info = await window.board.info();
+    const file = (info.userData || '') + '/backup-test.zip';
+    const ids = ['bk-one', 'bk-two', 'bk-three'];
+    for (const id of ids) { try { await window.board.boards.remove(id); } catch {} }
+    const stroke = (id, x) => ({ id, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, opacity: 1, rotation: 0,
+      points: [{ x, y: 10, p: 0.5 }, { x: x + 40, y: 30, p: 0.5 }], bbox: { x, y: 10, w: 40, h: 20 } });
+    const make = (id, name, n) => ({ id, name, schema: 2, created: 1, modified: 1700000000000 + n, quote: n,
+      background: { color: '#ffffff', pattern: 'none' }, pages: [], camera: { x: 0, y: 0, z: 1 },
+      objects: Array.from({ length: n }, (_, i) => stroke(id + '-s' + i, i * 50)) });
+    for (const [i, id] of ids.entries()) await window.board.boards.save({ id, json: JSON.stringify(make(id, 'Backup ' + (i + 1), i + 1)), setLast: false });
+    const physics = F.createFolder(s, 'Backup physics');
+    F.moveBoard(s, 'bk-two', physics);
+    a.saveSettings();
+
+    const res = await B.backupAllBoards(a, { pathFor: async () => file });
+    r.backedUp = res && res.boards;
+    const bytes = new Uint8Array(await window.board.readFile(file));
+    const Zip = await B.loadZip();
+    const zip = await Zip.loadAsync(bytes);
+    const man = JSON.parse(await zip.files[B.MANIFEST].async('string'));
+    r.manifest = { app: man.app, kind: man.kind, boards: man.boards.length, folder: man.folders.some((f) => f.id === physics),
+      filed: man.boardFolders['bk-two'] === physics };
+    const two = man.boards.find((b) => b.id === 'bk-two');
+    r.plainFile = two ? JSON.parse(await zip.files[two.file].async('string')).objects.length : -1;
+    r.listed = ids.every((id) => man.boards.some((b) => b.id === id));
+
+    // a new phone: the boards and the folder are gone
+    for (const id of ids) await window.board.boards.remove(id);
+    s.folders = (s.folders || []).filter((f) => f.id !== physics);
+    if (s.boardFolders) delete s.boardFolders['bk-two'];
+    const back = await B.restoreBackupBytes(a, bytes);
+    r.first = back;
+    const list = (await window.board.boards.list()) || [];
+    r.allBack = ids.every((id) => list.some((b) => b.id === id));
+    const two2 = await window.board.boards.load('bk-two');
+    r.twoBack = two2 && { strokes: two2.objects.length, quote: two2.quote, name: two2.name };
+    r.folderBack = F.folderList(s).some((f) => f.id === physics) && F.folderOf(s, 'bk-two') === physics;
+
+    // the same backup again: nothing doubles
+    r.again = await B.restoreBackupBytes(a, bytes);
+    r.countAfterAgain = ((await window.board.boards.list()) || []).filter((b) => /^Backup /.test(b.name || '')).length;
+
+    // work done since the backup is never written over: the backup's copy lands beside it
+    const mine = make('bk-one', 'Backup 1', 1); mine.objects.push(stroke('bk-one-new', 500));
+    await window.board.boards.save({ id: 'bk-one', json: JSON.stringify(mine), setLast: false });
+    r.changed = await B.restoreBackupBytes(a, bytes);
+    const one = await window.board.boards.load('bk-one');
+    r.mineKept = one.objects.length;
+    const list2 = (await window.board.boards.list()) || [];
+    const beside = list2.find((b) => b.id !== 'bk-one' && /^Backup 1 \\(/.test(b.name || ''));
+    r.beside = beside ? beside.name : null;
+
+    // a hand-made ZIP: a board with an unsafe id gets a safe one; a backup cannot delete a folder here
+    const evil = new Zip();
+    evil.file(B.MANIFEST, JSON.stringify({ app: 'GazBoard', kind: 'backup', version: 1, boards: [],
+      folders: [{ id: '../../x', name: 'Bad' }], boardFolders: {}, removedFolders: [physics] }));
+    evil.file('boards/odd.gazboard', JSON.stringify({ ...make('../../etc', 'Odd one', 1) }));
+    evil.file('boards/broken.gazboard', '{not json');
+    const evilBytes = await evil.generateAsync({ type: 'uint8array' });
+    r.evil = await B.restoreBackupBytes(a, evilBytes);
+    const list3 = (await window.board.boards.list()) || [];
+    const odd = list3.find((b) => b.name === 'Odd one');
+    r.oddId = odd ? odd.id : null;
+    r.folderSurvives = F.folderList(s).some((f) => f.id === physics);
+    r.badFolder = F.folderList(s).some((f) => f.id === '../../x');
+    try { await B.restoreBackupBytes(a, new TextEncoder().encode('not a zip')); r.notZip = 'accepted'; } catch (e) { r.notZip = e.message; }
+
+    a.newBoard(true);
+    for (const b of list3) if (/^(Backup |Odd one)/.test(b.name || '')) { try { await window.board.boards.remove(b.id); } catch {} }
+    s.folders = was.folders; s.boardFolders = was.boardFolders; s.autosave = was.autosave; a.saveSettings();
+    return r;
+  `);
+  check('Back up all my boards writes one ZIP with every board, its folders and how they are filed',
+    bk.backedUp >= 3 && bk.listed && bk.manifest.app === 'GazBoard' && bk.manifest.kind === 'backup' &&
+    bk.manifest.folder && bk.manifest.filed && bk.plainFile === 2,
+    `${bk.backedUp} boards backed up; manifest ${JSON.stringify(bk.manifest)}; all three test boards listed: ${bk.listed}; ` +
+    `bk-two inside is an ordinary .gazboard with ${bk.plainFile} strokes (wanted 2)`);
+  check('Restore brings the boards back, with their quote, into the folder they were filed in',
+    bk.allBack && bk.first.added >= 3 && bk.twoBack && bk.twoBack.strokes === 2 && bk.twoBack.quote === 2 && bk.folderBack,
+    `restore: ${JSON.stringify(bk.first)}; all back: ${bk.allBack}; bk-two: ${JSON.stringify(bk.twoBack)}; back in its folder: ${bk.folderBack}`);
+  check('restoring the same backup twice adds nothing',
+    bk.again.added === 0 && bk.again.beside === 0 && bk.again.same >= 3 && bk.countAfterAgain === 3,
+    `second restore: ${JSON.stringify(bk.again)}; test boards now: ${bk.countAfterAgain} (wanted 3)`);
+  check('a board changed since the backup is never written over: the backup copy is kept beside it',
+    bk.changed.beside === 1 && bk.mineKept === 2 && !!bk.beside,
+    `restore: ${JSON.stringify(bk.changed)}; my board still has ${bk.mineKept} strokes (wanted 2); the copy: ${bk.beside}`);
+  check('a hand-made backup cannot bring in an unsafe id or delete a folder here, and a damaged board is skipped',
+    bk.evil.added === 1 && bk.evil.bad === 1 && /^[A-Za-z0-9_-]{1,128}$/.test(bk.oddId || '') && bk.folderSurvives && !bk.badFolder,
+    `restore: ${JSON.stringify(bk.evil)}; the board's id here: ${bk.oddId}; folder still here: ${bk.folderSurvives}; ` +
+    `bad folder id taken in: ${bk.badFolder}`);
+  check('a file that is not a ZIP is turned away with a plain message',
+    /not a GazBoard backup/.test(bk.notZip), `said: ${bk.notZip}`);
+
+  /* ---- board replay ---- */
+  const rp = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface, s = a.settings;
+    const R = await import('app://board/js/replay.js');
+    const r = {};
+    const was = { mouse: s.inkWithMouse, autosave: s.autosave };
+    s.autosave = false;
+    a.newBoard(true); a.textEditor.cancel();
+    a.setTool('pen'); s.inkWithMouse = 'yes';
+    const rect = sf.canvas.getBoundingClientRect();
+    const ev = (x, y) => ({ pointerId: 1, pointerType: 'mouse', button: 0, buttons: 1,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0.5 });
+    // drawing speed: a long stroke, timed move by move
+    const before = Date.now();
+    it.onDown(ev(100, 100));
+    const t0 = performance.now();
+    for (let k = 1; k <= 400; k++) it.onMove(ev(100 + (k % 200) * 2, 100 + Math.floor(k / 200) * 40 + Math.sin(k / 5) * 8));
+    r.msPerMove = (performance.now() - t0) / 400;
+    it.onUp(ev(500, 140)); it.action = null; it.pointers.clear();
+    const first = a.store.objects[0];
+    r.at = first && first.at; r.atOk = !!first && first.at >= before && first.at <= Date.now();
+    r.keys = first ? Object.keys(first).filter((k) => first[k] !== undefined).sort().join(',') : '';
+    await new Promise((res) => setTimeout(res, 20));
+    it.onDown(ev(100, 300)); it.onMove(ev(300, 320)); it.onUp(ev(300, 320)); it.action = null; it.pointers.clear();
+    // a copy arrives now, not when the thing it copies was drawn
+    a.setSelection([first.id]); await new Promise((res) => setTimeout(res, 20));
+    a.duplicate();
+    const copy = a.store.objects[a.store.objects.length - 1];
+    r.copyNewer = copy.at > first.at;
+    // the replay order is the order things were made in, even after "bring to back"
+    const objs = a.store.objects.map((o) => ({ ...o }));
+    objs.reverse();
+    r.order = R.replayOrder(objs).map((o) => o.at).every((t, i, l) => i === 0 || l[i - 1] <= t);
+    // a board from before replay: no times at all, an even pace in layer order
+    const old = Array.from({ length: 5 }, (_, i) => ({ id: 'o' + i, type: 'stroke', points: [{ x: 0, y: i * 10 }, { x: 50, y: i * 10 }], bbox: { x: 0, y: i * 10, w: 50, h: 0 } }));
+    const op = R.replayPlan(old);
+    const gaps = op.items.slice(1).map((x, i) => Math.round(x.t0 - op.items[i].t1));
+    r.oldEven = gaps.every((g) => g === gaps[0]) && op.items.map((x) => x.o.id).join() === 'o0,o1,o2,o3,o4';
+    r.oldGaps = gaps;
+
+    // opening and closing a replay leaves the board exactly as it was
+    const rev = a.store.rev, json = JSON.stringify(a.store.toJSON());
+    const open = a.command('board.replay');
+    await new Promise((res) => setTimeout(res, 400));
+    r.opened = !!open && !!document.querySelector('.replay-layer');
+    r.playing = open.player.playing && open.player.t > 0;
+    open.player.seek(open.player.total);
+    await new Promise((res) => setTimeout(res, 300));
+    r.allDrawn = open.renderer.drawn === open.plan.items.length;
+    R.closeReplay(a);
+    r.closed = !document.querySelector('.replay-layer');
+    r.untouched = a.store.rev === rev && JSON.stringify(a.store.toJSON()) === json;
+
+    // the GIF: a real one, and the board can be used while it is made
+    const src = { doc: { background: a.store.doc.background, pages: [] }, objects: a.store.objects.map((o) => structuredClone(o)) };
+    let worst = 0, last = performance.now(), ticking = true;
+    const tick = () => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; if (ticking) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    const gif = await R.makeGif(src, { maxSeconds: 4 });
+    ticking = false;
+    const g = gif.bytes;
+    r.gif = { head: String.fromCharCode(...g.slice(0, 6)), tail: g[g.length - 1], size: g.length,
+      frames: g.reduce((n, b, i) => n + (b === 0x21 && g[i + 1] === 0xf9 && g[i + 2] === 4 ? 1 : 0), 0) };
+    r.gifWorstFrame = Math.round(worst);
+    // cancelling stops it straight away
+    const ctrl = new AbortController(); ctrl.abort();
+    r.gifCancelled = await R.makeGif(src, { signal: ctrl.signal });
+    // a video, where this machine can record one
+    r.videoType = R.videoType();
+    r.videoTypes = R.videoTypes().map((x) => x.mime).join(', ');
+    r.encoder = await R.encoderChoice(1920, 1080, 30, 12e6).then((c) => c && c.config.codec).catch(() => null);
+    const describe = async (v) => {
+      const b = v && v.bytes;
+      if (!b) return null;
+      const d = { ext: v.ext, size: b.length, mp4: String.fromCharCode(...b.slice(4, 8)) === 'ftyp',
+        webm: b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3 };
+      // played back by the browser itself: its size, and how long it lasts
+      const url = URL.createObjectURL(new Blob([b], { type: v.ext === 'mp4' ? 'video/mp4' : 'video/webm' }));
+      const el = document.createElement('video'); el.muted = true; el.src = url;
+      const meta = await new Promise((res) => { el.onloadedmetadata = () => res([el.videoWidth, el.videoHeight, el.duration]); el.onerror = () => res(null); setTimeout(() => res(null), 4000); });
+      URL.revokeObjectURL(url);
+      if (meta) { d.dims = [meta[0], meta[1]]; d.seconds = Number.isFinite(meta[2]) ? +meta[2].toFixed(1) : null; }
+      return d;
+    };
+    // one failure here is reported, never allowed to stop every test after it
+    try { r.video = await describe(await R.recordVideo(src, { speed: 4 })); } catch (e) { r.video = { error: e.message }; }
+    r.encodeNote = R.encodeNote;
+    {
+      const c2 = new AbortController();
+      const p = R.recordVideo(src, { speed: 1, signal: c2.signal }).catch((e) => ({ error: e.message }));
+      setTimeout(() => c2.abort(), 300);
+      const t1 = performance.now();
+      r.videoCancelled = await p;
+      r.videoCancelMs = Math.round(performance.now() - t1);
+    }
+    // the recorder way, kept for machines without an encoder: a type that comes back empty is never saved
+    if (r.videoType && R.videoTypes().length > 1) {
+      // a stand-in recorder: the first type hands back nothing, the others a small file. This checks the switching
+      // itself, the same on every machine - not whether this PC's own recorder works (the encoder covers that)
+      const Real = window.MediaRecorder, first = R.videoTypes()[0].mime;
+      window.MediaRecorder = class {
+        static isTypeSupported(m) { return Real.isTypeSupported(m); }
+        constructor(st, o) { this.mimeType = o && o.mimeType; this.state = 'inactive'; this.ondataavailable = null; this.onstop = null; this.onerror = null; }
+        start() { this.state = 'recording'; }
+        requestData() { if (this.mimeType !== first) this.ondataavailable?.({ data: new Blob([new Uint8Array(4321)]) }); }
+        stop() { this.state = 'inactive'; setTimeout(() => this.onstop?.(), 0); }
+      };
+      try {
+        const fb = await R.recordVideo(src, { speed: 8, via: 'recorder' });
+        r.fallback = fb ? { ext: fb.ext, size: fb.bytes.length } : null;
+      } catch (e) { r.fallback = { error: e.message }; }
+      finally { window.MediaRecorder = Real; }
+    }
+    s.inkWithMouse = was.mouse; s.autosave = was.autosave; a.setTool('select'); a.newBoard(true);
+    return r;
+  `);
+  check('a new stroke records when the pen went down, and nothing else changes about it',
+    rp.atOk && rp.keys === 'at,bbox,color,effect,hue,id,opacity,points,rotation,tool,type,width',
+    `at=${rp.at} (${rp.atOk ? 'now' : 'wrong'}); the stroke's fields: ${rp.keys}`);
+  check('drawing is as quick as before: the time is noted once, at pen-down, not on every move',
+    rp.msPerMove < 2, `${rp.msPerMove.toFixed(3)} ms per pen move over a 400-point stroke (allowed under 2 ms)`);
+  check('a copy replays when it was made, not when its original was drawn',
+    rp.copyNewer === true, `copy later than the original: ${rp.copyNewer}`);
+  check('the replay follows the order things were drawn in, whatever the layer order',
+    rp.order === true, `in time order after reversing the layers: ${rp.order}`);
+  check('a board from before replay plays at an even pace, in layer order',
+    rp.oldEven === true, `gaps between strokes: ${rp.oldGaps.join(', ')} ms`);
+  check('Replay opens over the board, plays, reaches the end, and closes, leaving the board exactly as it was',
+    rp.opened && rp.playing && rp.allDrawn && rp.closed && rp.untouched,
+    `opened ${rp.opened}, playing ${rp.playing}, everything drawn at the end ${rp.allDrawn}, closed ${rp.closed}, board unchanged ${rp.untouched}`);
+  check('Save GIF makes a real animated GIF without holding up the window',
+    rp.gif.head === 'GIF89a' && rp.gif.tail === 0x3b && rp.gif.frames >= 10 && rp.gifWorstFrame < 250,
+    `${JSON.stringify(rp.gif)}; longest gap between frames meanwhile: ${rp.gifWorstFrame} ms (allowed under 250)`);
+  check('when the recorder\'s first video type comes back empty, the next one is used instead of saving an empty file',
+    !rp.videoType || !('fallback' in rp) || (!!rp.fallback && rp.fallback.size > 1000 && rp.fallback.ext !== rp.videoType.ext),
+    !rp.videoType ? 'no recorder here' : !('fallback' in rp) ? 'this machine offers only one recorder type' :
+      `first type ${rp.videoType.mime} made to record nothing; got ${JSON.stringify(rp.fallback)} (wanted the next type's 4321-byte stand-in file)`);
+  check('cancelling the GIF stops it', rp.gifCancelled === null, `result after cancel: ${JSON.stringify(rp.gifCancelled)}`);
+  check('Save video makes a real full-HD video file, frame by frame, and Cancel stops it at once',
+    (!rp.encoder && !rp.videoType) ||
+      (!!rp.video && !rp.video.error && rp.video.size > 1000 && (rp.video.mp4 || rp.video.webm) && !!rp.video.dims && Math.max(...rp.video.dims) === 1920 &&
+       rp.videoCancelled === null && rp.videoCancelMs < 2000 && (!rp.encoder || !rp.encodeNote)),
+    `encoder: ${rp.encoder || 'none'}; recorder types: ${rp.videoTypes || 'none'}; saved: ${JSON.stringify(rp.video)}; ` +
+    `frame by frame: ${rp.encodeNote ? 'gave way to the recorder - ' + rp.encodeNote : rp.encoder ? 'yes' : 'not available'}; ` +
+    `cancelled → ${JSON.stringify(rp.videoCancelled)} in ${rp.videoCancelMs} ms`);
+  // (the size: its longest side is 1920 pixels, full HD, so thin ink stays crisp)
+
+  /* ---- replay zoom: a long board starts close up, follows the pen, and can be zoomed and moved ---- */
+  const rz = await js(`
+    const a = window.app, s = a.settings;
+    const R = await import('app://board/js/replay.js');
+    const r = {};
+    const was = s.autosave; s.autosave = false;
+    a.newBoard(true);
+    // a long board: sixty words written along 12,000 units of space
+    const objs = [];
+    for (let i = 0; i < 60; i++) {
+      const x = i * 200, pts = [];
+      for (let k = 0; k < 16; k++) pts.push({ x: x + k * 6, y: 300 + Math.sin(k) * 20, p: 0.5 });
+      objs.push({ id: 'long' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, opacity: 1, rotation: 0,
+        points: pts, bbox: { x, y: 280, w: 90, h: 40 }, at: 1700000000000 + i * 400 });
+    }
+    a.store.addMany(objs.map((o) => ({ ...o })), 'x');
+    const json = JSON.stringify(a.store.toJSON());
+    const frames = (n) => new Promise((res) => { let k = 0; const f = () => (++k >= n ? res() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+    const until = async (fn, ms = 3000) => { const t0 = performance.now(); while (!fn() && performance.now() - t0 < ms) await frames(1); return fn(); };
+    const open = a.command('board.replay');
+    const cam = open.camera, p = open.player;
+    await frames(3);
+    r.start = { zoom: +cam.zoom.toFixed(2), follow: cam.follow, mini: open.mini.style.display, label: open.controls.zoomLabel.textContent };
+    // calm to watch at 1x: the view stays put most of the time, and when it moves it moves slowly
+    {
+      p.seek(p.total * 0.2); await until(() => !cam.pending(p.t), 3000);
+      p.speed = 1; p.play();
+      let sharpN = 0;
+      let last = cam.center(), lastT = performance.now(), fastest = 0, movingFrames = 0, nf = 0, cuts0 = cam.stats.cuts, cuts = cam.stats.cuts;
+      const t0 = performance.now();
+      while (performance.now() - t0 < 4000) {
+        await frames(6);                                   // measured over a tenth of a second, not frame by frame
+        const c = cam.center(), now = performance.now();
+        const sp = Math.hypot(c.x - last.x, c.y - last.y) / cam.view.w / Math.max(1, now - lastT) * 1000;
+        nf++; if (sp > 0.01) movingFrames++;
+        if (cam.sharpShown(p.t)) sharpN++;
+        // a jump straight to far-off writing is a cut, not a slide; it is counted on its own
+        if (cam.stats.cuts === cuts) fastest = Math.max(fastest, sp);
+        cuts = cam.stats.cuts;
+        last = c; lastT = now;
+      }
+      p.pause();
+      r.calm = { fastest: +fastest.toFixed(2), moving: Math.round(movingFrames / nf * 100), moves: cam.stats.cuts - cuts0, sharp: Math.round(sharpN / nf * 100) };
+    }
+    // half way through: the view has gone along with the writing, and the close-up is sharp
+    p.pause(); p.seek(p.total * 0.5);
+    await frames(3);                                     // the view moves on the next frame, not the instant the slider does
+    await until(() => !cam.pending(p.t), 4000);
+    const pen = cam.penAt(p.t), v = cam.view;
+    r.followed = !!pen && pen.x >= v.x && pen.x <= v.x + v.w && pen.y >= v.y && pen.y <= v.y + v.h;
+    r.glides = cam.stats.glides;
+    r.sharp = cam.sharpShown(p.t);
+    r.painted = { close: cam.sharp ? cam.sharp.painted : -1, whole: cam.full.painted };
+    // the mouse wheel zooms in where the pointer is
+    const rect = open.canvas.getBoundingClientRect();
+    const z0 = cam.zoom;
+    open.canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, bubbles: true, cancelable: true }));
+    r.wheel = { before: +z0.toFixed(2), after: +cam.zoom.toFixed(2) };
+    // dragging moves the view, and stops following
+    const c0 = cam.center();
+    const pe = (type, x) => new PointerEvent(type, { pointerId: 9, clientX: rect.left + x, clientY: rect.top + 200, bubbles: true });
+    open.canvas.dispatchEvent(pe('pointerdown', 400)); open.canvas.dispatchEvent(pe('pointermove', 300)); open.canvas.dispatchEvent(pe('pointerup', 300));
+    const c1 = cam.center();
+    r.drag = { moved: Math.round(c1.x - c0.x), follow: cam.follow, button: open.controls.followBtn.classList.contains('on') };
+    // the overview: a touch on its right end looks at the right end of the board
+    open.mini.style.display = 'block';
+    const mr = open.mini.getBoundingClientRect();
+    open.mini.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 10, clientX: mr.right - 2, clientY: mr.top + mr.height / 2, bubbles: true }));
+    open.mini.dispatchEvent(new PointerEvent('pointerup', { pointerId: 10, bubbles: true }));
+    r.miniRight = cam.view.x + cam.view.w >= cam.fit.x + cam.fit.w - 1;
+    // a Follow glide stays sharp the whole way: one sharp canvas made for all of it before it moves
+    {
+      p.pause(); await until(() => !cam.pending(p.t), 3000);
+      const built0 = cam.stats.sharpBuilt, c = cam.center();
+      cam.glideTo(c.x + cam.view.w * 0.6, c.y, cam.zoom, 600);
+      let sharpFrames = 0, n = 0;
+      const t0 = performance.now();
+      while (cam.glide && performance.now() - t0 < 2000) { await frames(1); n++; if (cam.sharpShown(p.t)) sharpFrames++; }
+      r.glideSharp = { frames: n, sharp: sharpFrames, rebuilt: cam.stats.sharpBuilt - built0 };
+    }
+    // saving while zoomed in films a full-HD close-up that follows the pen, sharp in every frame
+    {
+      // 41 frames 100 ms apart across the whole replay: played that much faster than real time
+      const pace = open.plan.total / 40 / 100;
+      const sc = R.savingCamera(open.plan, open.source, { zoomed: true, follow: true, cx: 0, cy: 0, viewW: cam.view.w }, 1920, pace);
+      let sharpFrames = 0, penInView = 0, n = 0;
+      const out = document.createElement('canvas'); out.width = sc.w; out.height = sc.h;
+      for (let f = 0; f <= 40; f++) {
+        const at = open.plan.total * f / 40;
+        sc.update(at, f * 100); sc.advanceTo(at, Infinity); sc.present(out.getContext('2d'), at);
+        n++; if (sc.sharpShown(at)) sharpFrames++;
+        const pn = sc.penAt(at), vv = sc.view;
+        if (pn && pn.x >= vv.x && pn.x <= vv.x + vv.w) penInView++;
+      }
+      r.saving = { size: sc.w + 'x' + sc.h, zoom: +sc.zoom.toFixed(1), sharpFrames, penInView, n };
+      sc.dispose();
+    }
+    // Whole board, then Follow pen goes back in close
+    open.controls.wholeBtn.click();
+    await until(() => !cam.glide, 2000); await frames(2);
+    r.whole = { zoom: +cam.zoom.toFixed(3), mini: open.mini.style.display };
+    open.controls.followBtn.click();
+    await until(() => !cam.glide, 2000); await frames(2);
+    r.followAgain = { zoom: +cam.zoom.toFixed(2), follow: cam.follow };
+    // a board that fits comfortably starts as the whole board
+    R.closeReplay(a);
+    r.untouched = JSON.stringify(a.store.toJSON()) === json;
+    a.newBoard(true);
+    a.store.addMany(objs.slice(0, 3).map((o) => ({ ...o })), 'x');
+    const small = a.command('board.replay');
+    r.smallStarts = +small.camera.zoom.toFixed(3);
+    R.closeReplay(a);
+    s.autosave = was; a.newBoard(true);
+    return r;
+  `);
+  check('a long board too small to read replays close up, following the pen, with the whole board in the corner',
+    rz.start.zoom > 1.5 && rz.start.follow === true && rz.start.mini === 'block' && rz.followed === true && rz.glides > 0,
+    `start ${JSON.stringify(rz.start)}; half way the pen is in view: ${rz.followed}; the view moved along ${rz.glides} times`);
+  check('Follow pen is slow at 1x: the view drifts after the pen at no more than about a third of its width a second',
+    !!rz.calm && rz.calm.fastest <= 0.45 && rz.calm.sharp >= 85,
+    rz.calm ? `fastest ${rz.calm.fastest} window-widths a second (allowed up to 0.45); moving in ${rz.calm.moving}% of tenths of a second; sharp (never the soft stand-in) in ${rz.calm.sharp}% of them (at least 85%); ${rz.calm.moves} jump(s) straight to far-off writing` : 'not measured');
+  check('zoomed in, the close-up is redrawn sharp, drawing only what it shows',
+    rz.sharp === true && rz.painted.close > 0 && rz.painted.close < rz.painted.whole,
+    `sharp close-up shown: ${rz.sharp}; strokes drawn for the close-up ${rz.painted.close}, for the whole board ${rz.painted.whole}`);
+  check('the mouse wheel zooms; dragging moves the view and stops following; the overview takes you where you touch it',
+    rz.wheel.after > rz.wheel.before && rz.drag.moved > 0 && rz.drag.follow === false && rz.drag.button === false && rz.miniRight === true,
+    `wheel ${JSON.stringify(rz.wheel)}; drag ${JSON.stringify(rz.drag)} (dragging left moves the view right); overview touched at its right end shows the right end: ${rz.miniRight}`);
+  check('saving while zoomed in films a sharp full-HD close-up that follows the pen',
+    rz.saving.size === '1920x1080' && rz.saving.sharpFrames === rz.saving.n && rz.saving.penInView >= rz.saving.n - 3,
+    `${JSON.stringify(rz.saving)} — every frame sharp, the pen in view in all but the moment the view moves on`);
+  check('a Follow glide stays sharp while it moves, without redrawing every frame',
+    !!rz.glideSharp && rz.glideSharp.frames > 5 && rz.glideSharp.sharp >= rz.glideSharp.frames - 2 && rz.glideSharp.rebuilt <= 1,
+    rz.glideSharp ? `${rz.glideSharp.sharp} of ${rz.glideSharp.frames} frames sharp during the glide (all but the first couple); sharp canvas made ${rz.glideSharp.rebuilt} time(s) for it (at most once)` : 'not measured');
+  check('Whole board goes back out, Follow pen goes back in close, and the board itself is never touched',
+    rz.whole.zoom === 1 && rz.whole.mini === 'none' && rz.followAgain.zoom > 1 && rz.followAgain.follow === true && rz.untouched === true && rz.smallStarts === 1,
+    `whole board ${JSON.stringify(rz.whole)}; follow again ${JSON.stringify(rz.followAgain)}; board unchanged ${rz.untouched}; a small board starts at zoom ${rz.smallStarts} (wanted 1)`);
+
+  /* ---- a 20,000-stroke board replays smoothly on a slow machine ---- */
+  let big = null;
+  try {
+    if (!win.webContents.debugger.isAttached()) win.webContents.debugger.attach('1.3');
+    const cdp = (m, p) => win.webContents.debugger.sendCommand(m, p || {});
+    await js(`
+      const a = window.app;
+      window.__bigAutosave = a.settings.autosave;
+      a.settings.autosave = false;
+      const objects = [];
+      let at = 1700000000000;
+      for (let i = 0; i < 20000; i++) {
+        const x = (i % 200) * 12, y = Math.floor(i / 200) * 14, pts = [];
+        for (let k = 0; k < 12; k++) pts.push({ x: x + k, y: y + Math.sin(k + i) * 4, p: 0.5 });
+        at += 40 + (i % 7) * 30;
+        objects.push({ id: 'big' + i, type: 'stroke', tool: 'pen', color: i % 3 ? '#201f1e' : '#d13438', width: 3, opacity: 1,
+          rotation: 0, points: pts, bbox: { x, y: y - 4, w: 11, h: 8 }, at });
+      }
+      a.store.load({ id: 'big-board', name: 'Big', objects });
+      // a board this size is normally open long before anyone replays it: let the board finish its own
+      // start-up work (its cached picture is built in idle time) so the replay is measured, not that
+      const sf = a.surface;
+      for (let i = 0; i < 100 && (sf._warming || sf.dirty); i++) await new Promise((res) => setTimeout(res, 50));
+      await new Promise((res) => setTimeout(res, 1000));
+      const t0 = performance.now();
+      window.__big = { open: a.command('board.replay') };
+      // these measure the drawing itself, on the whole board; zooming in has its own tests
+      { const c = window.__big.open.camera; c.follow = false; c.glide = null; c.setView(c.fit.x + c.fit.w / 2, c.fit.y + c.fit.h / 2, 1); }
+      window.__big.openMs = Math.round(performance.now() - t0);
+      return true;
+    `);
+    await cdp('Emulation.setCPUThrottlingRate', { rate: 4 });
+    big = await js(`
+      const R = window.__big.open, p = R.player;
+      p.speed = 4; p.seek(0); p.play();
+      const gaps = []; let last = performance.now(), on = true;
+      const tick = () => { const n = performance.now(); gaps.push(n - last); last = n; if (on) requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+      const drawnBefore = R.renderer.drawn;
+      await new Promise((res) => setTimeout(res, 3000));
+      on = false;
+      // the first frame waits for the slowed processor to catch up with the replay opening; it is reported, not judged
+      const firstFrame = Math.round(gaps.shift() || 0);
+      gaps.sort((x, y) => x - y);
+      const out = { openMs: window.__big.openMs, n: R.plan.items.length, total: Math.round(R.plan.total), drawnIn3s: R.renderer.drawn - drawnBefore,
+        p95: Math.round(gaps[Math.floor(gaps.length * 0.95)] || 0), worst: Math.round(gaps[gaps.length - 1] || 0),
+        secondWorst: Math.round(gaps[gaps.length - 2] || 0),
+        frames: gaps.length, maxWork: Math.round(p.stats.maxWork), slowed: p.stats.slowed, firstFrame };
+      p.pause();
+      return out;
+    `);
+    await cdp('Emulation.setCPUThrottlingRate', { rate: 1 });
+    big.jumps = await js(`
+      const R = window.__big.open, p = R.player;
+      // the graphics chip may still be drawing after the page thinks it is done: reading one pixel waits for it
+      const settle = (c) => { try { c.getContext('2d').getImageData(0, 0, 1, 1); } catch { /* nothing to wait for */ } };
+      const detail = {};
+      const until = async (pos, name) => {
+        const t0 = performance.now();
+        const fromDrawn = R.renderer.drawn;
+        p.stats.maxWork = 0;
+        let frames = 0;
+        p.seek(p.total * pos);
+        while (R.renderer.drawn !== R.renderer.doneBy(p.t)) { frames++; await new Promise((res) => requestAnimationFrame(res)); }
+        const drawnAt = performance.now();
+        settle(R.renderer.base);
+        const ms = Math.round(performance.now() - t0);
+        let mark = 0;
+        for (const at of R.renderer.marks.keys()) if (at <= R.renderer.drawn && at > mark) mark = at;
+        detail[name] = { ms, frames, longestFrame: Math.round(p.stats.maxWork), chipWait: Math.round(performance.now() - drawnAt),
+          strokes: R.renderer.drawn < fromDrawn ? R.renderer.drawn - mark : R.renderer.drawn - fromDrawn, from: R.renderer.drawn < fromDrawn ? 'checkpoint ' + mark : 'where it was' };
+        return ms;
+      };
+      const out = {};
+      out.toEnd = await until(1, 'toEnd');
+      out.back25 = await until(0.25, 'back25');
+      out.to80 = await until(0.8, 'to80');
+      out.back5 = await until(0.05, 'back5');
+      out.marks = R.renderer.marks.size;
+      out.detail = detail;
+      // how long this machine takes to draw the strokes between two checkpoints from a clean sheet - the most
+      // a jump back can ever need, since it starts from the checkpoint before it
+      {
+        const RR = (await import('app://board/js/replay.js')).ReplayRenderer;
+        const f = R.renderer;
+        const probe = new RR(R.plan, R.source.doc, R.camera.fit, f.w, f.h, { maxMarks: 0 });
+        const t0 = performance.now();
+        probe.advanceTo(R.plan.items[Math.min(R.plan.items.length, f.every) - 1].t1);
+        settle(probe.base);
+        out.gapMs = Math.round(performance.now() - t0);
+        out.every = f.every;
+        probe.dispose();
+      }
+      // a machine far too slow for the speed asked: the replay slows down rather than skipping or stalling
+      p.seek(p.total * 0.1); await new Promise((res) => setTimeout(res, 100));
+      p.budget = 0; p.speed = 16; p.stats.slowed = 0; p.play();
+      let ahead = 0, frames = 0;
+      const watch = () => { frames++; if (p.t > R.renderer.reached() + 60 && R.renderer.drawn !== R.renderer.doneBy(p.t)) ahead++; if (p.playing) requestAnimationFrame(watch); };
+      requestAnimationFrame(watch);
+      await new Promise((res) => setTimeout(res, 800));
+      p.pause(); p.budget = 10; p.speed = 1;
+      out.slow = { slowed: p.stats.slowed, ahead, frames };
+      return out;
+    `);
+    // leave nothing behind for the tests after this one: no 20,000-stroke board in memory or on disk, autosave as it was
+    await js(`(await import('app://board/js/replay.js')).closeReplay(window.app); window.app.newBoard(true); delete window.__big;
+      try { await window.board.boards.remove('big-board'); } catch {}
+      window.app.settings.autosave = window.__bigAutosave !== false; delete window.__bigAutosave;
+      await window.app.refreshBoardDirectory?.(); return true;`);
+    win.webContents.debugger.detach();
+  } catch (e) {
+    big = { error: e.message };
+    // a failure here must not leave the replay over the board for every test after it
+    try {
+      await js(`(await import('app://board/js/replay.js')).closeReplay(window.app); window.app.newBoard(true);
+        try { await window.board.boards.remove('big-board'); } catch {}
+        if ('__bigAutosave' in window) window.app.settings.autosave = window.__bigAutosave !== false; return true;`);
+      if (win.webContents.debugger.isAttached()) { try { await win.webContents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: 1 }); } catch {} win.webContents.debugger.detach(); }
+    } catch { /* reported above */ }
+  }
+  check('a 20,000-stroke board replays smoothly with the processor slowed to a quarter',
+    // one long gap on its own, with the replay's own work small in every frame, is the system pausing the window
+    // (tidying memory, a virus scan) - not the replay; two, or one frame of real work that long, would be the replay
+    !!big && !big.error && big.n === 20000 && big.p95 < 60 && big.secondWorst < 250 && big.maxWork < 250 && big.drawnIn3s > 0,
+    big && !big.error ? `${big.n} strokes over ${big.total} ms at 1x; in 3 s at 4x speed: ${big.drawnIn3s} strokes drawn, ` +
+      `${big.frames} frames, 95% of frames within ${big.p95} ms (allowed under 60), worst ${big.worst} ms and next worst ${big.secondWorst} ms ` +
+      `(one long pause from the system is let through; the next worst must be under 250), opening took ${big.openMs} ms, ` +
+      `most work in one frame ${big.maxWork} ms (allowed under 250), slowed down ${big.slowed} times to keep up; the first frame after slowing the processor took ${big.firstFrame} ms` : JSON.stringify(big));
+  // a jump back costs at most one stretch between checkpoints; on a slower graphics chip that stretch is slower to draw,
+  // so the allowance is that stretch as THIS machine draws it, and never less than 400 ms
+  const backAllowed = big && big.jumps ? Math.max(400, Math.round(big.jumps.gapMs * 1.25) + 150) : 400;
+  check('jumping along the slider is quick, forwards and back',
+    !!big && !!big.jumps && big.jumps.back25 < backAllowed && big.jumps.to80 < 1200 && big.jumps.back5 < backAllowed && big.jumps.marks <= 16,
+    big && big.jumps ? `to the end ${big.jumps.toEnd} ms (first time, drawing everything); back to 25% ${big.jumps.back25} ms; ` +
+      `to 80% ${big.jumps.to80} ms; back to 5% ${big.jumps.back5} ms (back allowed under ${backAllowed}, forward under 1200); ` +
+      `${big.jumps.marks} checkpoints kept (at most 16), one every ${big.jumps.every} strokes; this machine draws one such stretch in ${big.jumps.gapMs} ms; ` +
+      `step by step: ${JSON.stringify(big.jumps.detail)}` : JSON.stringify(big));
+  check('when the machine cannot keep up, the replay slows down instead of skipping strokes or freezing',
+    !!big && !!big.jumps && big.jumps.slow.slowed > 0 && big.jumps.slow.ahead === 0 && big.jumps.slow.frames >= 8,
+    big && big.jumps ? `with almost no drawing time per frame: slowed ${big.jumps.slow.slowed} times, ran ahead of the drawing ` +
+      `${big.jumps.slow.ahead} times (must be 0), ${big.jumps.slow.frames} frames shown in 0.8 s (at least 8: it never freezes)` : JSON.stringify(big));
+
+
+  /* ---- formula graphs ---- */
+  const gr = await js(`
+    const a = window.app, s = a.settings;
+    const P = await import('app://board/js/core/plot.js');
+    const G = await import('app://board/js/core/graph.js');
+    const r = {};
+    const kind = (src) => { try { const f = P.readFormula(src); return f.kind; } catch (e) { return 'error: ' + e.message; } };
+    r.kinds = Object.fromEntries(['y = x^2 - 3', 'sin x', '2x+1', 'x = y^2', 'r = 2 sin(3θ)', 'r = 1 + cos(theta)', '(cos(t), sin(2t))', 'x^2 + y^2 = 25', 'xy = 1', '(2, 3)', 'a = 2', 'y = a sin(b x) + c', 'y = |x - 2|']
+      .map((f) => [f, kind(f)]));
+    r.errors = ['y = 2 +', 'y = foo(x)', 'x < 3', 'y = 1 = 2', 'y = constructor(x)', 'y = __proto__', 'y = alert(1)', 'y = x; alert(1)', 'y = eval(x)', 'y = x[0]', 'y = "x"']
+      .map((f) => kind(f));
+    r.tex = P.readFormula('y = x^2/4 - 2').tex;
+    // the maths is right
+    const g = { ...P.defaultGraph(), exprs: [{ src: 'y = x^2 - 2' }, { src: 'y = x' }, { src: 'x^2 + y^2 = 9' }, { src: 'y = tan x' }, { src: 'y = sqrt(x)' }, { src: 'r = 2 sin(3θ)' }] };
+    const t0 = performance.now();
+    const res = P.computeGraph(g, 900, 600);
+    r.ms = Math.round(performance.now() - t0);
+    const circ = res.curves[2].paths;
+    let worst = 0; for (const p of circ) for (let i = 0; i < p.length; i += 2) worst = Math.max(worst, Math.abs(Math.hypot(p[i], p[i + 1]) - 3));
+    r.circle = { lines: circ.length, worstOff: +worst.toFixed(4), closed: circ.length === 1 && Math.hypot(circ[0][0] - circ[0][circ[0].length - 2], circ[0][1] - circ[0][circ[0].length - 1]) < 0.1 };
+    // tan x: never a line drawn across an asymptote
+    let across = 0;
+    for (const p of res.curves[3].paths) for (let i = 2; i < p.length; i += 2) {
+      const xa = p[i - 2], xb = p[i];
+      for (let k = -3; k <= 3; k++) { const asy = Math.PI / 2 + k * Math.PI; if (xa < asy && xb > asy) across++; }
+    }
+    r.tan = { pieces: res.curves[3].paths.length, across };
+    r.sqrtStart = res.curves[4].paths[0].slice(0, 2).map((v) => +v.toFixed(4));
+    const keys = P.keyPoints(g, res.curves);
+    const has = (k, x, y) => keys.some((p) => p.kind === k && Math.abs(p.x - x) < 1e-3 && Math.abs(p.y - y) < 1e-3);
+    r.keys = { rootPlus: has('root', Math.SQRT2, 0), rootMinus: has('root', -Math.SQRT2, 0), min: has('min', 0, -2), cross1: has('cross', -1, -1), cross2: has('cross', 2, 2), n: keys.length };
+
+    // a graph on the board
+    s.autosave = false;
+    a.newBoard(true);
+    const undo0 = a.store.undoStack.length;
+    const o = a.command('insert.graph');
+    await new Promise((res) => setTimeout(res, 200));
+    r.editorOpen = !!document.getElementById('graphEditor');
+    const rows = () => [...document.querySelectorAll('[data-graph-row]')];
+    const type = (i, v) => { const el = rows()[i]; el.value = v; el.dispatchEvent(new Event('input')); };
+    type(0, 'y = a sin(b x)');
+    document.querySelector('[data-graph-add]').click();
+    type(1, 'x^2 + y^2 = 9');
+    r.liveNoUndo = a.store.undoStack.length === undo0 + 1;        // only the insert itself so far
+    r.liveShown = a.store.get(o.id).exprs.map((e) => e.src).join(' | ');
+    await new Promise((res) => setTimeout(res, 300));
+    r.sliders = [...document.querySelectorAll('[data-slider]')].map((x) => x.dataset.slider).join(',');
+    const before = JSON.stringify(G.graphData(a.store.get(o.id)).curves[0].paths[0].slice(0, 20));
+    const sl = document.querySelector('[data-slider="a"]'); sl.value = '3'; sl.dispatchEvent(new Event('input'));
+    const after = JSON.stringify(G.graphData(a.store.get(o.id)).curves[0].paths[0].slice(0, 20));
+    r.sliderMoves = before !== after;
+    // a tap on a curve pins a point there
+    const ob = a.store.get(o.id), m = G.mapper(ob, G.sane(ob));
+    const sp = a.surface.cam.toScreen(m.X(0), m.Y(3)), rect = a.surface.canvas.getBoundingClientRect();
+    a.surface.canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 3, clientX: rect.left + sp.x, clientY: rect.top + sp.y, bubbles: true }));
+    r.pins = (a.store.get(o.id).pins || []).map((p) => [p.i, +p.x.toFixed(2), +p.y.toFixed(2)]);
+    r.stillEditing = !!document.getElementById('graphEditor');
+    document.querySelector('[data-graph-done]').click();
+    r.oneStep = a.store.undoStack.length === undo0 + 2 && a.store.undoStack[a.store.undoStack.length - 1].label === 'edit graph';
+    // the sliders are still there, with their values, however many times the editor is opened and closed
+    r.reopen = [];
+    for (let k = 0; k < 2; k++) {
+      a.beginGraphEdit(a.store.get(o.id));
+      await new Promise((res) => setTimeout(res, 150));
+      const sa = document.querySelector('[data-slider="a"]');
+      r.reopen.push({ sliders: [...document.querySelectorAll('[data-slider]')].map((x) => x.dataset.slider).join(','), a: sa ? +(+sa.value).toFixed(2) : null });
+      if (k === 0) document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));     // a click elsewhere closes it
+      else document.querySelector('[data-graph-cancel]').click();
+      await new Promise((res) => setTimeout(res, 50));
+    }
+    // a new letter typed in, closed, opened again: its slider is still there, value and all
+    a.beginGraphEdit(a.store.get(o.id));
+    await new Promise((res) => setTimeout(res, 100));
+    { const el = document.querySelector('[data-graph-row="0"]'); el.value = 'y = a sin(b x) + z'; el.dispatchEvent(new Event('input')); }
+    await new Promise((res) => setTimeout(res, 50));
+    { const sz = document.querySelector('[data-slider="z"]'); if (sz) { sz.value = '2'; sz.dispatchEvent(new Event('input')); } }
+    document.querySelector('[data-graph-done]').click();
+    a.beginGraphEdit(a.store.get(o.id));
+    await new Promise((res) => setTimeout(res, 150));
+    { const sz = document.querySelector('[data-slider="z"]'); r.zAgain = sz ? +(+sz.value).toFixed(2) : null; }
+    document.querySelector('[data-graph-cancel]').click();
+    // back to the formulas the rest of this test expects
+    { const ob2 = a.store.get(o.id); a.store.update(o.id, { exprs: ob2.exprs.map((e, i) => (i === 0 ? { ...e, src: 'y = a sin(b x)' } : e)) }, 'x'); a.store.undoStack.pop(); a.store.undoStack.pop(); }
+    const saved = a.store.get(o.id);
+    r.saved = { exprs: saved.exprs.map((e) => e.src).join(' | '), a: saved.params && saved.params.a && saved.params.a.v, pins: (saved.pins || []).length };
+    // it draws: the curve's colour is in a picture of the board
+    const pic = a.surface.renderTo({ x: saved.x, y: saved.y, w: saved.w, h: saved.h }, 1, true);
+    const d = pic.getContext('2d').getImageData(0, 0, pic.width, pic.height).data;
+    let blue = 0, red = 0;
+    for (let i = 0; i < d.length; i += 4) { if (d[i] < 40 && d[i + 1] > 70 && d[i + 1] < 130 && d[i + 2] > 150) blue++; if (d[i] > 180 && d[i + 1] < 90 && d[i + 2] < 90) red++; }
+    r.pixels = { blue, red };
+    // and as real lines in an SVG
+    const E = await import('app://board/js/export.js');
+    await a.mathsReady(); const svg = E.buildSvg(a, { x: saved.x - 10, y: saved.y - 10, w: saved.w + 20, h: saved.h + 20 });
+    r.svg = svg ? { paths: (svg.match(/<path [^>]*stroke="#0063b1"/g) || []).length, red: (svg.match(/stroke="#d13438"/g) || []).length, labels: (svg.match(/<title>[^<]*sin[^<]*<\\/title>/g) || []).length } : 'no svg function';
+    // one undo takes the editing back; another the graph itself
+    a.command('edit.undo');
+    r.undone = a.store.get(o.id).exprs.map((e) => e.src).join(' | ');
+    // saved and opened again, it is the same graph
+    a.command('edit.redo');
+    const file = JSON.parse(JSON.stringify(a.store.toJSON()));
+    a.store.load(file);
+    const back = a.store.get(o.id);
+    r.roundTrip = !!back && back.exprs.length === 2 && back.params.a.v === saved.params.a.v;
+    // a damaged graph from a file still draws and never throws
+    let threw = null;
+    try {
+      const bad = { id: 'gbad', type: 'graph', x: 0, y: 0, w: 300, h: 200, xMin: Infinity, xMax: -5, yMin: 'x', yMax: NaN, tMin: 0, tMax: 1e12,
+        exprs: Array.from({ length: 50 }, (_, i) => ({ src: i % 2 ? 'y = x^' + 'x^'.repeat(40) + '2' : '((((((((x', color: 'javascript:alert(1)' })), params: { a: { v: 'oops' } } };
+      const c = document.createElement('canvas'); c.width = 300; c.height = 200;
+      const t1 = performance.now();
+      (await import('app://board/js/core/render.js')).drawObject(c.getContext('2d'), bad);
+      r.badMs = Math.round(performance.now() - t1);
+    } catch (e) { threw = e.message; }
+    r.badThrew = threw;
+    // a new graph that is cancelled leaves nothing behind, not even an undo step
+    const n0 = a.store.undoStack.length, count0 = a.store.count;
+    a.command('insert.graph');
+    await new Promise((res) => setTimeout(res, 100));
+    document.querySelector('[data-graph-cancel]').click();
+    r.cancelled = { count: a.store.count === count0, undo: a.store.undoStack.length === n0, editor: !document.getElementById('graphEditor') };
+    a.newBoard(true); s.autosave = true;
+    return r;
+  `);
+  check('formulas are read as what they are: functions, sideways, polar, parametric, equations, points and slider values',
+    gr.kinds['y = x^2 - 3'] === 'fx' && gr.kinds['sin x'] === 'fx' && gr.kinds['2x+1'] === 'fx' && gr.kinds['x = y^2'] === 'fy' &&
+    gr.kinds['r = 2 sin(3θ)'] === 'polar' && gr.kinds['r = 1 + cos(theta)'] === 'polar' && gr.kinds['(cos(t), sin(2t))'] === 'param' &&
+    gr.kinds['x^2 + y^2 = 25'] === 'implicit' && gr.kinds['xy = 1'] === 'implicit' && gr.kinds['(2, 3)'] === 'point' && gr.kinds['a = 2'] === 'slider' &&
+    gr.kinds['y = a sin(b x) + c'] === 'fx' && gr.kinds['y = |x - 2|'] === 'fx' && gr.tex === 'y = \\frac{x^{2}}{4} - 2',
+    `${JSON.stringify(gr.kinds)}; label ${gr.tex}`);
+  check('a formula is never run as code: anything but arithmetic and maths functions is turned away with a plain reason',
+    gr.errors.every((e) => /^error: /.test(e)), JSON.stringify(gr.errors));
+  check('the curves are right: a round closed circle, tan broken at its asymptotes, √x starting at 0',
+    gr.circle.closed && gr.circle.worstOff < 0.01 && gr.tan.across === 0 && gr.tan.pieces >= 4 && gr.sqrtStart[0] === 0 && gr.sqrtStart[1] === 0 && gr.ms < 400,
+    `circle ${JSON.stringify(gr.circle)}; tan ${JSON.stringify(gr.tan)} (lines across an asymptote must be 0); √x starts at ${gr.sqrtStart}; six curves worked out in ${gr.ms} ms`);
+  check('key points: roots, the lowest point, and where two curves cross, found exactly',
+    gr.keys.rootPlus && gr.keys.rootMinus && gr.keys.min && gr.keys.cross1 && gr.keys.cross2,
+    JSON.stringify(gr.keys));
+  check('Insert → Formula graph opens its editor; typing shows on the board at once, without filling the undo list',
+    gr.editorOpen && gr.liveNoUndo && gr.liveShown === 'y = a sin(b x) | x^2 + y^2 = 9',
+    `editor ${gr.editorOpen}; nothing but the insert on the undo list while typing: ${gr.liveNoUndo}; on the board meanwhile: ${gr.liveShown}`);
+  check('letters get sliders, and moving one moves the curve straight away',
+    gr.sliders === 'a,b' && gr.sliderMoves, `sliders [${gr.sliders}]; curve moved: ${gr.sliderMoves}`);
+  check('a tap on a curve pins a labelled point there, and the editor stays open',
+    gr.pins.length === 1 && gr.pins[0][0] === 1 && Math.abs(gr.pins[0][1]) < 0.15 && Math.abs(gr.pins[0][2] - 3) < 0.15 && gr.stillEditing,
+    `pins ${JSON.stringify(gr.pins)} (wanted the circle at about (0, 3)); editor still open ${gr.stillEditing}`);
+  check('a slider stays a slider: closing and opening the editor again keeps every slider and its value',
+    gr.reopen.length === 2 && gr.reopen.every((x) => x.sliders === 'a,b' && x.a === 3) && gr.zAgain === 2,
+    `opened again twice: ${JSON.stringify(gr.reopen)} (wanted sliders a,b with a = 3 both times); a new letter z set to 2, closed and opened again: z = ${gr.zAgain}`);
+  check('Done keeps it all as one undo step, and one Undo takes it back',
+    gr.oneStep && gr.saved.exprs === 'y = a sin(b x) | x^2 + y^2 = 9' && gr.saved.a === 3 && gr.saved.pins === 1 && gr.undone === 'y = x^2 - 2',
+    `one step: ${gr.oneStep}; saved ${JSON.stringify(gr.saved)}; after undo: ${gr.undone}`);
+  check('the graph is drawn on the board and goes out as real lines and labels in an SVG',
+    gr.pixels.blue > 200 && gr.pixels.red > 200 && typeof gr.svg === 'object' && gr.svg.paths >= 1 && gr.svg.red >= 1,
+    `curve pixels: blue ${gr.pixels.blue}, red ${gr.pixels.red}; SVG ${JSON.stringify(gr.svg)}`);
+  check('a graph is saved with the board and comes back the same',
+    gr.roundTrip === true, `round trip: ${gr.roundTrip}`);
+  check('a damaged graph from a file draws without breaking or hanging',
+    gr.badThrew === null && gr.badMs < 1500, `threw: ${gr.badThrew}; drawing it took ${gr.badMs} ms`);
+  check('a new graph that is cancelled leaves nothing behind, not even an undo step',
+    gr.cancelled.count && gr.cancelled.undo && gr.cancelled.editor, JSON.stringify(gr.cancelled));
+
+  /* ---- the spotlight and the spinner wheel ---- */
+  const spw = await js(`
+    const a = window.app, s = a.settings;
+    const r = {};
+    a.newBoard(true);
+    const count0 = a.store.count;
+    const key = (k, code, mods = {}) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, code, bubbles: true, cancelable: true, ...mods }));
+    // Ctrl+Alt+S turns it on
+    key('s', 'KeyS', { ctrlKey: true, altKey: true });
+    const el = document.getElementById('spotlight');
+    r.on = !!el;
+    r.passThrough = el ? getComputedStyle(el).pointerEvents : null;
+    const stage = document.getElementById('stage').getBoundingClientRect();
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: stage.left + 300, clientY: stage.top + 200, bubbles: true }));
+    r.at = el ? [el.style.getPropertyValue('--sx'), el.style.getPropertyValue('--sy')] : null;
+    // the board under it still takes the pen: what is under the light is the canvas, not the spotlight
+    const under = document.elementFromPoint(stage.left + 300, stage.top + 200);
+    r.underIsBoard = !!under && (under.id === 'c' || under === a.surface.canvas);
+    const r0 = a.spotlight.r;
+    key(']', 'BracketRight'); key(']', 'BracketRight');
+    r.bigger = a.spotlight.r > r0;
+    key('[', 'BracketLeft');
+    r.sizeSaved = s.spotlightR === a.spotlight.r;
+    key('Escape', 'Escape');
+    r.offByEsc = !document.getElementById('spotlight');
+    key('s', 'KeyS', { ctrlKey: true, altKey: true });
+    r.onAgain = !!document.getElementById('spotlight');
+    key('s', 'KeyS', { ctrlKey: true, altKey: true });
+    r.offByShortcut = !document.getElementById('spotlight');
+    // Ctrl+Alt+S has Ctrl in it, like Save (Ctrl+S): it must not also ask where to save a copy
+    key('s', 'KeyS', { ctrlKey: true, altKey: true });
+    r.saveDialog = !!document.querySelector('#overlay.show');
+    key('Escape', 'Escape');
+
+    // the spinner wheel
+    const sp = a.spinner;
+    // the wheel's clicks and chime are silenced here: 800 spins in a blink would be 800 chimes at once
+    const realSound = sp.sound, heard = { tick: 0, done: 0 };
+    sp.sound = (kind) => { heard[kind] = (heard[kind] || 0) + 1; };
+    a.command('spinner.open');
+    r.wheelOpen = !!document.getElementById('spinnerWheel');
+    sp.setNames(['Ayesha', 'Rafi', 'Nusrat', 'Tanvir']);
+    sp.render();
+    // a spin lands with the pointer on the name it says it picked
+    let seq = [0.6, 0.5, 0.3], k = 0;
+    sp.random = () => seq[k++ % seq.length];
+    const pick = sp.spin();
+    sp.finish();
+    r.landed = { pick, winner: sp.winner, under: sp.names[sp.nameAt(sp.angle)], shown: document.querySelector('#spinnerWheel .sw-result').textContent };
+    // fair: over many spins every name comes up about as often
+    sp.random = Math.random;
+    const tally = {};
+    for (let i = 0; i < 800; i++) { sp.spin(); sp.finish(); tally[sp.winner] = (tally[sp.winner] || 0) + 1; if (sp.names[sp.nameAt(sp.angle)] !== sp.winner) { r.mismatch = true; break; } }
+    r.tally = tally;
+    // the names box: pressing and dragging in it selects text, it never carries the wheel off
+    {
+      sp.editing = true; sp.render();
+      const area = document.querySelector('#spinnerWheel textarea.sw-names');
+      const head = document.querySelector('#spinnerWheel .sw-head b');
+      const drag = (el, dx) => {
+        const r0 = el.getBoundingClientRect(), x = r0.left + 10, y = r0.top + 8;
+        const down = new PointerEvent('pointerdown', { pointerId: 41, pointerType: 'mouse', button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true });
+        el.dispatchEvent(down);
+        for (let i = 1; i <= 6; i++) window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 41, pointerType: 'mouse', buttons: 1, clientX: x + dx * i / 6, clientY: y, bubbles: true }));
+        window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 41, pointerType: 'mouse', button: 0, buttons: 0, clientX: x + dx, clientY: y, bubbles: true }));
+        return down.defaultPrevented;
+      };
+      const before = { x: sp.box.x, y: sp.box.y };
+      const prevented = area ? drag(area, 80) : null;
+      r.textDrag = { found: !!area, moved: sp.box.x !== before.x || sp.box.y !== before.y, prevented,
+        selectable: area ? getComputedStyle(area).userSelect : null, touch: area ? getComputedStyle(area).touchAction : null };
+      const b2 = { x: sp.box.x };
+      if (head) drag(head, 80);
+      r.headDrag = { found: !!head, moved: Math.round(sp.box.x - b2.x) };
+      sp.box.x = before.x; sp.box.y = before.y; sp.place?.();
+      sp.editing = false; sp.render();
+    }
+    // taking the winner off the wheel
+    const before = sp.names.length, gone = sp.winner;
+    sp.dropWinner();
+    r.dropped = sp.names.length === before - 1 && !sp.names.includes(gone);
+    r.namesSaved = JSON.stringify(s.spinnerNames) === JSON.stringify(sp.names);
+    r.boardUntouched = a.store.count === count0;
+    a.command('spinner.open');
+    r.closed = !document.getElementById('spinnerWheel');
+    sp.random = Math.random;
+    r.heard = heard;
+    sp.sound = realSound;
+    // and the real chime, asked for many times at once, plays once instead of piling up into a blast
+    const SP = await import('app://board/js/ui/spinner.js');
+    r.chimes = [0, 1, 2, 3, 4].map(() => SP.tickSound('done'));
+    return r;
+  `);
+  check('the spinner chimes once per finished spin, and the same chime asked for five times at once plays only once',
+    !!spw.heard && spw.heard.done === 801 && Array.isArray(spw.chimes) &&
+      (JSON.stringify(spw.chimes) === '[true,false,false,false,false]' || spw.chimes.every((c) => c === null)),
+    `chimes counted during the test: ${JSON.stringify(spw.heard)} (wanted done 801); five quick chimes played: ${JSON.stringify(spw.chimes)} (wanted only the first; null means no sound here)`);
+  check('in the spinner\'s names box a press-and-drag selects text and leaves the wheel where it is; the title bar still moves it',
+    !!spw.textDrag && spw.textDrag.found && !spw.textDrag.moved && !spw.textDrag.prevented && spw.textDrag.selectable !== 'none' &&
+      !!spw.headDrag && spw.headDrag.found && spw.headDrag.moved === 80,
+    `names box: ${JSON.stringify(spw.textDrag)} (wanted found, not moved, not blocked, selectable); title bar drag moved it ${JSON.stringify(spw.headDrag)} (wanted 80 px)`);
+  check('Ctrl+Alt+S turns the spotlight on; it follows the pointer and lets the pen through to the board',
+    spw.on && spw.passThrough === 'none' && spw.at && spw.at[0] === '300px' && spw.at[1] === '200px' && spw.underIsBoard,
+    `on ${spw.on}; pointer-events ${spw.passThrough}; light at ${JSON.stringify(spw.at)} (wanted 300px, 200px); what is under it: ${spw.underIsBoard ? 'the board' : 'something else'}`);
+  check('] and [ size the spotlight and the size is remembered; Esc or Ctrl+Alt+S turns it off; no save dialog',
+    spw.bigger && spw.sizeSaved && spw.offByEsc && spw.onAgain && spw.offByShortcut && !spw.saveDialog,
+    `bigger ${spw.bigger}, remembered ${spw.sizeSaved}, off by Esc ${spw.offByEsc}, on again ${spw.onAgain}, off by the shortcut ${spw.offByShortcut}, a save dialog opened ${spw.saveDialog}`);
+  const fair = spw.tally && Object.keys(spw.tally).length === 4 && Object.values(spw.tally).every((n) => n > 140 && n < 260);
+  check('the spinner wheel lands with its pointer on the name it picked, and picks fairly',
+    spw.wheelOpen && spw.landed.winner === 'Nusrat' && spw.landed.under === spw.landed.winner && spw.landed.shown === spw.landed.winner && !spw.mismatch && fair,
+    `picked #${spw.landed.pick} ${spw.landed.winner}, under the pointer ${spw.landed.under}, shown ${spw.landed.shown}; 800 spins: ${JSON.stringify(spw.tally)} (each between 140 and 260); pointer ever on another name: ${!!spw.mismatch}`);
+  check('the winner can be taken off the wheel; the names are remembered; the board is never touched',
+    spw.dropped && spw.namesSaved && spw.boardUntouched && spw.closed,
+    `dropped ${spw.dropped}, names remembered ${spw.namesSaved}, board untouched ${spw.boardUntouched}, closed ${spw.closed}`);
 
   /* ---- answer covers: hide an answer, lift it with a tap ---- */
   const cover = await js(`
@@ -17504,7 +18450,8 @@ module.exports.run = async (win, app) => {
       return out;`);
     check('a maths box is made from the editor, typeset, selected, and saved as its LaTeX alone',
       r.editorOpen && r.made === 1 && r.tex === TEX.q && r.size && r.size[0] > 100 && r.size[1] > 30 && r.selected === 'math' && r.inkInBox > 200
-        && r.keys === 'color,h,id,rotation,tex,type,w,x,y',
+        // "at" is when it was put on the board, which every object now carries for the replay
+        && r.keys === 'at,color,h,id,rotation,tex,type,w,x,y',
       `editor opened ${r.editorOpen}; made ${r.made}; tex ${JSON.stringify(r.tex)}; size ${JSON.stringify(r.size)}; selected ${r.selected}; dark pixels drawn ${r.inkInBox} (wanted over 200); stored keys ${r.keys}`);
     check('editing a maths box changes its formula as one undo step, and Escape changes nothing',
       r.editorShows === TEX.q && r.edited === TEX.s && r.afterUndo === TEX.q && r.afterEscape === TEX.q && r.editorGone && r.emptyMade === 0,

@@ -93,6 +93,7 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item(t('Text here'), 'text', () => app.addTextAt(wp)));
     menu.appendChild(item(t('Insert image…'), 'image', () => app.command('insert.image')));
     menu.appendChild(item(t('Insert maths'), 'maths', () => app.command('insert.math')));
+    menu.appendChild(item(t('Insert graph'), 'graph', () => app.command('insert.graph')));
     menu.appendChild(item(t('Insert document…'), 'doc', () => app.command('insert.document')));
     menu.appendChild(h('div', { class: 'menu-sep' }));
     menu.appendChild(item(t('Templates…'), 'template', () => app.panels.templates()));
@@ -189,6 +190,8 @@ export function updateSelectionBar(app) {
     bar.appendChild(mk(t('Edit text (F2)'), 'text', () => app.beginTextEdit(sel[0])));
   if (sel.length === 1 && sel[0].type === 'math')
     bar.appendChild(mk(t('Edit maths (F2)'), 'maths', () => app.beginMathEdit(sel[0])));
+  if (sel.length === 1 && sel[0].type === 'graph')
+    bar.appendChild(mk(t('Edit graph (F2)'), 'graph', () => app.beginGraphEdit(sel[0])));
   // a card for another board: open it, or point it at a different one
   if (sel.length === 1 && sel[0].type === 'boardlink') {
     const card = sel[0];

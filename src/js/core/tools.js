@@ -1610,7 +1610,9 @@ export class Interaction {
       effect: isHl ? 'none' : s.penEffect,
       hue: Math.random() * 360,
       opacity: isHl ? 0.38 : 1,
-      points: [], bbox: { x: wp.x, y: wp.y, w: 0, h: 0 }, rotation: 0
+      points: [], bbox: { x: wp.x, y: wp.y, w: 0, h: 0 }, rotation: 0,
+      // when the pen went down, so a replay keeps the rhythm it was written with (see replay.js)
+      at: Date.now()
     };
     // starting in the gutter is drawing on the desk: nothing happens
     const sheet = this.sheetAt(wp);
@@ -2773,6 +2775,8 @@ export class Interaction {
       this.app.setSelection([hit.id]);
       this.app.beginTableEdit(hit, wp);    } else if (hit.type === 'math') {
       this.app.beginMathEdit(hit);
+    } else if (hit.type === 'graph') {
+      this.app.beginGraphEdit(hit);
     }
   }
 

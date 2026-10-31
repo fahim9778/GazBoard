@@ -208,11 +208,16 @@ export function mathReady(tex, color, display = true) {
  * and board pictures call this first, because they draw in one go and cannot
  * wait for a picture to arrive afterwards.
  */
+let graphLabelsOf = null;
+export function useGraphLabels(fn) { graphLabelsOf = fn; }
+
 export function mathsReady(objects, paint = (c) => c || '#201f1e') {
   const jobs = [];
   for (const o of objects || []) {
     if (!o || o.hidden) continue;
     if (o.type === 'math') { jobs.push(mathReady(o.tex, paint(o.color))); continue; }
+    // a graph's typeset labels (graph.js hands them in, so this file needs nothing from it)
+    if (o.type === 'graph') { for (const l of graphLabelsOf ? graphLabelsOf(o) : []) jobs.push(mathReady(l.tex, l.color, false)); continue; }
     // maths in the words: every formula, in every colour the words around it come in
     const texts = [o.text, ...Object.values(o.cells || {})].filter((x) => typeof x === 'string' && x.indexOf('$') >= 0);
     if (!texts.length) continue;

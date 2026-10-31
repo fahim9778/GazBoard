@@ -30,8 +30,10 @@ export function initPresentBar(app) {
   const label = h('span', { id: 'presentLabel' });
   const tools = btn('tools', t('Show the tools'), 'pen');
   const timer = btn('timer', t('Class timer'), 'timer');
+  const spot = btn('spotlight', t('Spotlight (Ctrl+Alt+S)'), 'laser');
+  const wheel = btn('spinner', t('Spinner wheel'), 'spinner');
   const exit = btn('exit', t('Stop presenting (Esc)'), 'close');
-  const bar = h('div', { id: 'presentbar', hidden: true }, prev, label, next, tools, timer, exit);
+  const bar = h('div', { id: 'presentbar', hidden: true }, prev, label, next, tools, timer, spot, wheel, exit);
   stage.appendChild(bar);
 
   // Presses here are for the bar, never for the board under it.
@@ -40,6 +42,8 @@ export function initPresentBar(app) {
   next.addEventListener('click', () => app.presentStep(1));
   tools.addEventListener('click', () => app.setPresentTools(!app.presentToolsPinned));
   timer.addEventListener('click', () => app.command('timer.open'));
+  spot.addEventListener('click', () => app.command('spotlight'));
+  wheel.addEventListener('click', () => app.command('spinner.open'));
   exit.addEventListener('click', () => app.stopPresenting());
 
   /*
