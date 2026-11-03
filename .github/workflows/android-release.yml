@@ -257,3 +257,20 @@ jobs:
             --latest=false \
             --title "GazBoard for Android $VERSION (build $BUILD)" \
             --notes-file "$NOTES"
+
+      # The Play bundle goes to Google Play by itself, as a DRAFT on the closed
+      # test track ("alpha"; set the repository variable PLAY_TRACK to
+      # "production" after launch). Nothing reaches anyone until "Send for
+      # review" is pressed in Play Console, and a newer tag replaces a waiting
+      # draft - so a busy day is one review. Needs the PLAY_SERVICE_ACCOUNT_JSON
+      # secret; without it this says so and the bundle stays in the artifacts.
+      # Runs after the GitHub release, so a Play hiccup never holds that back.
+      - name: Send the bundle to Google Play as a draft
+        if: github.ref_type == 'tag'
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          PLAY_TRACK: ${{ vars.PLAY_TRACK }}
+          AAB_NAME: ${{ steps.version.outputs.aab }}
+          VERSION: ${{ steps.version.outputs.version }}
+          CODE: ${{ steps.version.outputs.code }}
+        run: node scripts/play-upload.js "play/$AAB_NAME" "$VERSION" "$CODE"
