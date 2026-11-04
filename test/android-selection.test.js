@@ -39,6 +39,8 @@ async function setup({ tool = 'pen', z = 1, editing = false, fingerInks = true, 
     hideMenus() {}, notePenSeen() {}, syncUI() {}, onGestureEnd() {}, showHint() {}, hintLocked() {}, toast() {},
     syncZoom() {}, afterCamera() {}, trackCanvasMove() {},
     showContextMenu() { app.menuShown = true; app.menuCount = (app.menuCount || 0) + 1; },
+    // holding on bare board now opens the ring of shortcuts (ui/radial.js), which is that same menu for a hand
+    showRadial() { app.menuShown = true; app.menuCount = (app.menuCount || 0) + 1; },
     setSelection(ids) { surface.selection.clear(); for (const id of ids) surface.selection.add(id); },
     // Gathering mode (the touch multi-select button) and the group you have
     // stepped inside, both of which the real app keeps on itself.
@@ -192,8 +194,9 @@ test('A finger held on bare board opens the board menu', async () => {
   interaction.onDown(pointer('touch', 900, 700));
   await held();
   const got = { menu: !!app.menuShown, action: interaction.action?.type ?? null };
-  assert.deepEqual(got, { menu: true, action: null },
-    `holding a finger on empty board should open the menu and leave no gesture behind, got ${JSON.stringify(got)}`);
+  // the finger is still down: the only gesture left is the ring following it (slide onto a button and lift) - no ink, no marquee
+  assert.deepEqual(got, { menu: true, action: 'radial' },
+    `holding a finger on empty board should open the shortcut ring and leave only the ring following the finger, got ${JSON.stringify(got)}`);
 });
 
 // Whatever tool is in hand, a press on nothing followed by a wait means the

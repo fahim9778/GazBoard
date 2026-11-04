@@ -38,6 +38,7 @@ import { SpinnerWheel } from './ui/spinner.js';
 import { PageStrip } from './ui/pagestrip.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
+import { RadialMenu } from './ui/radial.js';
 import { closePopover, popoverOpen, openPopover, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS, penById, rememberPen, heldPenId, FONTS } from './ui/palettes.js';
@@ -3164,6 +3165,13 @@ class App {
   }
 
   showContextMenu(e) { showContextMenu(this, e); }
+
+  /** The ring of shortcuts a held pen or finger opens on empty board (see ui/radial.js). */
+  showRadial(e, wp) {
+    if (!this.radial) this.radial = new RadialMenu(this);
+    closePopover();
+    this.radial.show(e, wp);
+  }
   /*
    * Close whatever is open, and say whether there was anything to close.
    *

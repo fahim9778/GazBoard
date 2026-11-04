@@ -66,6 +66,7 @@ const PRECACHE_ASSETS = [
   './js/ui/mathedit.js',
   './js/ui/spinner.js',
   './js/ui/spotlight.js',
+  './js/ui/radial.js',
   './js/core/hit.js',
   './js/core/ink.js',
   './js/core/inktrail.js',

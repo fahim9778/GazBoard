@@ -1271,5 +1271,7 @@
  "Arm angle": "Winkel des Zeigers",
  "outer scale {n}°": "äußere Skala {n}°",
  "Hold the pen still for menus": "Stift still halten öffnet Menüs",
- "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "An (Standard): Den Stift still auf dem Whiteboard halten öffnet das Menü, auf einem Objekt hebt es dieses auf. Aus: Der Stift schreibt nur, beim Ausmalen kleiner Formen öffnet sich nie ein Menü. Für Menüs dann die Seitentaste des Stifts oder die Auswahlleiste nutzen. Mit dem Finger funktioniert Gedrückthalten weiterhin."
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "An (Standard): Den Stift still auf dem Whiteboard halten öffnet das Menü, auf einem Objekt hebt es dieses auf. Aus: Der Stift schreibt nur, beim Ausmalen kleiner Formen öffnet sich nie ein Menü. Für Menüs dann die Seitentaste des Stifts oder die Auswahlleiste nutzen. Mit dem Finger funktioniert Gedrückthalten weiterhin.",
+ "Insert & more…": "Einfügen und mehr…",
+ "Shortcuts": "Schnellzugriff"
 }

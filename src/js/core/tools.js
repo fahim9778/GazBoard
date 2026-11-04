@@ -140,6 +140,30 @@ export class Interaction {
       if (this._lastDownType === 'touch' || this.action?.holdMenu) return;
       // the system's own press-and-hold menu, arriving while the pen is still writing: off when Pen hold is off
       if (this._lastDownType === 'pen' && this.app.settings?.penHold === false && this.action) return;
+      /*
+       * Windows' own pen press-and-hold, beating ours to it.
+       *
+       * With "press and hold for right-click" on in Windows' pen settings (it
+       * is, out of the box), Windows sends a right-click while the nib is still
+       * resting on the glass - sometimes before our own hold fires, sometimes
+       * after, depending on its timing setting. When it came first, the old
+       * list menu opened instead of the ring. It is the same request - a pen held
+       * still - so on empty board it gets the same answer: the ring, following the pen.
+       */
+      if (this._lastDownType === 'pen' && this.action && this.action.type !== 'radial' && !this.app.viewMode) {
+        const penId = [...this.pointers.entries()].find(([, p]) => p.type === 'pen')?.[0];
+        const sp = this.surface.screenPoint(e), wp = this.surface.cam.toWorld(sp.x, sp.y);
+        if (penId != null && !pick(this.store, wp, 8 / this.surface.cam.z) && !(this.ruler.visible && this.rulerZone(sp))) {
+          this.discardTapMark();
+          this.app.setSelection([]);
+          this._boardMenuAt = Date.now();
+          this.app.showRadial({ clientX: e.clientX, clientY: e.clientY }, wp);
+          this.action = { type: 'radial' };
+          this.actionId = penId;
+          this.surface.invalidate();
+          return;
+        }
+      }
       // A right-DRAG panned the canvas, so it is not a right-CLICK: swallow the
       // menu this once. A plain right-click never sets this and is unaffected.
       if (this._eatNextMenu) { this._eatNextMenu = false; return; }
@@ -258,6 +282,8 @@ export class Interaction {
       return;
     }
     try { this.canvas.setPointerCapture?.(e.pointerId); } catch { /* synthetic or already-released pointer */ }
+    // a ring still open from the last hold goes away, and this press is a fresh one (see ui/radial.js)
+    if (this.app.radial?.open) this.app.radial.close();
     this._lastDownType = e.pointerType;
     if (e.pointerType === 'pen') this._penAt = performance.now();
     // A button went down under a mouse, so the mouse is unambiguously in
@@ -681,6 +707,9 @@ export class Interaction {
     // the palm - the ink jumped, or looked like it had simply gone missing.
     if (this.actionId != null && e.pointerId !== this.actionId) return;
 
+    // the ring is open under a pen that is still down: it follows the pen, and nothing draws
+    if (this.action && this.action.type === 'radial') { this.app.radial?.track(e.clientX, e.clientY); return; }
+
     // Travelled too far to still be a press-and-hold: this is a stroke. Too far
     // away from the start, or too much ground covered on the spot (see HOLD_TRAVEL).
     if (this._hold && e.pointerId === this._holdId && this._holdFrom) {
@@ -1012,6 +1041,11 @@ export class Interaction {
     if (this.pinch) { if (this.pointers.size < 2) this.pinch = null; return; }
     const a = this.action;
     if (!a || (this.actionId != null && e.pointerId !== this.actionId)) return;
+    if (a.type === 'radial') {
+      this.action = null; this.actionId = null;
+      this.app.radial?.release(e.clientX, e.clientY);
+      return;
+    }
     this.stopEdgePan();
     this.lastMotion = null;
     const sp = this.surface.screenPoint(e);
@@ -1479,7 +1513,10 @@ export class Interaction {
       this.discardTapMark();
       this.app.setSelection([]);
       this._boardMenuAt = Date.now();
-      this.app.showContextMenu(e);
+      // the ring of shortcuts, centred on the pen; the pen stays down, so sliding onto a button and lifting chooses it
+      this.app.showRadial({ clientX: e.clientX, clientY: e.clientY }, wp);
+      this.action = { type: 'radial' };
+      this.actionId = e.pointerId;
       this.surface.invalidate();
     }, e.pointerType === 'pen' ? PEN_HOLD_MS : HOLD_MS);
   }

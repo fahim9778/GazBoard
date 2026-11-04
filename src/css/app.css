@@ -1643,6 +1643,9 @@ body.presenting #pagestrip { display: none; }
 .ruler-seg { display: flex; flex-wrap: wrap; gap: 6px; }
 .ruler-seg .btn { padding: 6px 10px; font-size: 13px; }
 .ruler-menu input[type="range"] { width: 100%; }
+.ruler-arm-row { display: flex; align-items: center; gap: 6px; }
+.ruler-arm-row .ruler-arm-input { width: 76px; padding: 6px 8px; font-size: 15px; border: 1px solid var(--stroke); border-radius: 6px; background: var(--surface); color: var(--text); }
+.ruler-arm-row .ruler-arm-outer { margin-left: 6px; font-size: 12px; color: var(--text-2); }
 
 /* ---------------- board replay ---------------- */
 /* Over the board, under the toasts: a save in progress stays visible with its Cancel. */
@@ -1715,3 +1718,26 @@ body.presenting #pagestrip { display: none; }
   background: linear-gradient(135deg, transparent 45%, var(--text-2) 45%, var(--text-2) 52%, transparent 52%,
     transparent 64%, var(--text-2) 64%, var(--text-2) 71%, transparent 71%, transparent 83%, var(--text-2) 83%, var(--text-2) 90%, transparent 90%);
 }
+
+/* ---- the ring of shortcuts a held pen or finger opens on empty board (ui/radial.js) ---- */
+#radialMenu { position: fixed; inset: 0; z-index: 65; pointer-events: none; }
+#radialMenu .rad-btn, #radialMenu .rad-hub { pointer-events: auto; touch-action: none; }
+#radialMenu .rad-ring { position: absolute; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, color-mix(in srgb, var(--surface) 55%, transparent) 0 34%, color-mix(in srgb, var(--surface) 88%, transparent) 35% 100%);
+  box-shadow: 0 10px 34px rgba(0,0,0,.22), 0 0 0 1px var(--stroke); animation: rad-in .14s ease-out; }
+#radialMenu .rad-btn { position: absolute; width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--surface); color: var(--text); border: 1px solid var(--stroke); box-shadow: 0 2px 6px rgba(0,0,0,.12);
+  cursor: pointer; padding: 0; animation: rad-in .14s ease-out; transition: transform .08s, background .08s; }
+#radialMenu .rad-btn svg { max-width: 34px; max-height: 34px; }
+#radialMenu .rad-btn.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+#radialMenu .rad-btn.hot, #radialMenu .rad-btn:hover { transform: scale(1.12); background: var(--surface-2); }
+#radialMenu .rad-hub { position: absolute; width: 30px; height: 60px; padding: 0; display: grid; place-items: center;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--stroke); cursor: pointer; }
+#radialMenu .rad-undo { border-radius: 30px 0 0 30px; border-right-width: .5px; }
+#radialMenu .rad-redo { border-radius: 0 30px 30px 0; border-left-width: .5px; }
+#radialMenu .rad-hub.hot, #radialMenu .rad-hub:hover { background: var(--surface-2); color: var(--text); }
+#radialMenu .rad-label { position: absolute; transform: translateX(-50%); padding: 4px 10px; border-radius: 12px; white-space: nowrap;
+  background: var(--text); color: var(--surface); font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .08s; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+#radialMenu .rad-label.show { opacity: 1; }
+@keyframes rad-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { #radialMenu .rad-ring, #radialMenu .rad-btn { animation: none; } }

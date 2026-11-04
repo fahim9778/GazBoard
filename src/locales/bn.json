@@ -1271,5 +1271,7 @@
  "Arm angle": "বাহুর কোণ",
  "outer scale {n}°": "বাইরের স্কেলে {n}°",
  "Hold the pen still for menus": "পেন স্থির ধরে রাখলে মেনু খুলবে",
- "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "চালু (ডিফল্ট): বোর্ডে পেন স্থির ধরে রাখলে মেনু খোলে, আর কোনো অবজেক্টের ওপর ধরলে সেটা তুলে নেয়। বন্ধ: পেন শুধু লিখবে, তাই ছোট আকার ভরাট করার সময় কখনো মেনু খুলবে না। মেনুর জন্য পেনের সাইড বাটন বা সিলেকশন বার ব্যবহার করুন। আঙুলে চেপে ধরা দুই অবস্থাতেই কাজ করবে।"
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "চালু (ডিফল্ট): বোর্ডে পেন স্থির ধরে রাখলে মেনু খোলে, আর কোনো অবজেক্টের ওপর ধরলে সেটা তুলে নেয়। বন্ধ: পেন শুধু লিখবে, তাই ছোট আকার ভরাট করার সময় কখনো মেনু খুলবে না। মেনুর জন্য পেনের সাইড বাটন বা সিলেকশন বার ব্যবহার করুন। আঙুলে চেপে ধরা দুই অবস্থাতেই কাজ করবে।",
+ "Insert & more…": "ইনসার্ট ও আরও…",
+ "Shortcuts": "শর্টকাট"
 }

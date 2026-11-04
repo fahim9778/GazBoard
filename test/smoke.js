@@ -3581,7 +3581,7 @@ async function run(win, app) {
     const mk = (x, y, buttons) => { const p = sf.cam.toScreen(x, y); return { pointerId: 12, pointerType: 'pen', button: 0, buttons, shiftKey: false, altKey: false, pressure: 0.5, clientX: rect.left + p.x, clientY: rect.top + p.y }; };
     const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    let menus = 0; const realMenu = a.showContextMenu; a.showContextMenu = () => { menus++; };
+    let menus = 0; const realMenu = a.showContextMenu, realRing = a.showRadial; a.showContextMenu = () => { menus++; }; a.showRadial = () => { menus++; };
     a.notePenSeen(); a.setTool('pen'); a.setSelection([]);
     const r = {};
     // colour in a note head about 8 px across, for a second, never more than 5 px from the start
@@ -3623,7 +3623,7 @@ async function run(win, app) {
     it.action = null; it.pointers.clear(); a.hideMenus?.();
     it.onDown(mk(440, 260, 1));
     const p = sf.cam.toScreen(440, 260);
-    a.showContextMenu = realMenu;
+    a.showContextMenu = realMenu; a.showRadial = realRing;
     sf.canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + p.x, clientY: rect.top + p.y }));
     await wait(80);
     const m = document.querySelector('#contextMenu, .ctx-menu, .menu'); r.nativeMenuShown = !!(m && m.isConnected && m.offsetParent);
@@ -3638,11 +3638,154 @@ async function run(win, app) {
   check('filling in a small circle with the pen keeps the ink and never opens the menu, on bare board or over an object',
     scribble.fillOnBoard.inked === 1 && scribble.fillOnBoard.menus === 0 && scribble.fillOnObject.inked === 1 && scribble.fillOnObject.menus === 0 && scribble.objectStill,
     `on bare board: ${JSON.stringify(scribble.fillOnBoard)}; over an object: ${JSON.stringify(scribble.fillOnObject)}, object left alone: ${scribble.objectStill} (wanted 1 stroke and 0 menus each time, the pen never more than ~5 px from where it started)`);
-  check('a pen held really still still opens the board menu',
+  check('a pen held really still still opens the shortcut ring',
     scribble.stillMenus === 1, `menus opened by a pen held still for 0.8 s: ${scribble.stillMenus} (wanted 1)`);
   check('with "Hold the pen still for menus" off, a held pen only ever writes: no menu, no pick-up, not even the system\'s own',
     scribble.offMenus === 0 && scribble.offInk === 1 && scribble.offPicked === 0 && scribble.offAction !== 'move' && scribble.nativeMenuShown === false,
     `menus: ${scribble.offMenus} (wanted 0); ink kept: ${scribble.offInk} (wanted 1 dot); held on the object: selected ${scribble.offPicked}, action ${scribble.offAction} (wanted none, not a move); system menu while writing shown: ${scribble.nativeMenuShown} (wanted false)`);
+
+  /*
+   * The ring of shortcuts: holding a pen or finger still on empty board opens
+   * round buttons around the tip - the latest three pens, highlighter, eraser,
+   * lasso, Paste, Insert & more - with Undo and Redo in the middle. Slide onto
+   * one and lift, or lift first and tap.
+   */
+  const ring = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z }, pagesWere = a.store.doc.pages, holdWas = a.settings.penHold, recentWas = a.settings.recentPens;
+    const penWas = { active: a.settings.activePen, color: a.settings.penColor, effect: a.settings.penEffect };
+    a.store.doc.pages = []; sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons, type = 'touch') => { const p = sf.cam.toScreen(x + (sf.cam.x === -700000 ? 700000 : 0), y + (sf.cam.y === -700000 ? 700000 : 0)); return { pointerId: 21, pointerType: type, button: 0, buttons, shiftKey: false, altKey: false, pressure: 0.5, clientX: rect.left + p.x, clientY: rect.top + p.y }; };
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+    const T = await import('app://board/js/ui/toolbar.js');
+    const ringEl = () => document.getElementById('radialMenu');
+    const btn = (id) => ringEl()?.querySelector('[data-radial="' + id + '"]');
+    const centreOf = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+    const hold = async (x, y, type) => { it.action = null; it.pointers.clear(); it.onDown(mk(x, y, 1, type)); await wait(type === 'pen' ? 820 : 560); };
+    const r = {};
+    a.settings.penHold = true; a.notePenSeen();
+    // the latest pens lead: red, then blue, so blue first
+    a.settings.recentPens = [];
+    T.choosePen(a, 'red'); T.choosePen(a, 'blue');
+    a.setTool('pen');
+    const s0 = strokes();
+    // far out on an empty stretch of board: holding on an object picks it up instead, which is a different gesture
+    const O = 700000; sf.cam.x = -O; sf.cam.y = -O; sf.cam.z = 1;
+    const st0 = { view: !!a.viewMode, presenting: !!a.presenting, frozen: !!a.store.frozen, fingerInks: a.settings.fingerInks, tool: a.tool };
+    await hold(200, 200, 'touch');
+    r.open = !!ringEl();
+    r.state = { ...st0, action: it.action && it.action.type, holdArmed: !!it._hold, pointers: it.pointers.size, ringObj: !!a.radial };
+    r.ids = ringEl() ? [...ringEl().querySelectorAll('[data-radial]')].map((b) => b.dataset.radial) : [];
+    r.noInk = strokes() === s0;
+    r.label = ringEl()?.querySelector('.rad-label') ? true : false;
+    // slide onto the eraser while still down, and lift
+    const er = btn('eraser'); const ec = er && centreOf(er);
+    if (ec) { it.onMove({ ...mk(0, 0, 1), clientX: ec.x, clientY: ec.y }); r.hotLabel = ringEl()?.querySelector('.rad-label')?.textContent; it.onUp({ ...mk(0, 0, 0), clientX: ec.x, clientY: ec.y }); }
+    await wait(30);
+    r.slideTool = a.tool; r.closedAfterSlide = !ringEl(); r.noInkAfterSlide = strokes() === s0;
+    // lift in place: the ring stays; then tap the highlighter
+    await hold(220, 220, 'touch'); it.onUp(mk(220, 220, 0));
+    r.staysOnLift = !!ringEl();
+    btn('highlighter')?.click(); await wait(30);
+    r.tapTool = a.tool; r.closedAfterTap = !ringEl();
+    // a pen from the ring is picked up as that pen
+    await hold(240, 240, 'touch'); it.onUp(mk(240, 240, 0));
+    btn('pen:red')?.click(); await wait(80);
+    r.penTool = a.tool; r.penHeld = a.settings.activePen;
+    // the ring and the tray are one: the tray shows the pen the ring picked
+    r.trayActive = [...document.querySelectorAll('#toolbar .pen[data-pen].active')].map((b) => b.dataset.pen).join(',');
+    // Undo in the middle undoes and keeps the ring open; Esc puts it away
+    a.store.add({ id: 'ring-ink', type: 'stroke', tool: 'pen', color: '#111', width: 4, effect: 'none', rotation: 0, points: [{ x: 50, y: 50, p: .5 }, { x: 90, y: 60, p: .5 }], bbox: { x: 50, y: 50, w: 40, h: 10 } });
+    const s1 = strokes();
+    await hold(260, 260, 'touch'); it.onUp(mk(260, 260, 0));
+    btn('undo')?.click(); await wait(60);
+    r.undid = strokes() === s1 - 1; r.openAfterUndo = !!ringEl();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(30); r.escClosed = !ringEl();
+    // Paste pastes where you held
+    let pastedAt = null; const realPaste = a.pasteAt; a.pasteAt = (wp) => { pastedAt = wp; };
+    await hold(280, 300, 'touch'); it.onUp(mk(280, 300, 0));
+    btn('paste')?.click(); await wait(30);
+    a.pasteAt = realPaste;
+    r.pasteAt = pastedAt && { x: Math.round(pastedAt.x - O), y: Math.round(pastedAt.y - O) };
+    // Insert & more opens the full list
+    await hold(300, 300, 'touch'); it.onUp(mk(300, 300, 0));
+    btn('more')?.click(); await wait(80);
+    r.moreList = !![...document.querySelectorAll('.menu .menu-item')].find((b) => /Sticky note here/.test(b.textContent));
+    (await import('app://board/js/ui/popover.js')).closePopover();
+    // near the corner the ring moves in, whole on screen
+    const corner = { ...mk(0, 0, 1), clientX: 4, clientY: 4 };
+    a.showRadial(corner, { x: 0, y: 0 });
+    const box = [...ringEl().querySelectorAll('.rad-btn')].map((b) => b.getBoundingClientRect());
+    r.onScreen = box.every((b) => b.left >= 0 && b.top >= 0 && b.right <= innerWidth && b.bottom <= innerHeight);
+    a.radial.close();
+    // Windows' own pen press-and-hold right-click, arriving before our hold: the ring, not the list
+    (await import('app://board/js/ui/popover.js')).closePopover();
+    it.action = null; it.pointers.clear(); it._boardMenuAt = 0;     // the last ring was a moment ago; this is a fresh press
+    it.onDown(mk(360, 360, 1, 'pen'));
+    const nat = mk(360, 360, 1, 'pen');
+    sf.canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: nat.clientX, clientY: nat.clientY }));
+    await wait(40);
+    r.nativeRing = !!ringEl(); r.nativeList = !!document.querySelector('.menu .menu-item'); r.nativeAction = it.action && it.action.type;
+    await wait(820);
+    r.nativeOnlyOne = document.querySelectorAll('#radialMenu').length === 1 && !document.querySelector('.menu .menu-item');
+    it.onUp(mk(360, 360, 0, 'pen')); a.radial?.close(); it._boardMenuAt = 0;
+    // hold, lift in place (the ring stays), hold again: a fresh ring every time - never ring, list, ring, list.
+    // Real pointer events, so the press reaches the board exactly as a pen's does, with Windows' right-click on top.
+    r.loop = [];
+    for (let k = 0; k < 3; k++) {
+      // each hold well away from the last ring, on the shade around it rather than on one of its buttons
+      const at = mk(250 + k * 220, k % 2 ? 250 : 450, 1, 'pen');
+      const ev = (type, buttons) => new PointerEvent(type, { pointerId: 31, pointerType: 'pen', isPrimary: true, button: 0, buttons, clientX: at.clientX, clientY: at.clientY, pressure: buttons ? 0.5 : 0, bubbles: true, cancelable: true });
+      it._boardMenuAt = 0;
+      // sent to whatever is under the pen at that moment, as the system does - an open ring included
+      const under = () => document.elementFromPoint(at.clientX, at.clientY) || sf.canvas;
+      under().dispatchEvent(ev('pointerdown', 1));
+      under().dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: at.clientX, clientY: at.clientY }));
+      await wait(30);
+      r.loop.push({ ring: document.querySelectorAll('#radialMenu').length, list: !!document.querySelector('.menu .menu-item') });
+      under().dispatchEvent(ev('pointerup', 0));
+      await wait(30);
+      r.loop[k].stays = !!ringEl();
+    }
+    a.radial?.close(); (await import('app://board/js/ui/popover.js')).closePopover(); it._boardMenuAt = 0;
+    // the "Hold the pen still for menus" switch: off means no ring for a pen, but a finger still gets one
+    a.settings.penHold = false;
+    await hold(320, 320, 'pen'); r.penOffRing = !!ringEl(); it.onUp(mk(320, 320, 0, 'pen'));
+    await hold(340, 320, 'touch'); r.fingerStillRing = !!ringEl(); it.onUp(mk(340, 320, 0)); a.radial?.close();
+    a.settings.penHold = holdWas; a.settings.recentPens = recentWas;
+    a.settings.activePen = penWas.active; a.settings.penColor = penWas.color; a.settings.penEffect = penWas.effect; a.saveSettings(); a.syncUI();
+    a.store.doc.pages = pagesWere;
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    a.setTool('select'); a.setSelection([]); it.action = null; it.pointers.clear();
+    it._boardMenuAt = 0;          // the last hold opened a menu just now; the next test's right-click is a new one
+    return r;
+  `);
+  check('holding still on empty board opens the shortcut ring: latest pens first, then highlighter, eraser, lasso, Paste, Insert & more, with Undo and Redo in the middle - and no ink',
+    ring.open && JSON.stringify(ring.ids) === JSON.stringify(['pen:blue', 'pen:red', ring.ids[2], 'highlighter', 'eraser', 'lasso', 'paste', 'more', 'undo', 'redo']) && ring.ids[2].startsWith('pen:') && ring.noInk,
+    `ring open: ${ring.open}; buttons: ${JSON.stringify(ring.ids)} (wanted blue, red, one more pen, highlighter, eraser, lasso, paste, more, undo, redo); no ink left: ${ring.noInk}; state around the hold: ${JSON.stringify(ring.state)}`);
+  check('sliding onto a button and lifting chooses it in one go; lifting in place keeps the ring for a tap',
+    ring.slideTool === 'eraser' && ring.closedAfterSlide && ring.noInkAfterSlide && ring.hotLabel === 'Eraser' && ring.staysOnLift && ring.tapTool === 'highlighter' && ring.closedAfterTap,
+    `slide to the eraser: tool ${ring.slideTool}, label while over it "${ring.hotLabel}", closed ${ring.closedAfterSlide}, no ink ${ring.noInkAfterSlide}; lift in place: ring stays ${ring.staysOnLift}; tap highlighter: tool ${ring.tapTool}, closed ${ring.closedAfterTap}`);
+  check('the ring\'s pen picks up that pen, and the tray shows it too; Undo works from the middle and keeps the ring open; Esc closes it',
+    ring.penTool === 'pen' && ring.penHeld === 'red' && ring.trayActive === 'red' && ring.undid && ring.openAfterUndo && ring.escClosed,
+    `pen button: tool ${ring.penTool}, pen ${ring.penHeld} (wanted pen, red); pen lit in the tray: "${ring.trayActive}" (wanted red); undo: removed a stroke ${ring.undid}, ring still open ${ring.openAfterUndo}; Esc closed it ${ring.escClosed}`);
+  check('Paste from the ring lands where you held; Insert & more opens the full list; near a corner the ring stays whole on screen',
+    !!ring.pasteAt && Math.abs(ring.pasteAt.x - 280) <= 2 && Math.abs(ring.pasteAt.y - 300) <= 2 && ring.moreList && ring.onScreen,
+    `pasted at ${JSON.stringify(ring.pasteAt)} (wanted about 280, 300); full list opened: ${ring.moreList}; ring on screen at the corner: ${ring.onScreen}`);
+  check('Windows\' own pen press-and-hold (its right-click) opens the ring too, never the old list, and our own hold adds no second one',
+    ring.nativeRing && !ring.nativeList && ring.nativeAction === 'radial' && ring.nativeOnlyOne,
+    `after Windows' right-click with the pen still down: ring ${ring.nativeRing}, list menu ${ring.nativeList}, gesture ${ring.nativeAction} (wanted ring, no list, the ring following the pen); after our own hold time: just one ring and no list ${ring.nativeOnlyOne}`);
+  check('holding again while the last ring is still open gives a fresh ring every time, never the old list (it used to alternate)',
+    ring.loop.length === 3 && ring.loop.every((l) => l.ring === 1 && !l.list && l.stays),
+    `three holds in a row, each with Windows' own right-click: ${JSON.stringify(ring.loop)} (wanted ring 1, list false, ring still there after lifting - every time)`);
+  check('with "Hold the pen still for menus" off, a held pen opens no ring, while a finger still does',
+    ring.penOffRing === false && ring.fingerStillRing === true,
+    `pen with the switch off opened a ring: ${ring.penOffRing} (wanted false); finger: ${ring.fingerStillRing} (wanted true)`);
 
   /*
    * Android raises a contextmenu event after about half a second of holding -

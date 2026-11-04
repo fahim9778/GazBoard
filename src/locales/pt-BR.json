@@ -1271,5 +1271,7 @@
  "Arm angle": "Ângulo do braço",
  "outer scale {n}°": "escala externa {n}°",
  "Hold the pen still for menus": "Segurar a caneta parada abre menus",
- "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "Ativado (padrão): segurar a caneta parada no quadro abre o menu e, sobre um objeto, o pega. Desativado: a caneta só escreve, então preencher formas pequenas nunca abre um menu. Use o botão lateral da caneta ou a barra de seleção para os menus. Com o dedo, manter pressionado continua funcionando."
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "Ativado (padrão): segurar a caneta parada no quadro abre o menu e, sobre um objeto, o pega. Desativado: a caneta só escreve, então preencher formas pequenas nunca abre um menu. Use o botão lateral da caneta ou a barra de seleção para os menus. Com o dedo, manter pressionado continua funcionando.",
+ "Insert & more…": "Inserir e mais…",
+ "Shortcuts": "Atalhos"
 }
