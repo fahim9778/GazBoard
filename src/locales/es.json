@@ -1266,5 +1266,10 @@
  "Take off the wheel": "Quitar de la ruleta",
  "Drag to make it bigger or smaller": "Arrastra para agrandar o achicar",
  "Turn the spotlight off": "Apagar el foco",
- "Spotlight": "Foco"
+ "Spotlight": "Foco",
+ "Presenting — tap ✕ on the bar to finish": "Presentando: toca ✕ en la barra para terminar",
+ "Arm angle": "Ángulo del brazo",
+ "outer scale {n}°": "escala exterior {n}°",
+ "Hold the pen still for menus": "Mantener quieto el lápiz abre menús",
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "Activado (predeterminado): mantener el lápiz quieto en la pizarra abre el menú y, sobre un objeto, lo levanta. Desactivado: el lápiz solo escribe, así que rellenar formas pequeñas nunca abre un menú. Usa el botón lateral del lápiz o la barra de selección para los menús. Con el dedo, mantener pulsado sigue funcionando."
 }

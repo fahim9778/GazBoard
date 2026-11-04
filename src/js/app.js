@@ -113,6 +113,10 @@ export const DEFAULT_SETTINGS = {
   // and a phone has no hover for it to belong to. On is for a touchscreen PC
   // whose owner wants it anyway. See showInkPointer() in tools.js.
   nibOnTouch: false,
+  // Holding the pen still opens the menu (on bare board) or picks up what is
+  // under it. Off: a pen only ever writes - for anyone who fills in small
+  // shapes, or uses the pen's side button for menus. A finger keeps the hold.
+  penHold: true,
   // A short two-note chime when a board starts arriving. On by default: the
   // thing it prevents is being halfway through a sentence when an "accept
   // this board?" dialog appears out of nowhere. See showReceiving().
@@ -2322,9 +2326,12 @@ class App {
     // or two later - and later still when full screen kicks in.
     requestAnimationFrame(() => requestAnimationFrame(() => this.presentFit()));
     this.syncUI();
-    this.toast(this.pageCount > 1
-      ? t('Presenting — Page Down for the next page, Esc to finish')
-      : t('Presenting — Esc to finish'), 'present');
+    // a phone or tablet has no Esc or Page Down: the ✕ on the Present bar is how it ends there
+    this.toast(!App.viewKeysUsable()
+      ? t('Presenting — tap ✕ on the bar to finish')
+      : this.pageCount > 1
+        ? t('Presenting — Page Down for the next page, Esc to finish')
+        : t('Presenting — Esc to finish'), 'present');
   }
 
   stopPresenting() {
@@ -2604,6 +2611,29 @@ class App {
       seg([['right', t('Right →')], ['up', t('Up ↑')]], s.rulerZero === 'up' ? 'up' : 'right', (v) => { s.rulerZero = v; }),
       h('h5', {}, t('See-through')),
       slider);
+    // the protractor's arm can be typed as well as dragged: exactly 37°, first time
+    if (r.kind === 'protractor') {
+      const now = Number.isFinite(r.protArm) ? Math.round(r.protArm) : 60;
+      const box = h('input', { type: 'number', min: '0', max: '180', step: '1', inputmode: 'numeric', value: String(now),
+        class: 'ruler-arm-input', 'data-prot-arm': '1', 'aria-label': t('Arm angle') });
+      const outer = h('span', { class: 'ruler-arm-outer' });
+      const show = (deg) => { outer.textContent = t('outer scale {n}°', { n: 180 - deg }); };
+      const apply = () => {
+        const v = Number(String(box.value).replace(',', '.'));
+        if (!Number.isFinite(v)) return;
+        const deg = Math.min(180, Math.max(0, Math.round(v)));
+        r.protArm = deg;
+        show(deg);
+        this.surface.invalidate();
+      };
+      box.addEventListener('input', apply);
+      // out of range or not a number: the box shows what the arm really is
+      box.addEventListener('change', () => { apply(); box.value = String(Math.round(r.protArm)); });
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); closePopover(); } });
+      show(now);
+      body.appendChild(h('h5', {}, t('Arm angle')));
+      body.appendChild(h('div', { class: 'ruler-arm-row' }, box, h('span', {}, '°'), outer));
+    }
     openPopover(at, body, { key: 'ruler-menu' });
   }
 

@@ -1266,5 +1266,10 @@
  "Take off the wheel": "أزِل من العجلة",
  "Drag to make it bigger or smaller": "اسحب للتكبير أو التصغير",
  "Turn the spotlight off": "إطفاء الضوء الموجّه",
- "Spotlight": "الضوء الموجّه"
+ "Spotlight": "الضوء الموجّه",
+ "Presenting — tap ✕ on the bar to finish": "العرض التقديمي جارٍ — اضغط ✕ في الشريط للإنهاء",
+ "Arm angle": "زاوية الذراع",
+ "outer scale {n}°": "التدريج الخارجي {n}°",
+ "Hold the pen still for menus": "إبقاء القلم ثابتًا يفتح القوائم",
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "مفعّل (افتراضي): إبقاء القلم ثابتًا على اللوحة يفتح القائمة، وعلى عنصر يلتقطه. معطّل: القلم يكتب فقط، فلا تُفتح قائمة أبدًا عند تلوين الأشكال الصغيرة. استخدم الزر الجانبي للقلم أو شريط التحديد للقوائم بدلًا من ذلك. يبقى الضغط المطوّل بالإصبع كما هو في الحالتين."
 }

@@ -1266,5 +1266,10 @@
  "Take off the wheel": "移出轉盤",
  "Drag to make it bigger or smaller": "拖曳以放大或縮小",
  "Turn the spotlight off": "關閉聚光燈",
- "Spotlight": "聚光燈"
+ "Spotlight": "聚光燈",
+ "Presenting — tap ✕ on the bar to finish": "簡報中：點按列上的 ✕ 結束",
+ "Arm angle": "指針角度",
+ "outer scale {n}°": "外圈刻度 {n}°",
+ "Hold the pen still for menus": "筆靜止按住時開啟選單",
+ "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "開（預設）：在白板上按住筆不動會開啟選單，按在物件上則會拿起它。關：筆只用來書寫，塗滿小圖形時絕不會跳出選單。請改用筆的側鍵或選取列開啟選單。手指長按在兩種情況下都照常有效。"
 }

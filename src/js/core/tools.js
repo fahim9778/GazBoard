@@ -49,6 +49,19 @@ const HOLD_MS = 450;
  */
 const PEN_HOLD_MS = 700;
 const HOLD_SLOP = 11;
+/*
+ * Holding still, or scribbling in one spot?
+ *
+ * The slop above only asks how far the pen is from where it started, so a pen
+ * colouring in a tiny circle - a music teacher filling a note head - never got
+ * more than 11 px away, and after 0.7 s the "hold" fired: the ink was thrown
+ * away and a menu came up. A held pen hardly travels at all; a scribbling one
+ * travels a long way without going anywhere. So the distance actually covered
+ * is added up as well, step by step, ignoring steps smaller than the jitter of
+ * a resting nib, and a press that has covered more than this is a stroke.
+ */
+const HOLD_JITTER = 1.5;
+const HOLD_TRAVEL = 18;
 const HANDLE_GRAB = 12;   // forgiving grab radius around a handle's 9px dot
 
 /** Gestures that should keep going while the canvas scrolls beneath them. */
@@ -125,6 +138,8 @@ export class Interaction {
       this.cancelHold();
       if (Date.now() - (this._boardMenuAt || 0) < 1200) return;
       if (this._lastDownType === 'touch' || this.action?.holdMenu) return;
+      // the system's own press-and-hold menu, arriving while the pen is still writing: off when Pen hold is off
+      if (this._lastDownType === 'pen' && this.app.settings?.penHold === false && this.action) return;
       // A right-DRAG panned the canvas, so it is not a right-CLICK: swallow the
       // menu this once. A plain right-click never sets this and is unaffected.
       if (this._eatNextMenu) { this._eatNextMenu = false; return; }
@@ -666,10 +681,12 @@ export class Interaction {
     // the palm - the ink jumped, or looked like it had simply gone missing.
     if (this.actionId != null && e.pointerId !== this.actionId) return;
 
-    // Travelled too far to still be a press-and-hold: this is a stroke.
-    if (this._hold && e.pointerId === this._holdId && this._holdFrom
-        && Math.hypot(sp.x - this._holdFrom.x, sp.y - this._holdFrom.y) > HOLD_SLOP) {
-      this.cancelHold();
+    // Travelled too far to still be a press-and-hold: this is a stroke. Too far
+    // away from the start, or too much ground covered on the spot (see HOLD_TRAVEL).
+    if (this._hold && e.pointerId === this._holdId && this._holdFrom) {
+      const last = this._holdLast || this._holdFrom, step = Math.hypot(sp.x - last.x, sp.y - last.y);
+      if (step >= HOLD_JITTER) { this._holdPath = (this._holdPath || 0) + step; this._holdLast = sp; }
+      if (Math.hypot(sp.x - this._holdFrom.x, sp.y - this._holdFrom.y) > HOLD_SLOP || this._holdPath > HOLD_TRAVEL) this.cancelHold();
     }
 
     // The drawn nib has to keep up with an ink stroke in flight. This is the
@@ -1335,6 +1352,7 @@ export class Interaction {
     if (this.app.viewMode) return;          // nothing can be picked up while only looking
     // A finger or a stylus. A mouse has a right button and does not need this.
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    if (!this.holdAllowed(e)) return;
     // Bare board first, and before the test below. That test asks whether this
     // could become "pick the object up", which is a question about drawing and
     // panning - so with Select in hand it said no, and the board menu was
@@ -1350,6 +1368,8 @@ export class Interaction {
     // work from a pan too, not just from a stroke.
     if (!eligible()) return;
     this._holdFrom = sp;
+    this._holdLast = sp;
+    this._holdPath = 0;
     this._holdId = e.pointerId;
     this._hold = setTimeout(() => {
       this._hold = null;
@@ -1436,6 +1456,7 @@ export class Interaction {
    */
   armHoldOnBoard(e, sp, wp) {
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    if (!this.holdAllowed(e)) return;
     if (this.pointers.size !== 1) return;
     /*
      * No test of what the press started, deliberately. Select begins a
@@ -1446,6 +1467,8 @@ export class Interaction {
      * still cancels it, which is the check that actually matters.
      */
     this._holdFrom = sp;
+    this._holdLast = sp;
+    this._holdPath = 0;
     this._holdId = e.pointerId;
     this._hold = setTimeout(() => {
       this._hold = null;
@@ -1465,6 +1488,14 @@ export class Interaction {
   cancelHold() {
     if (this._hold) { clearTimeout(this._hold); this._hold = null; }
     this._holdFrom = null;
+    this._holdLast = null;
+    this._holdPath = 0;
+  }
+
+  /** May this press start a press-and-hold at all? A pen can be told never to (Settings → Pen hold). */
+  holdAllowed(e) {
+    if (e.pointerType === 'pen' && this.app.settings && this.app.settings.penHold === false) return false;
+    return true;
   }
 
   startMoveOnSelection(wp) {

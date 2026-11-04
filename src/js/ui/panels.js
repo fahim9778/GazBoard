@@ -1324,6 +1324,8 @@ export function createPanels(app) {
                   app.interaction.hideInkPointer(); }),
                 t('Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.'))
             : null,
+          row(t('Hold the pen still for menus'), mkToggle(() => s.penHold !== false, (v) => { s.penHold = v; app.interaction.cancelHold(); }),
+            t('On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen\'s side button or the selection bar for menus instead. A finger keeps press-and-hold either way.')),
           row(t('Ruler snapping'), mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
         storage ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), storage) : null,
@@ -1472,9 +1474,12 @@ export function createPanels(app) {
    */
   /** Every board in one file, and back again. The same two buttons wherever the boards are listed. */
   function backupButtons() {
+    // each button takes an equal share of the row, and a full row of its own when the panel is narrow (a phone) -
+    // the same width as "Save current board…" above them, rather than three sizes in a stack
+    const b = (label, cmd) => h('button', { class: 'btn', style: 'flex:1 1 220px;min-width:0', onclick: () => app.command(cmd) }, label);
     return h('div', { class: 'backup-row', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px' },
-      h('button', { class: 'btn', onclick: () => app.command('boards.backup') }, t('Back up all my boards…')),
-      h('button', { class: 'btn', onclick: () => app.command('boards.restore') }, t('Restore from a backup…')));
+      b(t('Back up all my boards…'), 'boards.backup'),
+      b(t('Restore from a backup…'), 'boards.restore'));
   }
 
   function safeCopy({ full = false } = {}) {

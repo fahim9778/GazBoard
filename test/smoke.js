@@ -3566,6 +3566,85 @@ async function run(win, app) {
     held.penPicksUpEventually);
 
   /*
+   * Filling in a small shape is not holding still (Betty's music note heads).
+   * The pen never strays more than a few pixels from where it started, but it
+   * covers a lot of ground - the old test only asked "how far from the start",
+   * so after 0.7 s the board menu came up and the ink was thrown away. And a
+   * pen can be told never to hold at all (Settings → Hold the pen still for menus).
+   */
+  const scribble = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z }, pagesWere = a.store.doc.pages, holdWas = a.settings.penHold;
+    a.store.doc.pages = []; sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons) => { const p = sf.cam.toScreen(x, y); return { pointerId: 12, pointerType: 'pen', button: 0, buttons, shiftKey: false, altKey: false, pressure: 0.5, clientX: rect.left + p.x, clientY: rect.top + p.y }; };
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    let menus = 0; const realMenu = a.showContextMenu; a.showContextMenu = () => { menus++; };
+    a.notePenSeen(); a.setTool('pen'); a.setSelection([]);
+    const r = {};
+    // colour in a note head about 8 px across, for a second, never more than 5 px from the start
+    const fill = async (cx, cy) => {
+      it.action = null; it.pointers.clear();
+      const before = strokes(), m0 = menus;
+      it.onDown(mk(cx, cy, 1));
+      let maxAway = 0;
+      for (let i = 0; i < 60; i++) {
+        const ang = i * 1.3, rad = 1.5 + (i % 7) * 0.5;
+        const x = cx + Math.cos(ang) * rad, y = cy + Math.sin(ang) * rad;
+        maxAway = Math.max(maxAway, Math.hypot(x - cx, y - cy));
+        it.onMove(mk(x, y, 1)); await wait(16);
+      }
+      it.onUp(mk(cx, cy, 0));
+      return { inked: strokes() - before, menus: menus - m0, maxAway: +maxAway.toFixed(1), action: it.action && it.action.type };
+    };
+    a.settings.penHold = true;
+    r.fillOnBoard = await fill(200, 200);
+    // over an object (the note head's own outline drawn first)
+    a.store.add({ id: 'head-ring', type: 'note', x: 280, y: 180, w: 40, h: 40, color: '#ffd94a', text: '', rotation: 0, align: 'center', font: 'ui' });
+    r.fillOnObject = await fill(300, 200);
+    r.objectStill = !a.selected.length;
+    // a pen that really is held still still opens the menu (the gesture is kept)
+    it.action = null; it.pointers.clear();
+    let m0 = menus; it.onDown(mk(200, 330, 1));
+    for (let i = 0; i < 20; i++) { it.onMove(mk(200 + (i % 2) * 0.6, 330, 1)); await wait(40); }
+    r.stillMenus = menus - m0; it.onUp(mk(200, 330, 0));
+    // with the setting off, holding the pen still is just a dot of ink, never a menu
+    a.settings.penHold = false;
+    it.action = null; it.pointers.clear();
+    m0 = menus; const s0 = strokes(); it.onDown(mk(380, 330, 1)); await wait(900); it.onUp(mk(380, 330, 0));
+    r.offMenus = menus - m0; r.offInk = strokes() - s0;
+    // and on an object it does not pick it up either
+    it.action = null; it.pointers.clear(); a.setSelection([]);
+    it.onDown(mk(300, 200, 1)); await wait(900);
+    r.offPicked = a.selected.length; r.offAction = it.action && it.action.type; it.onUp(mk(300, 200, 0));
+    // the system's own press-and-hold menu, arriving while the pen writes, is dropped too
+    it.action = null; it.pointers.clear(); a.hideMenus?.();
+    it.onDown(mk(440, 260, 1));
+    const p = sf.cam.toScreen(440, 260);
+    a.showContextMenu = realMenu;
+    sf.canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: rect.left + p.x, clientY: rect.top + p.y }));
+    await wait(80);
+    const m = document.querySelector('#contextMenu, .ctx-menu, .menu'); r.nativeMenuShown = !!(m && m.isConnected && m.offsetParent);
+    it.onUp(mk(440, 260, 0)); a.hideMenus?.();
+    a.settings.penHold = holdWas;
+    a.store.doc.pages = pagesWere;
+    a.store.remove(a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id));
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    a.setTool('select'); a.setSelection([]); it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('filling in a small circle with the pen keeps the ink and never opens the menu, on bare board or over an object',
+    scribble.fillOnBoard.inked === 1 && scribble.fillOnBoard.menus === 0 && scribble.fillOnObject.inked === 1 && scribble.fillOnObject.menus === 0 && scribble.objectStill,
+    `on bare board: ${JSON.stringify(scribble.fillOnBoard)}; over an object: ${JSON.stringify(scribble.fillOnObject)}, object left alone: ${scribble.objectStill} (wanted 1 stroke and 0 menus each time, the pen never more than ~5 px from where it started)`);
+  check('a pen held really still still opens the board menu',
+    scribble.stillMenus === 1, `menus opened by a pen held still for 0.8 s: ${scribble.stillMenus} (wanted 1)`);
+  check('with "Hold the pen still for menus" off, a held pen only ever writes: no menu, no pick-up, not even the system\'s own',
+    scribble.offMenus === 0 && scribble.offInk === 1 && scribble.offPicked === 0 && scribble.offAction !== 'move' && scribble.nativeMenuShown === false,
+    `menus: ${scribble.offMenus} (wanted 0); ink kept: ${scribble.offInk} (wanted 1 dot); held on the object: selected ${scribble.offPicked}, action ${scribble.offAction} (wanted none, not a move); system menu while writing shown: ${scribble.nativeMenuShown} (wanted false)`);
+
+  /*
    * Android raises a contextmenu event after about half a second of holding -
    * the same half second that now means "pick this up". Both fired, so every
    * attempt to move a note ended with the menu sitting on top of the note.
@@ -17881,6 +17960,62 @@ module.exports.run = async (win, app) => {
     check('on Android View mode tells you to tap Done and never mentions Ctrl+Alt+V; on a desktop it keeps the shortcut',
       (deskOk || !r.fine) && droidOk && r.deskKey === 'Ctrl+Alt+V' && r.droidKey === '',
       `desktop said: ${JSON.stringify(r.desk)} (wanted the shortcut in both, as this machine has a mouse: ${r.fine}); Android said: ${JSON.stringify(r.droid)} (wanted Done and no Ctrl+Alt+V); menu shortcut on desktop: "${r.deskKey}" (wanted Ctrl+Alt+V), on Android: "${r.droidKey}" (wanted none)`);
+  }
+
+  /* ---- tester feedback (Nov 2026): Present's words on a phone, even backup buttons, a typed protractor angle ---- */
+  {
+    const r = await js(`const a = window.app; const said = []; const was = a.toast; a.toast = (m) => said.push(m);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const root = document.documentElement, platWas = root.dataset.platform;
+      const out = {};
+      a.newBoard(true);
+      // Present: a keyboard machine names Esc; a phone names the ✕ on the bar
+      a.startPresenting({ fullscreen: false }); out.desk = said.splice(0).join(' / '); a.stopPresenting();
+      root.dataset.platform = 'android';
+      a.startPresenting({ fullscreen: false }); out.droid = said.splice(0).join(' / '); a.stopPresenting();
+      if (platWas === undefined) delete root.dataset.platform; else root.dataset.platform = platWas;
+      let fine = true; try { fine = matchMedia('(any-pointer: fine)').matches; } catch {} out.fine = fine;
+      // the two backup buttons: one width each, on a phone-narrow panel and on a wide one
+      if (a.panels.open) a.panels.close?.();
+      await a.panels.boards(); await wait(300);
+      const row = document.querySelector('.backup-row');
+      const widths = (w) => { row.style.width = w + 'px'; const b = [...row.querySelectorAll('button')].map((x) => x.getBoundingClientRect()); return { w: b.map((x) => Math.round(x.width)), tops: b.map((x) => Math.round(x.top)) }; };
+      out.found = !!row;
+      if (row) { out.narrow = widths(330); out.wide = widths(800); row.style.width = ''; }
+      if (a.panels.open) a.panels.close?.();
+      // the protractor's arm angle, typed
+      const r = a.ruler, keep = { kind: r.kind, vis: r.visible, arm: r.protArm, sk: a.settings.rulerKind };
+      a.settings.rulerKind = 'protractor'; if (r.visible) a.toggleRuler(); a.toggleRuler();
+      a.openRulerMenu({ x: 200, y: 200 }); await wait(80);
+      const box = document.querySelector('.ruler-menu [data-prot-arm]');
+      out.box = !!box;
+      const type = (v) => { box.value = v; box.dispatchEvent(new Event('input')); a.surface.invalidate(); a.surface.draw(); return { arm: r.protArm, reading: a.interaction.protReading && a.interaction.protReading.inner, outer: document.querySelector('.ruler-arm-outer')?.textContent }; };
+      if (box) {
+        out.t37 = type('37');
+        out.t250 = type('250'); box.dispatchEvent(new Event('change')); out.shownAfter250 = box.value;
+        out.tNeg = type('-5');
+        out.tJunk = type('abc');
+      }
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      // on a straight ruler the box is not offered
+      a.settings.rulerKind = 'ruler'; a.toggleRuler(); a.toggleRuler();
+      a.openRulerMenu({ x: 200, y: 200 }); await wait(80);
+      out.boxOnRuler = !!document.querySelector('.ruler-menu [data-prot-arm]');
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      r.protArm = keep.arm; a.settings.rulerKind = keep.sk; if (r.visible !== keep.vis) a.toggleRuler(); r.kind = keep.kind;
+      a.toast = was;
+      return out;`);
+    check('presenting on a phone says to tap ✕ on the bar (no Esc to press); with a keyboard it still says Esc',
+      /tap ✕ on the bar/.test(r.droid) && !/Esc/.test(r.droid) && (/Esc to finish/.test(r.desk) || !r.fine),
+      `phone said: "${r.droid}" (wanted the ✕ and no Esc); desktop said: "${r.desk}" (wanted Esc; this machine has a mouse: ${r.fine})`);
+    check('the two backup buttons are the same width: one full row each on a phone-narrow panel, side by side on a wide one',
+      r.found && r.narrow && r.narrow.w[0] === r.narrow.w[1] && r.narrow.w[0] >= 320 && r.narrow.tops[0] !== r.narrow.tops[1] &&
+        Math.abs(r.wide.w[0] - r.wide.w[1]) <= 1 && r.wide.tops[0] === r.wide.tops[1],
+      `found the row: ${r.found}; at 330 px widths ${JSON.stringify(r.narrow)} (wanted equal, the full row each, on separate lines); at 800 px ${JSON.stringify(r.wide)} (wanted equal, on one line)`);
+    check('the protractor\'s menu takes a typed arm angle: 37 sets the arm and the reading, out-of-range is held to 0-180, nonsense is ignored',
+      r.box && r.t37.arm === 37 && r.t37.reading === 37 && /143/.test(r.t37.outer || '') && r.t250.arm === 180 && r.shownAfter250 === '180' &&
+        r.tNeg.arm === 0 && r.tJunk.arm === 0 && r.boxOnRuler === false,
+      `box offered: ${r.box}; typed 37 → ${JSON.stringify(r.t37)} (wanted arm 37, reading 37, outer 143°); 250 → ${JSON.stringify(r.t250)} then box shows "${r.shownAfter250}" (wanted 180); -5 → ${JSON.stringify(r.tNeg)} (wanted 0); "abc" → ${JSON.stringify(r.tJunk)} (wanted unchanged 0); box on a straight ruler: ${r.boxOnRuler} (wanted false)`);
   }
 
   /* ---- the page strip: a picture of every page, click to go there, and only a changed page is redrawn ---- */
