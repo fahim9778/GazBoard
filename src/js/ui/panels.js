@@ -1339,7 +1339,7 @@ export function createPanels(app) {
           h('h5', {}, t('Canvas')),
           row(t('Mouse wheel zooms'), mkToggle(() => s.wheelZoom, (v) => (s.wheelZoom = v)), t('Off: a trackpad scrolls, and on boards with pages (A4, A5…) the mouse wheel scrolls through them. Ctrl+wheel always zooms.')),
           row(t('Auto-pan at the edges'), mkToggle(() => s.edgePan, (v) => (s.edgePan = v)),
-            t('While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.')),
+            t('While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.')),
           row(t('Return to select after drawing'), mkToggle(() => s.returnToSelect, (v) => (s.returnToSelect = v))),
           row(t('Outline grouped objects'), mkToggle(() => s.showGroupOutlines !== false, (v) => {
             s.showGroupOutlines = v;

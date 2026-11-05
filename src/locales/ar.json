@@ -727,7 +727,7 @@
  "Ruler snapping": "الالتصاق بالمسطرة",
  "Mouse wheel zooms": "عجلة الماوس تكبّر وتصغّر",
  "Auto-pan at the edges": "التحريك التلقائي عند الحواف",
- "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "أثناء الرسم أو السحب، يؤدي وصول المؤشر إلى حافة النافذة إلى تمرير اللوحة. كما أن الضغط مطولًا على زر الماوس أثناء خط بالقلم يسحب اللوحة أيضًا.",
+ "While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.": "أثناء سحب تحديد أو أداة التحديد الحر أو عنصر، يؤدي وصول المؤشر إلى حافة النافذة إلى تمرير اللوحة. أما الكتابة والمسح فلا يحركانها أبدًا. ويؤدي الضغط المستمر على زر الماوس أثناء خط القلم إلى سحب اللوحة.",
  "Return to select after drawing": "العودة إلى التحديد بعد الرسم",
  "Outline grouped objects": "إبراز حدود العناصر المجمّعة",
  "A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.": "إطار متقطع خافت حول كل مجموعة، كي يُظهر الرسم المكتمل الأجزاء المرتبطة معًا. وتُرسم المجموعة التي تلمسها بوضوح أكبر. أما العناصر المقفلة فتُظهر دائمًا حدودها المنقطة.",

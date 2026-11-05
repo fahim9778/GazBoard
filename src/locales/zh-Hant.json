@@ -727,7 +727,7 @@
  "Ruler snapping": "尺規貼齊",
  "Mouse wheel zooms": "滑鼠滾輪縮放",
  "Auto-pan at the edges": "在邊緣自動平移",
- "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "繪圖或拖曳時，把指標移到視窗邊緣就會捲動畫布。用畫筆書寫時按住滑鼠按鍵，也能拖曳畫布。",
+ "While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.": "拖曳選取範圍、套索或物件時，把指標移到視窗邊緣就會捲動畫布。書寫和擦除時絕不捲動。用畫筆書寫時按住滑鼠按鍵，可以拖曳畫布。",
  "Return to select after drawing": "繪圖後返回選取工具",
  "Outline grouped objects": "顯示群組物件的外框",
  "A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.": "在每個群組周圍顯示淡淡的虛線框，讓完成的繪圖一眼看出哪些部分綁在一起。你正在觸碰的群組會顯示得更清楚。鎖定的物件一律顯示點狀外框。",

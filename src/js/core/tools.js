@@ -65,7 +65,17 @@ const HOLD_TRAVEL = 18;
 const HANDLE_GRAB = 12;   // forgiving grab radius around a handle's 9px dot
 
 /** Gestures that should keep going while the canvas scrolls beneath them. */
-const EDGE_PANNABLE = new Set(['draw', 'erase', 'lasso', 'marquee', 'move', 'resize', 'rotate', 'shapeDraw', 'textDraw']);
+/*
+ * What running into the edge of the window scrolls the board for: dragging things - a lasso, a
+ * selection box, an object being moved, resized or turned, a shape or text box being pulled out.
+ *
+ * Not ink. Writing in the margin of the screen used to slide the board under the pen mid-letter
+ * (the edge zone is 56px a side, a quarter of a phone's width between the two), so the words came
+ * out smeared and people found the edges "difficult to write in". A pen, a highlighter or an
+ * eraser now goes exactly where it is put, right up to the edge, like the margin of a notebook;
+ * more room is a pan away, as anywhere else on the board.
+ */
+const EDGE_PANNABLE = new Set(['lasso', 'marquee', 'move', 'resize', 'rotate', 'shapeDraw', 'textDraw']);
 // 'laser' is deliberately absent: pointing near the edge of the window should
 // not drag the board out from under what you are pointing at.
 
@@ -810,6 +820,16 @@ export class Interaction {
            * edge by definition.
            */
           if (!a.ruled && this.underThePlastic(raw)) { a.blocked = true; return; }
+          /*
+           * Off the visible board: past the edge of the window, or under the
+           * toolbar. A pen carried on past the edge used to keep laying ink
+           * out there, out of sight - and since the board no longer slides
+           * along under the pen at the edges, nothing brought it back into
+           * view either. It is the edge of the paper now: nothing is picked up
+           * out there, and coming back on starts afresh where the pen re-enters
+           * rather than joining across the gap.
+           */
+          if (a.view && !this.onScreen(a.view, raw)) { a.blocked = true; return; }
           const cand = this.snapToRuler(raw, a);
           const prev = a.obj.points[a.obj.points.length - 1];
           if (prev && dist(prev, cand) * this.surface.cam.z <= 1.2) return;
@@ -1689,7 +1709,10 @@ export class Interaction {
     // starts - and so is which of the ruler's two edges it belongs to. See
     // snapToRuler() for why that cannot be left to the points as they arrive.
     const startEdges = this.ruler.visible && this.ruler.snap ? this.rulerEdgesAt(wp) : [];
-    const act = { type: 'draw', obj, snapAxis: null, sheet,
+    // where ink can be seen - only meaningful for a stroke that began somewhere it can be
+    let view = this.visibleArea();
+    if (view && !this.onScreen(view, wp)) view = null;
+    const act = { type: 'draw', obj, snapAxis: null, sheet, view,
       ruled: startEdges.length > 0, ruledEdge: startEdges.length ? startEdges[0] : 0,
       edgePending: startEdges.length ? { from: { x: wp.x, y: wp.y }, cands: startEdges, raw: [{ ...wp, p: this.pressure(e) }] } : null };
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
@@ -1826,6 +1849,33 @@ export class Interaction {
    * straightening, the renderer) would otherwise need to learn about holes.
    * They are committed together, so one undo still takes the whole line back.
    */
+  /**
+   * The part of the window where ink can be seen, fixed when a stroke starts: the canvas, less the
+   * bars that float over it. Holes are in canvas pixels.
+   */
+  visibleArea() {
+    const sf = this.surface;
+    if (typeof document === 'undefined' || !sf.canvas || !sf.canvas.getBoundingClientRect) return null;
+    const c = sf.canvas.getBoundingClientRect();
+    const holes = [];
+    for (const id of ['toolbar', 'zoombar', 'pagebar', 'ctxbar', 'pagestrip', 'pagetab']) {
+      const el = document.getElementById(id);
+      if (!el || !el.getBoundingClientRect) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1 || getComputedStyle(el).visibility === 'hidden' || getComputedStyle(el).display === 'none') continue;
+      holes.push({ x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height });
+    }
+    return { w: sf.width, h: sf.height, holes };
+  }
+
+  /** Is this world point somewhere the ink can be seen? (see visibleArea()) */
+  onScreen(view, wp) {
+    const p = this.surface.cam.toScreen(wp.x, wp.y);
+    if (p.x < 0 || p.y < 0 || p.x > view.w || p.y > view.h) return false;
+    for (const r of view.holes) if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return false;
+    return true;
+  }
+
   breakStroke(a) {
     if (a.obj.points.length >= 2) {
       const piece = { ...a.obj, id: uid('s'), points: a.obj.points,

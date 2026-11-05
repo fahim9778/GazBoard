@@ -727,7 +727,7 @@
  "Ruler snapping": "标尺吸附",
  "Mouse wheel zooms": "鼠标滚轮缩放",
  "Auto-pan at the edges": "边缘自动平移",
- "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "书写或拖动时，将指针移到窗口边缘会滚动画布。书写时按住鼠标按键也可拖动画布。",
+ "While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.": "拖动选区、套索或对象时，将指针移到窗口边缘会滚动画布。书写和擦除时从不滚动。用笔书写时按住鼠标按键可拖动画布。",
  "Return to select after drawing": "绘制后返回选择工具",
  "Outline grouped objects": "显示组合对象的轮廓",
  "A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.": "在每个组合周围显示一圈淡淡的虚线，让完成的图画也能看出哪些部分组合在一起。正在触碰的组合会显示得更清楚。已锁定的对象始终显示点线轮廓。",

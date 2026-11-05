@@ -725,7 +725,7 @@
  "Ruler snapping": "Lineal-Einrasten",
  "Mouse wheel zooms": "Mausrad zoomt",
  "Auto-pan at the edges": "Automatisches Verschieben an den Rändern",
- "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "Wenn du den Zeiger beim Zeichnen oder Ziehen an den Fensterrand führst, wird die Leinwand gescrollt. Eine während eines Strichs gedrückte Maustaste verschiebt die Leinwand ebenfalls.",
+ "While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.": "Wenn du eine Auswahl, ein Lasso oder ein Objekt an den Fensterrand ziehst, wird die Leinwand gescrollt. Beim Schreiben und Radieren passiert das nie. Eine während eines Stiftstrichs gedrückte Maustaste verschiebt die Leinwand.",
  "Return to select after drawing": "Nach dem Zeichnen zu „Auswählen“ zurückkehren",
  "Outline grouped objects": "Gruppierte Objekte umranden",
  "A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.": "Ein schwacher, gestrichelter Kreis um jede Gruppe, damit eine fertige Zeichnung zeigt, welche Teile zusammengehören. Die Gruppe, die du berührst, wird klarer dargestellt. Gesperrte Objekte zeigen immer ihre gepunktete Umrandung.",

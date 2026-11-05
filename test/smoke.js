@@ -2050,14 +2050,68 @@ async function run(win, app) {
     up(X(300), Y(300), 5, 'touch'); up(X(400), Y(300), 6, 'touch');
     it.pinch = null; it.action = null; it.pointers.clear();
 
-    // --- 3. edge auto-pan: velocity near the edge, none in the middle ---
-    down(X(300), Y(300));
-    move(X(300), Y(300));
+    // --- 3a. writing in the margin: the pen, highlighter and eraser never scroll the board ---
+    const edgeInk = {};
+    for (const tool of ['pen', 'highlighter', 'eraser']) {
+      a.setTool(tool);
+      it.action = null; it.pointers.clear();
+      const camAt = { x: sf.cam.x, y: sf.cam.y };
+      down(X(30), Y(300));                        // the left margin of the screen
+      for (let k = 1; k <= 8; k++) move(X(30 - k * 3), Y(300 + k * 4));   // a letter, ending hard against the edge
+      const kind = it.action ? it.action.type : 'none';
+      const vel = it.edgeVelocity({ x: 4, y: 300 });
+      const armedInk = !!it._edgeRaf;
+      await new Promise(r => setTimeout(r, 300));  // long enough for the old auto-pan to have moved it
+      edgeInk[tool] = { kind, vel, armed: armedInk, moved: Math.round(sf.cam.x - camAt.x) + ',' + Math.round(sf.cam.y - camAt.y) };
+      up(X(6), Y(332));
+      if (tool === 'pen') {
+        // the ink lands where the pen was: its left edge right at the margin, not slid away
+        // (read now: the eraser goes over the same spot next)
+        const st = a.store.objects.find(o => o.type === 'stroke' && o.tool === 'pen');
+        edgeInk.marginLeft = st ? Math.round(sf.cam.toScreen(st.bbox.x, 0).x) : null;
+      }
+    }
+    const marginLeft = edgeInk.marginLeft ?? null;
+    delete edgeInk.marginLeft;
+
+    // --- 3a'. and past the edge: no ink out of sight. Off and back on again is two strokes, not a
+    //     line joined across the gap; the same under the toolbar floating over the board ---
+    a.store.clear(); a.setTool('pen'); it.action = null; it.pointers.clear();
+    const offPath = [[120, 300], [60, 305], [10, 310], [-30, 315], [-80, 320], [-30, 330], [20, 340], [70, 350], [120, 360]];
+    down(X(offPath[0][0]), Y(offPath[0][1]));
+    for (const [x, y] of offPath.slice(1)) move(X(x), Y(y));
+    up(X(120), Y(360));
+    const offStrokes = a.store.objects.filter(o => o.type === 'stroke');
+    const offPts = offStrokes.flatMap(o => o.points.map(q => sf.cam.toScreen(q.x, q.y)));
+    const offEdge = { strokes: offStrokes.length, leftmost: offPts.length ? Math.round(Math.min(...offPts.map(q => q.x))) : null };
+    const tb = document.getElementById('toolbar').getBoundingClientRect(), cv = sf.canvas.getBoundingClientRect();
+    const tbr = { x: tb.left - cv.left, y: tb.top - cv.top, w: tb.width, h: tb.height };
+    a.store.clear(); it.action = null; it.pointers.clear();
+    const cx = tbr.x + tbr.w / 2;
+    let underBar = null;
+    if (tbr.w > 0 && tbr.y > 80) {
+      down(X(cx), Y(tbr.y - 70));
+      for (let k = 1; k <= 12; k++) move(X(cx + k * 2), Y(tbr.y - 70 + k * 12));   // down over the toolbar
+      for (let k = 11; k >= 0; k--) move(X(cx + 30 + k), Y(tbr.y - 70 + k * 12)); // and back up
+      up(X(cx + 30), Y(tbr.y - 70));
+      const pts = a.store.objects.filter(o => o.type === 'stroke').flatMap(o => o.points.map(q => sf.cam.toScreen(q.x, q.y)));
+      underBar = { strokes: a.store.objects.filter(o => o.type === 'stroke').length,
+        inside: pts.filter(q => q.x >= tbr.x && q.x <= tbr.x + tbr.w && q.y >= tbr.y && q.y <= tbr.y + tbr.h).length,
+        bar: [Math.round(tbr.x), Math.round(tbr.y), Math.round(tbr.w), Math.round(tbr.h)] };
+    }
+    a.store.clear(); it.action = null; it.pointers.clear();
+    a.store.clear(); a.setTool('select');
+    it.action = null; it.pointers.clear();
+
+    // --- 3b. dragging things still scrolls at the edge: a selection box run into it ---
+    down(X(300), Y(300), 1, 'mouse');
+    move(X(300), Y(300), 1, 'mouse');
+    const dragKind = it.action ? it.action.type : 'none';
     const middleVel = it.edgeVelocity({ x: 300, y: 300 });
     const leftVel = it.edgeVelocity({ x: 8, y: 300 });
     const rightVel = it.edgeVelocity({ x: sf.width - 8, y: 300 });
     const camX0 = sf.cam.x;
-    move(X(10), Y(300));                          // drive the pen into the left edge
+    move(X(10), Y(300), 1, 'mouse');              // drive the box into the left edge
     const armed = !!it._edgeRaf;
     // The auto-pan loop scrolls once per animation frame, and macOS throttles
     // requestAnimationFrame hard when the window is not being composited - on a
@@ -2082,7 +2136,8 @@ async function run(win, app) {
       await new Promise(r => setTimeout(r, 50));
       scrolled = Math.round(sf.cam.x - camX0);
     }
-    const pointsWhileScrolling = it.action ? it.action.obj.points.length : 0;
+    // the box keeps following the pointer into the newly scrolled-in board
+    const boxStretched = it.action && it.action.type === 'marquee' ? Math.round(it.action.start.x - it.action.cur.x) : 0;
     // A right-button drag must survive the auto-pan loop. It did not for one
     // release: two lines belonging to the constructor were pasted into the
     // tick, so every frame of auto-pan quietly cancelled an in-flight
@@ -2093,8 +2148,9 @@ async function run(win, app) {
     await new Promise(r => setTimeout(r, 120));
     const rightDragSurvivedAutoPan = !!it.rightPan && it._eatNextMenu === true;
     it.rightPan = null; it._eatNextMenu = false;
-    up(X(10), Y(300));
+    up(X(10), Y(300), 1, 'mouse');
     const stopped = !it._edgeRaf;
+    a.setTool('pen');
 
     // --- 3b. the barrel button, and a pointerup that never arrives ---
     // Both of these ended with the pen unable to draw at all, so they are
@@ -2137,18 +2193,20 @@ async function run(win, app) {
     const strokeAfterStrandedPointer = a.store.objects.filter(o => o.type === 'stroke').length === 1;
     a.store.clear(); it.action = null; it.pointers.clear(); it.rightPan = null;
 
-    // --- 4. the setting turns it off ---
+    // --- 4. the setting turns it off, for dragging too ---
     a.settings.edgePan = false;
-    down(X(300), Y(300)); move(X(10), Y(300));
+    a.setTool('select');
+    down(X(300), Y(300), 1, 'mouse'); move(X(10), Y(300), 1, 'mouse');
     const offVel = it.edgeVelocity({ x: 8, y: 300 });
-    up(X(10), Y(300));
+    up(X(10), Y(300), 1, 'mouse');
+    a.setTool('pen');
     a.settings.edgePan = true;
     a.store.clear();
 
     return { pinched, secondary, stillDrawing, panned, grewWhilePanning, releasedSecondary,
              stillDrawingAfter, strokeKept, touchPinches,
              middleVel, leftDir: leftVel ? Math.sign(leftVel.vx) : 0, rightDir: rightVel ? Math.sign(rightVel.vx) : 0,
-             armed, scrolled, pointsWhileScrolling, stopped, offVel,
+             armed, scrolled, boxStretched, dragKind, stopped, offVel, edgeInk, marginLeft, offEdge, underBar,
              rightDragSurvivedAutoPan, barrelKeptStroke, barrelDidNotPan, barrelStrokeGrew,
              barrelCommitted, pointerReleased, secondStrokeDrew, strokeAfterStrandedPointer,
              stayedAPen, cursorChange: cursorBeforeBarrel === cursorMidStroke
@@ -2159,11 +2217,25 @@ async function run(win, app) {
   check('the stroke survives and keeps growing', pan.strokeKept && pan.grewWhilePanning && pan.stillDrawingAfter);
   check('releasing the mouse leaves the pen drawing', pan.releasedSecondary);
   check('two touch pointers still pinch-zoom', pan.touchPinches);
+  for (const tool of ['pen', 'highlighter', 'eraser']) {
+    const e = pan.edgeInk[tool];
+    check(`writing in the screen's margin with the ${tool} leaves the board still`,
+      !!e && e.vel === null && !e.armed && e.moved === '0,0' && (e.kind === 'draw' || e.kind === 'erase'),
+      JSON.stringify(e));
+  }
+  check('and the ink lands right at the margin where the pen was',
+    pan.marginLeft !== null && pan.marginLeft >= 3 && pan.marginLeft <= 12, `stroke's left edge at ${pan.marginLeft}px on screen (pen went to 6px)`);
+  check('a pen carried past the edge lays no ink out of sight, and coming back starts a new stroke',
+    pan.offEdge.strokes === 2 && pan.offEdge.leftmost !== null && pan.offEdge.leftmost >= 0,
+    `${pan.offEdge.strokes} stroke(s) (wanted 2), leftmost ink at ${pan.offEdge.leftmost}px on screen (wanted 0 or more)`);
+  check('no ink is laid under the toolbar either',
+    pan.underBar === null || (pan.underBar.inside === 0 && pan.underBar.strokes === 2),
+    pan.underBar ? `${pan.underBar.inside} point(s) under the toolbar at ${JSON.stringify(pan.underBar.bar)}, ${pan.underBar.strokes} stroke(s) (wanted 2)` : 'no toolbar on screen');
   check('no auto-pan away from the edges', pan.middleVel === null);
   check('edge velocity points inward', pan.leftDir > 0 && pan.rightDir < 0, `left ${pan.leftDir}, right ${pan.rightDir}`);
-  check('auto-pan scrolls the canvas while drawing',
-    pan.armed && pan.scrolled > 0 && pan.pointsWhileScrolling > 1,
-    `${pan.scrolled}px, ${pan.pointsWhileScrolling} points`
+  check('dragging a selection box into the edge still scrolls the board',
+    pan.dragKind === 'marquee' && pan.armed && pan.scrolled > 0 && pan.boxStretched > 290,
+    `${pan.dragKind}: ${pan.scrolled}px scrolled, box ${pan.boxStretched}px wide`
       + (pan.scrolled > 0 && pan.scrolled <= 20 ? ' — few animation frames; window was probably not on top' : ''));
   check('auto-pan stops on pointer up', pan.stopped);
   check('auto-pan does not cancel a right-button drag under it', pan.rightDragSurvivedAutoPan);
@@ -18367,6 +18439,47 @@ module.exports.run = async (win, app) => {
       r.hiddenOnInfinite && r.menuItemFound && r.rows === 3 && r.open && r.remembered === true && r.firstCurrent && r.drawn >= 3 && r.sized.every((w) => w > 50)
         && r.afterClick === 2 && r.thirdCurrent && r.redrawnAfterNote === 1 && r.secondSig && r.hiddenPresenting && r.hiddenAfterInfinite && r.backOnPaper && r.closedByX && !r.tabWhileOpen && r.tabWhenClosed && r.tabSide === 0 && r.tabOpens,
       JSON.stringify(r) + ' (wanted: hidden on an infinite board, Show page pictures in the page menu, 3 rows, open and remembered, page 1 outlined, 3+ pictures drawn wider than 50px, a click on row 3 goes to page index 2 and outlines it, exactly 1 picture redrawn after a note on page 2, hidden while presenting and on an infinite board, back on paper again, folded away by its arrow, and the left-edge tab (at x 0) hidden while open, shown when folded, and opening it again)');
+  }
+
+  /* ---- writing on a paper board with the page strip open: no ink hidden under the strip, the page still takes ink ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const it = a.interaction, sf = a.surface;
+      await a.setPageSize('a4', 'portrait'); a.goToPage(0);
+      a.pageStrip.toggle(true); await wait(200);
+      a.setTool('pen'); a.notePenSeen(); a.settings.edgePan = true;
+      const strip = document.getElementById('pagestrip').getBoundingClientRect(), cv = sf.canvas.getBoundingClientRect();
+      const P = await import('app://board/js/core/pages.js'); const page = P.pageRects(a.store.doc.pages)[0];
+      const pg = { l: sf.cam.toScreen(page.x, page.y).x, t: sf.cam.toScreen(page.x, page.y).y, r: sf.cam.toScreen(page.x + page.w, 0).x };
+      const ev = (x, y, buttons) => ({ pointerId: 41, pointerType: 'pen', button: 0, buttons, pressure: 0.5,
+        clientX: cv.left + x, clientY: cv.top + y, shiftKey: false, altKey: false });
+      const y0 = Math.max(pg.t + 60, strip.top - cv.top + 80);
+      const stripRight = strip.right - cv.left;
+      const out = { strip: [Math.round(strip.left - cv.left), Math.round(stripRight)], page: [Math.round(pg.l), Math.round(pg.r)], y0: Math.round(y0) };
+      const strokes = () => a.store.objects.filter((o) => o.type === 'stroke');
+      // a line written on the page, plain
+      it.action = null; it.pointers.clear();
+      const x0 = Math.max(stripRight + 40, pg.l + 40);
+      it.onDown(ev(x0, y0, 1)); for (let k = 1; k <= 10; k++) it.onMove(ev(x0 + k * 8, y0 + (k % 2) * 4, 1)); it.onUp(ev(x0 + 80, y0, 0));
+      out.plain = strokes().length;
+      // a stroke run left over the strip and back
+      it.action = null; it.pointers.clear();
+      const camAt = sf.cam.x;
+      it.onDown(ev(x0, y0 + 60, 1));
+      for (let x = x0; x >= 20; x -= 12) it.onMove(ev(x, y0 + 60, 1));
+      for (let x = 20; x <= x0; x += 12) it.onMove(ev(x, y0 + 80, 1));
+      await wait(250);
+      it.onUp(ev(x0, y0 + 80, 0));
+      const pts = strokes().slice(1).flatMap((o) => o.points.map((q) => sf.cam.toScreen(q.x, q.y)));
+      out.underStrip = pts.filter((q) => q.x <= stripRight && q.y >= strip.top - cv.top && q.y <= strip.bottom - cv.top).length;
+      out.afterStrip = strokes().length;
+      out.boardMoved = Math.round(sf.cam.x - camAt);
+      a.pageStrip.toggle(false);
+      a.newBoard(true); return out;`);
+    check('on a paper board with the page strip open, writing still works and no ink is hidden under the strip',
+      r.plain === 1 && r.underStrip === 0 && r.afterStrip >= 2 && r.boardMoved === 0,
+      JSON.stringify(r) + ' (wanted: 1 plain stroke on the page, 0 points under the strip, 2 or more strokes after running over it and back, board not moved)');
   }
 
   /* ---- the ruler's settings: a 45° and a 30°/60° set square, 0° pointing up, see-through plastic ---- */

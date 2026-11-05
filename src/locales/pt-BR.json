@@ -727,7 +727,7 @@
  "Ruler snapping": "Encaixe na régua",
  "Mouse wheel zooms": "A roda do mouse aplica zoom",
  "Auto-pan at the edges": "Deslocamento automático nas bordas",
- "While drawing or dragging, running the pointer into the edge of the window scrolls the canvas. A mouse button held down during a pen stroke drags the canvas too.": "Ao desenhar ou arrastar, levar o ponteiro até a borda da janela rola a tela. Um botão do mouse pressionado durante um traço de caneta também arrasta a tela.",
+ "While dragging a selection, a lasso or an object, running the pointer into the edge of the window scrolls the canvas. Writing and erasing never do. A mouse button held down during a pen stroke drags the canvas.": "Ao arrastar uma seleção, um laço ou um objeto, levar o ponteiro até a borda da janela rola a tela. Ao escrever ou apagar, nunca. Um botão do mouse pressionado durante um traço de caneta arrasta a tela.",
  "Return to select after drawing": "Voltar para Selecionar depois de desenhar",
  "Outline grouped objects": "Contornar objetos agrupados",
  "A faint dashed ring round each group, so a finished drawing shows which parts are tied together. The group you are touching is drawn more clearly. Locked objects always show their dotted outline.": "Um anel tracejado discreto em volta de cada grupo, para que um desenho pronto mostre quais partes estão juntas. O grupo que você está tocando aparece mais nítido. Objetos bloqueados sempre mostram o contorno pontilhado.",
