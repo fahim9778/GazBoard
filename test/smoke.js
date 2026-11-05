@@ -3032,6 +3032,167 @@ async function run(win, app) {
   check('and a touchscreen PC can switch the nib back on for the finger',
     finger.optedInNib === true);
 
+  /* ---- a very full board is painted a slice at a time ---- */
+  /*
+   * An ink-wash painting of 15,000 strokes froze the Android app on opening:
+   * every full paint handed the whole board to the graphics card in one go,
+   * seconds on a phone, with no touch answered meanwhile - and the idle
+   * rebuild of the frozen copy did it again straight after. A board past
+   * Surface.HEAVY objects is now painted a few hundred objects a frame, with
+   * the last finished picture standing in. Counted, not timed, like the tests
+   * above: what is claimed is how much is painted per frame, that nothing
+   * paints the whole board in one go meanwhile, and that the finished picture
+   * is exactly what a one-go paint makes.
+   */
+  const heavy = await js(`
+    const a = window.app, sf = a.surface, S = sf.constructor;
+    a.settings.autosave = false;
+    a.newBoard(true);
+    const make = (n, pre) => {
+      const bulk = [];
+      for (let i = 0; i < n; i++) {
+        const x = (i % 80) * 40, y = Math.floor(i / 80) * 22, hl = i % 3 === 0;
+        const pts = [0, 1, 2, 3, 4, 5].map((j) => ({ x: x + j * 6, y: y + Math.sin(i + j) * 5, p: 0.5 }));
+        bulk.push({ id: pre + i, type: 'stroke', tool: hl ? 'highlighter' : 'pen', color: hl ? '#3a6ea5' : '#201f1e',
+          width: hl ? 14 : 3, effect: 'none', opacity: hl ? 0.2 : 1, rotation: 0, points: pts,
+          bbox: { x, y: y - 5, w: 30, h: 10 } });
+      }
+      return bulk;
+    };
+    const r = { HEAVY: S.HEAVY, SLICE: S.HEAVY_SLICE };
+    const N = S.HEAVY + 600;
+    a.store.addMany(make(N, 'hv'));
+    sf.cam.z = 0.15; sf.cam.x = 4; sf.cam.y = 4;           // all of it in view
+    let scenes = 0, freezes = 0;
+    const realScene = sf.drawScene.bind(sf), realFreeze = sf._freezeScene.bind(sf);
+    sf.drawScene = function (...z) { if (!z[4]) scenes++; return realScene(...z); };   // whole-board paints only, not strips
+    sf._freezeScene = function (k) { freezes++; return realFreeze(k); };
+    const steps = [];
+    const runOut = (limit = 400) => { let f = 0; while (sf._build && f < limit) { const i0 = sf._build.i; sf.draw(); f++; steps.push((sf._build ? sf._build.i : sf._build === null ? r.visible : 0) - i0); } return f; };
+
+    // 1. as if just opened: nothing to stand in, so it fills in a slice a frame
+    sf._ink = null; sf._shown = null; sf._build = null; sf._liveAt = -1e9;
+    sf.invalidate(); sf.draw();
+    r.startedBuild = !!sf._build;
+    r.visible = sf._build ? sf._build.order.items.length : 0;
+    r.firstFramePainted = sf._build ? sf._build.i : -1;      // the opening frame lays paper only
+    r.framesToFinish = runOut() + 1;
+    r.biggestSlice = Math.max(...steps);
+    r.wholePaintsWhileBuilding = scenes;
+    r.freezesWhileBuilding = freezes;
+    r.copyIsCurrent = !!sf._ink && sf._ink.key === sf.freezeKey();
+    r.builds = sf.heavyBuilds || 0;
+
+    // 2. the finished picture is the same picture a one-go paint makes. Compared as the frozen copy
+    //    itself against the screen painted in one go, both in device pixels: blitting the copy back to
+    //    the screen scales it by w x dpr, which at 125% is not a whole number and softens every edge
+    //    by itself, slices or no slices.
+    const data = (c) => c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    const grab = () => data(sf.canvas);
+    const sliced = data(sf._ink.canvas);
+    sf.invalidate(); sf.draw();
+    const blitted = grab();                                // the copy as the screen shows it, for the record
+    const copySize = sf._ink.canvas.width + 'x' + sf._ink.canvas.height;
+    sf.noProgressive = true; sf._ink = null; sf.invalidate(); sf.draw(); sf.noProgressive = false;
+    const whole = data(sf.canvas);
+    const W = sf.canvas.width, H = sf.canvas.height;
+    r.sizes = ['copy ' + copySize, 'screen ' + W + 'x' + H, 'dpr ' + sf.dpr, 'css ' + sf.width + 'x' + sf.height].join(', ');
+    let shownDiff = 0;
+    for (let i = 0; i < whole.length; i += 4) if (Math.abs(whole[i] - blitted[i]) + Math.abs(whole[i + 1] - blitted[i + 1]) + Math.abs(whole[i + 2] - blitted[i + 2]) > 6) shownDiff++;
+    r.shownDiff = shownDiff;
+    let diff = 0, big = 0, worst = 0, first = null;
+    for (let i = 0; i < whole.length; i += 4) {
+      const d = Math.abs(whole[i] - sliced[i]) + Math.abs(whole[i + 1] - sliced[i + 1]) + Math.abs(whole[i + 2] - sliced[i + 2]);
+      if (d > 6) { diff++; if (!first) first = [(i / 4) % W, Math.floor(i / 4 / W), [whole[i], whole[i + 1], whole[i + 2]], [sliced[i], sliced[i + 1], sliced[i + 2]]]; }
+      if (d > 96) big++;
+      if (d > worst) worst = d;
+    }
+    // and in 4 x 4 blocks: a graphics card may smooth the edge of a line a shade differently when the
+    // work reaches it in other batches; a stroke missing, doubled or out of order changes a whole block
+    let blocks = 0, blockDiff = 0;
+    for (let by = 0; by + 4 <= H; by += 4) for (let bx = 0; bx + 4 <= W; bx += 4) {
+      let sw = 0, ss = 0;
+      for (let y = by; y < by + 4; y++) for (let x = bx; x < bx + 4; x++) { const i = (y * W + x) * 4; sw += whole[i] + whole[i + 1] + whole[i + 2]; ss += sliced[i] + sliced[i + 1] + sliced[i + 2]; }
+      blocks++;
+      if (Math.abs(sw - ss) / 48 > 6) blockDiff++;
+    }
+    r.differentPixels = diff; r.bigDiffs = big; r.worstDiff = worst; r.firstDiff = first; r.pixels = whole.length / 4;
+    r.blocks = blocks; r.blockDiff = blockDiff;
+    let inked = 0;
+    for (let i = 0; i < whole.length; i += 4) if (whole[i] < 200) inked++;
+    r.inkedPixels = inked;
+
+    // 3. a zoom: the last picture stands in, scaled, while the new one is painted
+    sf._ink = null; sf._shown = null; sf._build = null; sf.invalidate(); sf.draw(); runOut();
+    sf.cam.z *= 1.15; sf.invalidate(); sf.draw();
+    r.zoomStandIn = !!sf._shownFor(sf.ctx) && !!sf._build;
+    const mid = grab();
+    let midInk = 0;
+    for (let i = 0; i < mid.length; i += 4) if (mid[i] < 200) midInk++;
+    r.zoomStandInHasInk = midInk;
+    steps.length = 0; scenes = 0; freezes = 0;
+    r.zoomFrames = runOut() + 1;
+    r.zoomWholePaints = scenes; r.zoomFreezes = freezes;
+    r.zoomCopyCurrent = !!sf._ink && sf._ink.key === sf.freezeKey();
+
+    // 4. something being dragged is painted at once, and that paint is kept as the copy
+    scenes = 0; freezes = 0;
+    sf.touch(); sf.draw();
+    r.dragBuilt = !!sf._build;
+    r.dragWholePaints = scenes;
+    r.dragCopyCurrent = !!sf._ink && sf._ink.key === sf.freezeKey();
+
+    // 5. an idle rebuild asked for in the middle of a slice-at-a-time paint does nothing
+    sf._liveAt = -1e9; sf._ink = null; sf._build = null; sf.cam.z *= 1.05; sf.invalidate(); sf.draw(); sf.draw();
+    freezes = 0;
+    const midBuild = !!sf._build;
+    sf.warmFreeze();
+    await new Promise((res) => setTimeout(res, 450));
+    r.warmDuringBuild = { midBuild, freezes };
+    sf._build = null;
+
+    // 6. a board below the line is painted exactly as before
+    a.store.clear(); a.store.addMany(make(S.HEAVY - 1, 'lt'));
+    sf._ink = null; sf._shown = null; scenes = 0;
+    sf.invalidate(); sf.draw();
+    r.lightBuilt = !!sf._build; r.lightWholePaints = scenes;
+
+    sf.drawScene = realScene; sf._freezeScene = realFreeze;
+    a.store.clear(); a.settings.autosave = true;
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0; sf._shown = null; sf._build = null;
+    sf.invalidate(); sf.draw();
+    return r;
+  `);
+  check('a board past ' + heavy.HEAVY + ' objects starts painting a slice at a time, not all at once',
+    heavy.startedBuild && heavy.firstFramePainted === 0 && heavy.visible >= heavy.HEAVY,
+    `build started ${heavy.startedBuild}, ${heavy.visible} objects in view, opening frame painted ${heavy.firstFramePainted} of them`);
+  check('no frame paints more than a slice of it',
+    heavy.biggestSlice <= heavy.SLICE && heavy.framesToFinish >= Math.ceil(heavy.visible / heavy.SLICE),
+    `biggest slice ${heavy.biggestSlice} (limit ${heavy.SLICE}), ${heavy.framesToFinish} frames for ${heavy.visible} objects`);
+  check('nothing paints the whole board in one go meanwhile - not the idle rebuild either',
+    heavy.wholePaintsWhileBuilding === 0 && heavy.freezesWhileBuilding === 0,
+    `${heavy.wholePaintsWhileBuilding} whole-board paint(s), ${heavy.freezesWhileBuilding} freeze(s) while building`);
+  check('the finished picture becomes the frozen copy',
+    heavy.copyIsCurrent && heavy.builds >= 1, `copy current ${heavy.copyIsCurrent}, builds finished ${heavy.builds}`);
+  check('and it is the same picture a one-go paint makes',
+    heavy.inkedPixels > 1000 && heavy.blockDiff <= heavy.blocks * 0.001,
+    `${heavy.blockDiff} of ${heavy.blocks} 4x4 blocks differ (allowed ${Math.round(heavy.blocks * 0.001)}); `
+      + `pixel by pixel ${heavy.differentPixels} of ${heavy.pixels} differ, ${heavy.bigDiffs} by a lot, worst ${heavy.worstDiff}`
+      + `${heavy.firstDiff ? ', first at ' + JSON.stringify(heavy.firstDiff) + ' (one go, slices)' : ''}; ${heavy.inkedPixels} inked; ${heavy.sizes}; `
+      + `as blitted to the screen ${heavy.shownDiff} pixels differ (not judged: the existing frozen-copy blit)`);
+  check('a zoom shows the last picture scaled while the new one is painted',
+    heavy.zoomStandIn && heavy.zoomStandInHasInk > 1000 && heavy.zoomCopyCurrent && heavy.zoomWholePaints === 0 && heavy.zoomFreezes === 0,
+    `stand-in ${heavy.zoomStandIn} with ${heavy.zoomStandInHasInk} inked pixels, ${heavy.zoomFrames} frames, `
+      + `${heavy.zoomWholePaints} whole paint(s), ${heavy.zoomFreezes} freeze(s), copy current after: ${heavy.zoomCopyCurrent}`);
+  check('something being dragged is painted at once, and that paint is kept as the frozen copy',
+    !heavy.dragBuilt && heavy.dragWholePaints === 1 && heavy.dragCopyCurrent,
+    `built in slices ${heavy.dragBuilt}, ${heavy.dragWholePaints} whole paint(s), copy current ${heavy.dragCopyCurrent}`);
+  check('an idle rebuild asked for mid-way does not paint the whole board',
+    heavy.warmDuringBuild.midBuild && heavy.warmDuringBuild.freezes === 0,
+    `mid-build ${heavy.warmDuringBuild.midBuild}, freezes ${heavy.warmDuringBuild.freezes}`);
+  check('a board below the line is painted in one go, as before',
+    !heavy.lightBuilt && heavy.lightWholePaints === 1, `built in slices ${heavy.lightBuilt}, ${heavy.lightWholePaints} whole paint(s)`);
+
   /* ---- what a busy board costs while you write on it ---- */
   const busy = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;

@@ -224,6 +224,7 @@ export class Surface {
    */
   touch() {
     this._liveRev = (this._liveRev || 0) + 1;
+    this._liveAt = performance.now();
     this.invalidate();
   }
 
@@ -556,6 +557,210 @@ export class Surface {
     return { canvas: c, key, rest: this.freezeRest(), cam: { x: this.cam.x, y: this.cam.y } };
   }
 
+  /*
+   * Very full boards.
+   *
+   * Painting a board means handing every object on it to the graphics card, and the card then
+   * draws them all before the screen can show anything else. On a few thousand strokes that is a
+   * blink. On fifteen thousand - an ink-wash painting made of washes laid over washes - it was
+   * seconds on a phone, all of it in one piece: the app could not take a single touch meanwhile,
+   * and Android offered to close it. Opening the board, every zoom and the settle after every pan
+   * each paid that, and the idle rebuild of the frozen copy paid it a second time straight after.
+   *
+   * So a board this full is painted a slice at a time: a few hundred objects a frame into a
+   * picture of its own, while the screen keeps showing the last finished picture moved and scaled
+   * to where the camera now is (or, on a board just opened, the part painted so far). When the
+   * last slice is in, that picture becomes the frozen copy and the screen blits it. Every frame in
+   * between is short, so touches, pinches and the back button are answered all the way through.
+   *
+   * Only the camera and content changing go this way. Something being dragged, resized or rotated
+   * changes on every pointer move and has to be seen moving, so those frames paint at once as they
+   * always have - and that one paint is then kept as the frozen copy rather than painted again.
+   * Boards below HEAVY objects never reach any of this.
+   */
+  static HEAVY = 3000;           // objects on the board before any of this applies
+  static HEAVY_VISIBLE = 1500;   // and in view: zoomed into a corner, a full board is a light one
+  static HEAVY_SLICE = 300;      // most objects painted in one frame
+  static HEAVY_MS = 8;           // and no more than this long spent handing them over
+
+  _isHeavy() { return !this.noProgressive && this.store.doc.order.length >= Surface.HEAVY; }
+
+  /** Everything in view, in the order drawScene() paints it, with the sheet each belongs to (-1 for none). */
+  _paintOrder(w, h) {
+    const cam = this.cam;
+    const view = cam.viewport(w, h);
+    const pad = 64 / cam.z;
+    const vbox = { x: view.x - pad, y: view.y - pad, w: view.w + pad * 2, h: view.h + pad * 2 };
+    const objs = this.store.doc.objects, pages = this.store.doc.pages;
+    const visible = [];
+    for (const id of this.store.doc.order) {
+      const o = objs[id];
+      if (o && boxesIntersect(vbox, worldBounds(o))) visible.push(o);
+    }
+    if (!pages.length) return { items: visible.map((o) => [o, -1]), rects: [] };
+    const rects = pageRects(pages);
+    const buckets = rects.map(() => []);
+    const loose = [];
+    for (const o of visible) {
+      const i = pageIndexForBoxIn(rects, boundsOf(o));
+      if (i >= 0) buckets[i].push(o); else loose.push(o);
+    }
+    const items = loose.map((o) => [o, -1]);
+    buckets.forEach((b, i) => { for (const o of b) items.push([o, i]); });
+    return { items, rects };
+  }
+
+  /** Paint items[from..to) of a _paintOrder() list, each sheet's ink clipped to its sheet. */
+  _paintRun(g, order, from, to, onload) {
+    let i = from;
+    while (i < to) {
+      const page = order.items[i][1];
+      let j = i;
+      while (j < to && order.items[j][1] === page) j++;
+      if (page >= 0) {
+        const r = order.rects[page];
+        g.save(); g.beginPath(); g.rect(r.x, r.y, r.w, r.h); g.clip();
+      }
+      for (let k = i; k < j; k++) drawObject(g, order.items[k][0], onload, this.editing);
+      if (page >= 0) g.restore();
+      i = j;
+    }
+  }
+
+  /** A full-size canvas kept for one purpose, made again only when the screen changes size. */
+  _ownCanvas(name) {
+    const bw = Math.max(1, Math.round(this.width * this.dpr)), bh = Math.max(1, Math.round(this.height * this.dpr));
+    let c = this[name];
+    if (!c || c.width !== bw || c.height !== bh) {
+      c = document.createElement('canvas');
+      c.width = bw; c.height = bh;
+      this[name] = c;
+    }
+    return c;
+  }
+
+  /** Copy one picture over another, pixel for pixel. */
+  _blit(from, to) {
+    const g = to.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, to.width, to.height);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(from, 0, 0);
+  }
+
+  /**
+   * Remember a finished picture of a very full board, and where the camera was for it, so it can
+   * stand in - moved and scaled - while the next one is painted. A copy of its own: the frozen
+   * copy's canvases are reused and repainted as the board moves.
+   */
+  _keepShown(ink) {
+    if (!ink || !ink.cam || !this._isHeavy()) return;
+    const c = this._ownCanvas('_shownCanvas');
+    if (ink.canvas.width !== c.width || ink.canvas.height !== c.height) return;
+    this._blit(ink.canvas, c);
+    this._shown = { canvas: c, cam: { x: ink.cam.x, y: ink.cam.y, z: this.cam.z }, doc: this.store.doc.id, dpr: this.dpr };
+  }
+
+  /** The remembered picture, if it is of this board at this screen size. */
+  _shownFor(ctx) {
+    const s = this._shown;
+    return s && s.doc === this.store.doc.id && s.dpr === (this.dpr || 1)
+      && s.canvas.width === ctx.canvas.width && s.canvas.height === ctx.canvas.height ? s : null;
+  }
+
+  /** The board was just painted on screen in full (overlays not yet on top): that is the frozen copy. */
+  _snapshotScreen() {
+    const c = this._ownCanvas('_inkCanvas');
+    if (this.canvas.width !== c.width || this.canvas.height !== c.height) return;
+    this._blit(this.canvas, c);
+    this._ink = { canvas: c, key: this.freezeKey(), rest: this.freezeRest(), cam: { x: this.cam.x, y: this.cam.y } };
+    this._keepShown(this._ink);
+  }
+
+  /**
+   * Paint a very full board a slice at a time. Returns false when the board is not that full, or
+   * the frame has to be painted at once (something is being dragged), and the caller paints
+   * normally. See the note above HEAVY.
+   */
+  _paintHeavy(ctx, w, h) {
+    if (!this._isHeavy() || this._fades.size || this.showsGreeting()) { this._build = null; return false; }
+    if (performance.now() - (this._liveAt ?? -1e9) < 250) { this._build = null; return false; }
+    const cam = this.cam, d = this.dpr || 1, key = this.freezeKey();
+    let b = this._build;
+    const fresh = !b || b.key !== key;
+    if (b && b.key !== key) {
+      // The camera moved before the picture was finished. On a board just opened there is no older
+      // picture to stand in, so the part painted so far does, moved along with the camera.
+      if (!this._shownFor(ctx) && b.i > 0) {
+        const c = this._ownCanvas('_shownCanvas');
+        this._blit(b.canvas, c);
+        this._shown = { canvas: c, cam: { ...b.cam }, doc: this.store.doc.id, dpr: d };
+      }
+      b = this._build = null;
+    }
+    if (!b) {
+      const order = this._paintOrder(w, h);
+      if (order.items.length < Surface.HEAVY_VISIBLE) return false;
+      const canvas = this._ownCanvas('_buildCanvas');
+      const g = canvas.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, canvas.width, canvas.height);
+      this.screenTransform(g);
+      this._paintPaper(g, w, h, this.store.doc.pages);
+      b = this._build = { key, rest: this.freezeRest(), cam: { x: cam.x, y: cam.y, z: cam.z }, order, i: 0, canvas, g, frames: 0 };
+    }
+    // a picture that finishes decoding while this is under way: start again, so it is in it
+    const onload = () => { this._build = null; this._ink = null; this.invalidate(); };
+    const t0 = performance.now();
+    let n = 0;
+    b.g.setTransform(d * cam.z, 0, 0, d * cam.z, d * cam.x, d * cam.y);
+    // A frame that has just moved the camera paints nothing yet: in a pinch or a fling that is every
+    // frame, and each would be thrown away by the next. The picture standing in is enough meanwhile.
+    while (!fresh && b.i < b.order.items.length && n < Surface.HEAVY_SLICE && performance.now() - t0 < Surface.HEAVY_MS) {
+      const end = Math.min(b.order.items.length, b.i + 50);
+      this._paintRun(b.g, b.order, b.i, end, onload);
+      n += end - b.i; b.i = end;
+    }
+    b.frames++;
+    if (this._build !== b) return false;            // an image arrived mid-slice; paint normally this frame
+    if (b.i >= b.order.items.length) {
+      // done: this picture is the frozen copy now, and the screen shows it
+      const c = this._ownCanvas('_inkCanvas');
+      this._blit(b.canvas, c);
+      this._ink = { canvas: c, key, rest: b.rest, cam: { x: b.cam.x, y: b.cam.y } };
+      this._keepShown(this._ink);
+      this._build = null;
+      this.heavyBuilds = (this.heavyBuilds || 0) + 1;
+      this.lastHeavyFrames = b.frames;
+      // pixel for pixel: at 125% scaling w x dpr is not a whole number, and a scaled copy would soften every edge
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(c, 0, 0);
+      ctx.restore();
+      return true;
+    }
+    this.dirty = true;                               // keep the frames coming until it is finished
+    const shown = this._shownFor(ctx);
+    if (shown) {
+      // the last finished picture, moved and scaled to where the camera is now, on fresh paper
+      this._paintPaper(ctx, w, h, this.store.doc.pages);
+      const k = cam.z / shown.cam.z;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(shown.canvas, d * (cam.x - shown.cam.x * k), d * (cam.y - shown.cam.y * k), shown.canvas.width * k, shown.canvas.height * k);
+      ctx.restore();
+    } else {
+      // a board just opened: what has been painted so far
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(b.canvas, 0, 0);
+      ctx.restore();
+    }
+    return true;
+  }
+
   /**
    * Take the photograph before it is needed.
    *
@@ -589,6 +794,8 @@ export class Surface {
       // Something is being drawn: the live path owns the copy and builds its
       // own. Stepping in here would repaint the board underneath a moving pen.
       if (this.wet || this.laser.length || this.ghosts.length) return;
+      // A very full board builds its copy a slice a frame; a rebuild here would do it all in one go.
+      if (this._build) return;
       const key = this.freezeKey();
       if (this._ink && this._ink.key === key) return;
       this._ink = this._freezeScene(key);
@@ -695,7 +902,7 @@ export class Surface {
         clearTimeout(this._slideSettle);
         this._slideSettle = setTimeout(() => {
           this.slideSettles = (this.slideSettles || 0) + 1;
-          if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._ink = null; this.invalidate(); }
+          if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._keepShown(this._ink); this._ink = null; this.invalidate(); }
         }, 300);
       }
       this.screenTransform();
@@ -740,8 +947,11 @@ export class Surface {
       clearTimeout(this._slideSettle);
       this._slideSettle = setTimeout(() => {
         this.slideSettles = (this.slideSettles || 0) + 1;
-        if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._ink = null; this.invalidate(); }
+        if (this._ink && this._ink.slid && this._ink.key === this.freezeKey()) { this._keepShown(this._ink); this._ink = null; this.invalidate(); }
       }, 300);
+    } else if (this._paintHeavy(ctx, w, h)) {
+      // a very full board, painted a slice a frame - see _paintHeavy()
+      this._painted = true;
     } else {
       /*
        * A late-decoding image has to drop the frozen copy as well as ask for a
@@ -751,6 +961,9 @@ export class Surface {
        */
       this.drawScene(ctx, w, h, () => { this._ink = null; this.invalidate(); });
       this._painted = true;
+      // On a very full board the picture just painted IS the frozen copy: keep it, rather than have the
+      // idle rebuild paint every object a second time a moment later.
+      if (this._isHeavy()) this._snapshotScreen();
     }
 
     /*
@@ -767,7 +980,7 @@ export class Surface {
 
     // The board is drawn and nothing is in flight: a good moment to have the
     // frozen copy ready for whatever comes next. See warmFreeze().
-    if (!this.wet && !this.laser.length && !this.ghosts.length
+    if (!this.wet && !this.laser.length && !this.ghosts.length && !this._build
         && (!this._ink || this._ink.key !== this.freezeKey())) this.warmFreeze();
 
     // ---- screen-space overlays (CSS pixels) ----
