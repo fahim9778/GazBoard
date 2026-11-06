@@ -2249,6 +2249,116 @@ async function run(win, app) {
     pan.strokeAfterStrandedPointer);
   check('the edge auto-pan setting disables it', pan.offVel === null);
 
+  /* ---- two hands on a big touch screen: a smart board ---- */
+  /*
+   * On a smart board everything is a finger, and a second touch used to mean
+   * pinch whatever was going on: the other hand steadying the writer, or a
+   * student writing further along, and the stroke vanished while the board
+   * zoomed. A pinch is two fingers put down together; a touch arriving after
+   * the first finger has plainly started writing is left out, and a hand lying
+   * flat never draws or zooms. Phones and tablets put both fingers down
+   * together, so their pinch is checked here as well.
+   */
+  const hands = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    a.newBoard(true); a.setTool('pen');
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    const rect = sf.canvas.getBoundingClientRect();
+    const ev = (id, x, y, b, size) => ({ pointerId: id, pointerType: 'touch', button: 0, buttons: b, pressure: b ? 0.5 : 0,
+      clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, width: size || 20, height: size || 20 });
+    const strokes = () => a.store.objects.filter((o) => o.type === 'stroke');
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const reset = () => { it.pinch = null; it.action = null; it.actionId = null; it.pointers.clear(); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1; };
+    const r = {};
+
+    // 1. a finger writing, and another touch landing further along: the writing carries on, nothing zooms
+    reset(); a.store.clear();
+    const late0 = it.lateTouchesIgnored || 0;
+    it.onDown(ev(31, 300, 300, 1)); for (let k = 1; k <= 8; k++) it.onMove(ev(31, 300 + k * 10, 300 + (k % 2) * 6, 1));
+    it.onDown(ev(32, 700, 420, 1));
+    for (let k = 1; k <= 8; k++) { it.onMove(ev(32, 700 + k * 10, 420 + k * 4, 1)); it.onMove(ev(31, 380 + k * 10, 300 + (k % 2) * 6, 1)); }
+    it.onUp(ev(32, 780, 452, 0)); it.onUp(ev(31, 460, 300, 0));
+    r.late = { strokes: strokes().length, points: strokes()[0] ? strokes()[0].points.length : 0, zoom: sf.cam.z, pinch: !!it.pinch,
+      ignored: (it.lateTouchesIgnored || 0) - late0, rightmost: strokes()[0] ? Math.round(strokes()[0].bbox.x + strokes()[0].bbox.w) : null };
+
+    // 2. the same with the finger held still a moment first (writing a dot, thinking): still not a pinch
+    reset(); a.store.clear();
+    it.onDown(ev(33, 300, 300, 1)); await wait(380);
+    it.onDown(ev(34, 420, 300, 1)); it.onMove(ev(34, 520, 300, 1)); it.onMove(ev(33, 310, 304, 1)); it.onMove(ev(33, 330, 306, 1));
+    it.onUp(ev(34, 520, 300, 0)); it.onUp(ev(33, 330, 306, 0));
+    r.held = { strokes: strokes().length, zoom: sf.cam.z, pinch: !!it.pinch };
+
+    // 3. a phone pinch: two fingers down together, apart - zooms, as always, and leaves no ink
+    reset(); a.store.clear();
+    it.onDown(ev(35, 400, 300, 1)); it.onMove(ev(35, 402, 300, 1));
+    it.onDown(ev(36, 500, 300, 1));
+    const pinchStarted = !!it.pinch;
+    for (let k = 1; k <= 6; k++) { it.onMove(ev(35, 400 - k * 15, 300, 1)); it.onMove(ev(36, 500 + k * 15, 300, 1)); }
+    it.onUp(ev(36, 590, 300, 0)); it.onUp(ev(35, 310, 300, 0));
+    r.pinch = { started: pinchStarted, zoom: +sf.cam.z.toFixed(3), strokes: strokes().length };
+
+    // 4. a hand lying flat beside a writing finger, and a hand lying flat on its own
+    reset(); a.store.clear();
+    it.onDown(ev(37, 300, 300, 1)); it.onMove(ev(37, 310, 300, 1));
+    it.onDown(ev(38, 360, 380, 1, 160));                      // within the pinch window, but a palm
+    for (let k = 2; k <= 10; k++) { it.onMove(ev(37, 300 + k * 10, 300 + (k % 2) * 5, 1)); it.onMove(ev(38, 360 + k, 380, 1, 160)); }
+    it.onUp(ev(38, 370, 380, 0, 160)); it.onUp(ev(37, 400, 300, 0));
+    r.palmBeside = { strokes: strokes().length, zoom: sf.cam.z, pinch: !!it.pinch };
+    reset(); a.store.clear();
+    const palms0 = it.palmsIgnored || 0;
+    it.onDown(ev(39, 600, 500, 1, 200)); for (let k = 1; k <= 6; k++) it.onMove(ev(39, 600 + k * 12, 500, 1, 200)); it.onUp(ev(39, 672, 500, 0, 200));
+    r.palmAlone = { strokes: strokes().length, ignored: (it.palmsIgnored || 0) - palms0 };
+    // and a palm down first, then the finger writes
+    reset(); a.store.clear();
+    it.onDown(ev(40, 600, 600, 1, 180));
+    it.onDown(ev(41, 300, 300, 1)); for (let k = 1; k <= 8; k++) it.onMove(ev(41, 300 + k * 10, 300, 1));
+    it.onUp(ev(41, 380, 300, 0)); it.onUp(ev(40, 600, 600, 0, 180));
+    r.palmFirst = { strokes: strokes().length, zoom: sf.cam.z };
+
+    // 5. the hand tool: one finger panning, joined by a second - a zoom, as it always was
+    reset(); a.store.clear(); a.setTool('hand');
+    it.onDown(ev(42, 400, 300, 1)); for (let k = 1; k <= 8; k++) it.onMove(ev(42, 400 + k * 10, 300, 1));
+    await wait(350);
+    it.onDown(ev(43, 600, 300, 1));
+    r.handPinch = !!it.pinch;
+    for (let k = 1; k <= 5; k++) { it.onMove(ev(43, 600 + k * 15, 300, 1)); }
+    it.onUp(ev(43, 675, 300, 0)); it.onUp(ev(42, 480, 300, 0));
+    r.handZoomed = +sf.cam.z.toFixed(3);
+
+    // 6. the eraser rubbing with a finger, and another touch: the rub carries on
+    reset(); a.store.clear(); a.setTool('pen');
+    it.onDown(ev(44, 200, 600, 1)); for (let k = 1; k <= 30; k++) it.onMove(ev(44, 200 + k * 10, 600, 1)); it.onUp(ev(44, 500, 600, 0));
+    const inkBefore = strokes().reduce((n, o) => n + o.points.length, 0);
+    a.setTool('eraser'); reset();
+    it.onDown(ev(45, 200, 600, 1)); for (let k = 1; k <= 5; k++) it.onMove(ev(45, 200 + k * 10, 600, 1));
+    it.onDown(ev(46, 800, 200, 1));
+    for (let k = 6; k <= 30; k++) it.onMove(ev(45, 200 + k * 10, 600, 1));
+    const rubbing = it.action && it.action.type === 'erase';
+    it.onUp(ev(46, 800, 200, 0)); it.onUp(ev(45, 500, 600, 0));
+    r.erase = { pointsBefore: inkBefore, pointsAfter: strokes().reduce((n, o) => n + o.points.length, 0), rubbingThrough: rubbing, zoom: sf.cam.z };
+
+    reset(); a.store.clear(); a.setTool('select');
+    return r;
+  `);
+  check('a finger writing on a big touch screen keeps writing when another touch lands further along',
+    hands.late.strokes === 1 && hands.late.zoom === 1 && !hands.late.pinch && hands.late.ignored === 1 && hands.late.rightmost >= 455,
+    JSON.stringify(hands.late) + ' (wanted 1 stroke reaching about 460px, zoom 1, no pinch, 1 touch left out)');
+  check('the same when the finger had been held still a moment first',
+    hands.held.strokes === 1 && hands.held.zoom === 1 && !hands.held.pinch, JSON.stringify(hands.held));
+  check('two fingers put down together still pinch-zoom, as on a phone, and leave no ink',
+    hands.pinch.started && hands.pinch.zoom > 1.2 && hands.pinch.strokes === 0, JSON.stringify(hands.pinch));
+  check('a hand lying flat beside the writing finger neither zooms nor stops the writing',
+    hands.palmBeside.strokes === 1 && hands.palmBeside.zoom === 1 && !hands.palmBeside.pinch, JSON.stringify(hands.palmBeside));
+  check('a hand lying flat on its own leaves no mark',
+    hands.palmAlone.strokes === 0 && hands.palmAlone.ignored === 1, JSON.stringify(hands.palmAlone));
+  check('and a finger writing after a palm has landed writes normally',
+    hands.palmFirst.strokes === 1 && hands.palmFirst.zoom === 1, JSON.stringify(hands.palmFirst));
+  check('a finger panning with the hand tool, joined by a second, still zooms',
+    hands.handPinch && hands.handZoomed !== 1, `pinch ${hands.handPinch}, zoom ${hands.handZoomed}`);
+  check('a finger rubbing out keeps rubbing when another touch lands',
+    hands.erase.rubbingThrough && hands.erase.zoom === 1 && hands.erase.pointsBefore > 0 && hands.erase.pointsAfter < hands.erase.pointsBefore / 2,
+    JSON.stringify(hands.erase) + ' (wanted the rub still going after the second touch, the line rubbed, no zoom)');
+
   /* ---- a palm on the glass, and a reversal in a letter ---- */
   const hand = await js(`
     const a = window.app, it = a.interaction, sf = a.surface;
@@ -14416,6 +14526,26 @@ module.exports.run = async (win, app) => {
             .map((n) => (n.textContent || '').trim()).filter(Boolean);
           a.hideMenus();
           return labels;
+        })(),
+        // what lives behind + and ⋯ lights its button up, on the tap that chose it
+        lights: (() => {
+          const add = bar.querySelector('[data-pop="add"]'), more = bar.querySelector('[data-pop="more"]');
+          const lit = () => ({ add: add.classList.contains('active'), more: more.classList.contains('active') });
+          const toolWas = a.tool, out = {};
+          a.setTool('pen'); out.pen = lit();
+          for (const tool of ['note', 'text', 'shape', 'emoji']) { a.setTool(tool); out[tool] = lit(); a.hideMenus(); }
+          // and inside the + menu, the item in hand is marked
+          a.setTool('note');
+          add.click();
+          out.noteMarked = [...document.querySelectorAll('.pop .menu .menu-item.active-mode')].map((n) => n.textContent.trim());
+          a.hideMenus();
+          a.setTool('pen');
+          a.toggleRuler(); out.ruler = lit();
+          a.hideRuler(); out.rulerHidden = lit();
+          a.setTool('select'); out.select = lit();
+          a.setTool('laser'); out.laser = lit();
+          a.setTool(toolWas === 'select' ? 'select' : toolWas);
+          return out;
         })()
       };
     `);
@@ -14526,6 +14656,13 @@ module.exports.run = async (win, app) => {
   const withKeyboard = onPhone.find((p) => p.label === 'phone with keyboard');
   const movedToTheTop = !!withKeyboard && withKeyboard.zoombar.top < 120;
   if (phoneBar) {
+    const L = phoneBar.lights || {};
+    check('on the phone bar, + lights up while a sticky note, text, shape, emoji or the ruler is in hand, and goes out again',
+      L.pen && !L.pen.add && ['note', 'text', 'shape', 'emoji'].every((k) => L[k] && L[k].add && !L[k].more)
+        && L.ruler && L.ruler.add && L.rulerHidden && !L.rulerHidden.add && (L.noteMarked || []).length === 1 && /Sticky note/.test(L.noteMarked[0]),
+      JSON.stringify(L));
+    check('and ⋯ lights up for select and the laser, which live behind it',
+      L.select && L.select.more && !L.select.add && L.laser && L.laser.more, JSON.stringify({ select: L.select, laser: L.laser }));
     check('the phone gets a compact toolbar, not the desktop tray squeezed',
       phoneBar.compact && phoneBar.buttons <= 10,
       `${phoneBar.buttons} buttons: ${phoneBar.order.join(' ')}`);
@@ -18392,6 +18529,96 @@ module.exports.run = async (win, app) => {
       r.box && r.t37.arm === 37 && r.t37.reading === 37 && /143/.test(r.t37.outer || '') && r.t250.arm === 180 && r.shownAfter250 === '180' &&
         r.tNeg.arm === 0 && r.tJunk.arm === 0 && r.boxOnRuler === false,
       `box offered: ${r.box}; typed 37 → ${JSON.stringify(r.t37)} (wanted arm 37, reading 37, outer 143°); 250 → ${JSON.stringify(r.t250)} then box shows "${r.shownAfter250}" (wanted 180); -5 → ${JSON.stringify(r.tNeg)} (wanted 0); "abc" → ${JSON.stringify(r.tJunk)} (wanted unchanged 0); box on a straight ruler: ${r.boxOnRuler} (wanted false)`);
+  }
+
+  /* ---- the tray's ruler button lights up on the click that shows the ruler, and goes out with the ✕ ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      if (a.ruler.visible) a.toggleRuler();
+      const btn = document.querySelector('#toolbar .tool[data-cmd="ruler"]');
+      if (!btn) return { noButton: true };
+      const out = { before: btn.classList.contains('active') };
+      btn.click();                                   // and nothing else: no extra sync, no other tap
+      out.afterShow = btn.classList.contains('active'); out.visible = a.ruler.visible;
+      a.hideRuler();
+      out.afterHide = btn.classList.contains('active'); out.hidden = !a.ruler.visible;
+      // the text and sticky note buttons light on their first click too
+      const text = document.querySelector('#toolbar .tool[data-tool="text"]'), note = document.querySelector('#toolbar .tool[data-tool="note"]');
+      a.setTool('pen');
+      text.click(); out.textLit = text.classList.contains('active');
+      note.click(); out.noteLit = note.classList.contains('active') && !text.classList.contains('active');
+      a.hideMenus(); a.setTool('select');
+      return out;`);
+    check('the tray\'s ruler button lights up on the very click that shows the ruler, and the ruler\'s ✕ puts it out',
+      !r.noButton && !r.before && r.afterShow && r.visible && !r.afterHide && r.hidden, JSON.stringify(r));
+    check('and the text and sticky note buttons light up on their first click',
+      r.textLit && r.noteLit, JSON.stringify({ text: r.textLit, note: r.noteLit }));
+  }
+
+  /* ---- every kind of ruler has a ✕ beside its ⋯, and Hide ruler in its menu ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+      const it = a.interaction, sf = a.surface, I = it.constructor;
+      const P = await import('app://board/js/ui/popover.js');
+      const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'black'); a.setTool('pen'); a.notePenSeen();
+      sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
+      const kindWas = a.settings.rulerKind;
+      // finger-sized controls or mouse-sized ones, whatever this machine's own pointer is
+      const coarseAs = (on) => Object.defineProperty(it, 'coarsePointer', { value: on, configurable: true });
+      const cv = sf.canvas.getBoundingClientRect();
+      const strokes = () => a.store.objects.filter((o) => o.type === 'stroke').length;
+      // a ruler-space point (screen pixels, along and across the ruler) to a point on the screen
+      const toScreen = (u, v) => { const { c, angle } = it.rulerRect(); return { x: c.x + u * Math.cos(angle) - v * Math.sin(angle), y: c.y + u * Math.sin(angle) + v * Math.cos(angle) }; };
+      const spots = (kind) => {
+        if (kind === 'ruler') { const { len, thick } = it.rulerRect(); const mx = -len / 2 + I.MENU_AT; return { menu: toScreen(mx, thick / 2), close: toScreen(mx + I.closeGap(it.coarsePointer), thick / 2) }; }
+        const C = kind === 'protractor' ? it.protControls() : it.triControls();
+        return { menu: toScreen(C.menu.u, C.menu.v), close: toScreen(C.close.u, C.close.v) };
+      };
+      const ev = (p, type, b) => ({ pointerId: 61, pointerType: type, button: 0, buttons: b, pressure: b ? 0.5 : 0,
+        clientX: cv.left + p.x, clientY: cv.top + p.y, shiftKey: false, altKey: false, width: 18, height: 18 });
+      const show = (kind) => { if (a.ruler.visible) a.toggleRuler(); a.settings.rulerKind = kind; a.toggleRuler(); a.ruler.angle = 0.35; sf.invalidate(); sf.draw(); };
+      const out = {};
+      for (const kind of ['ruler', 'set45', 'set60', 'protractor']) {
+        for (const [type, coarse] of [['pen', false], ['touch', true], ['mouse', false]]) {
+          coarseAs(coarse);
+          show(kind);
+          const s = spots(kind);
+          const zones = { menu: it.rulerZone(s.menu), close: it.rulerZone(s.close) };
+          const ink0 = strokes();
+          it.action = null; it.pointers.clear();
+          it.onDown(ev(s.close, type, 1)); it.onUp(ev(s.close, type, 0));
+          out[kind + '/' + type] = { zones, hidden: !a.ruler.visible, ink: strokes() - ink0, menuOpen: !!document.querySelector('.ruler-menu'),
+            gap: Math.round(Math.hypot(s.close.x - s.menu.x, s.close.y - s.menu.y)) };
+          P.closePopover();
+        }
+        // the ⋯ still opens the menu, and Hide ruler in it puts the ruler away
+        coarseAs(false);
+        show(kind);
+        const s = spots(kind);
+        it.action = null; it.pointers.clear();
+        it.onDown(ev(s.menu, 'mouse', 1)); it.onUp(ev(s.menu, 'mouse', 0)); await wait(60);
+        const menuOpened = !!document.querySelector('.ruler-menu');
+        const stillShowing = a.ruler.visible;
+        document.querySelector('.ruler-menu [data-ruler-hide]')?.click(); await wait(60);
+        out[kind + '/menu'] = { menuOpened, stillShowing, hiddenByMenu: !a.ruler.visible, menuClosed: !document.querySelector('.ruler-menu') };
+        // and the + menu brings it back, the same kind
+        a.command('ruler');
+        out[kind + '/back'] = { visible: a.ruler.visible, kind: a.ruler.kind };
+        if (a.ruler.visible) a.toggleRuler();
+      }
+      delete it.coarsePointer; a.settings.rulerKind = kindWas; it.action = null; it.pointers.clear();
+      a.store.clear(); a.newBoard(true);
+      return out;`);
+    for (const kind of ['ruler', 'set45', 'set60', 'protractor']) {
+      const ok = ['pen', 'touch', 'mouse'].every((ty) => { const o = r[kind + '/' + ty]; return o && o.zones.menu === 'menu' && o.zones.close === 'close' && o.hidden && o.ink === 0 && !o.menuOpen && o.gap === (ty === 'touch' ? 34 : 26); });
+      check(`the ${kind === 'ruler' ? 'ruler' : kind === 'protractor' ? 'protractor' : kind === 'set45' ? '45° set square' : '30°/60° set square'} has a ✕ beside its ⋯ that puts it away with one tap - pen, finger or mouse - and leaves no ink`,
+        ok, JSON.stringify({ pen: r[kind + '/pen'], touch: r[kind + '/touch'], mouse: r[kind + '/mouse'] }));
+      const m = r[kind + '/menu'], b = r[kind + '/back'];
+      check(`its ⋯ still opens the settings, with Hide ruler at the bottom, and the + menu brings it back (${kind})`,
+        m && m.menuOpened && m.stillShowing && m.hiddenByMenu && m.menuClosed && b && b.visible && b.kind === kind,
+        JSON.stringify({ menu: m, back: b }));
+    }
   }
 
   /* ---- the page strip: a picture of every page, click to go there, and only a changed page is redrawn ---- */

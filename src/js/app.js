@@ -2635,6 +2635,11 @@ class App {
       body.appendChild(h('h5', {}, t('Arm angle')));
       body.appendChild(h('div', { class: 'ruler-arm-row' }, box, h('span', {}, '°'), outer));
     }
+    // and putting it away, from right here rather than the + menu
+    const hide = h('button', { type: 'button', class: 'menu-item ruler-hide', 'data-ruler-hide': '1' }, t('Hide ruler'));
+    hide.addEventListener('click', () => this.hideRuler());
+    body.appendChild(h('div', { class: 'menu-sep' }));
+    body.appendChild(hide);
     openPopover(at, body, { key: 'ruler-menu' });
   }
 
@@ -2658,6 +2663,12 @@ class App {
     if (r.y + r.triBase * tall > v.y + v.h * 0.92) r.y = Math.max(v.y + v.h * 0.12, v.y + v.h * 0.92 - r.triBase * tall);
   }
 
+  /** Put the ruler away (its own ✕, and Hide ruler in its ⋯ menu). Showing it again is the + menu, as before. */
+  hideRuler() {
+    closePopover();
+    if (this.ruler.visible) this.toggleRuler();
+  }
+
   toggleRuler() {
     const r = this.ruler;
     r.kind = ['ruler', 'set45', 'set60', 'protractor'].includes(this.settings.rulerKind) ? this.settings.rulerKind : 'ruler';
@@ -2674,6 +2685,8 @@ class App {
         ? t('Ruler on — drag the middle to move it, drag a blue knob at either end to turn it')
         : t('Ruler on — drag the grip in the middle to move it, scroll over it or drag a blue knob to turn it'));
     }
+    // the tray's ruler button lights up (or goes out) on this very tap, not on whatever happens next
+    this.syncUI();
     this.surface.invalidate();
   }
 

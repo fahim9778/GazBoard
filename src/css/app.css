@@ -1643,6 +1643,7 @@ body.presenting #pagestrip { display: none; }
 .ruler-seg { display: flex; flex-wrap: wrap; gap: 6px; }
 .ruler-seg .btn { padding: 6px 10px; font-size: 13px; }
 .ruler-menu input[type="range"] { width: 100%; }
+.ruler-menu .ruler-hide { width: 100%; text-align: left; }
 .ruler-arm-row { display: flex; align-items: center; gap: 6px; }
 .ruler-arm-row .ruler-arm-input { width: 76px; padding: 6px 8px; font-size: 15px; border: 1px solid var(--stroke); border-radius: 6px; background: var(--surface); color: var(--text); }
 .ruler-arm-row .ruler-arm-outer { margin-left: 6px; font-size: 12px; color: var(--text-2); }

@@ -50,6 +50,24 @@ const HOLD_MS = 450;
 const PEN_HOLD_MS = 700;
 const HOLD_SLOP = 11;
 /*
+ * Two hands on one big screen.
+ *
+ * On a smart board everything is a finger - most boards' own pens report as touch too - so
+ * the rule "a second touch means pinch" took a stroke away whenever anything else met the
+ * glass: the other hand steadying the writer, a sleeve, a student writing further along.
+ * The stroke vanished and the board zoomed. A pinch is two fingers put down together; a
+ * second touch that arrives after the first has plainly started writing is not one.
+ *
+ * PINCH_WINDOW / PINCH_TRAVEL: how long, and how far, the first finger may have gone and the
+ * pair still be a pinch. Phones and tablets put both fingers down within a few dozen
+ * milliseconds, well inside this, so pinch-zoom there is untouched.
+ * PALM_SIZE: a contact this wide (CSS pixels, as the screen reports it) is a hand lying on
+ * the glass, not a fingertip, and never draws or zooms. A fingertip reports 10-45.
+ */
+const PINCH_WINDOW = 300;
+const PINCH_TRAVEL = 40;
+const PALM_SIZE = 80;
+/*
  * Holding still, or scribbling in one spot?
  *
  * The slop above only asks how far the pen is from where it started, so a pen
@@ -336,7 +354,14 @@ export class Interaction {
     const sp = this.surface.screenPoint(e);
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (e.pointerType === 'pen') this.app.notePenSeen();
+    // a hand lying on the glass: not a finger, so it neither draws nor zooms (see PALM_SIZE)
+    if (this.isPalm(e)) {
+      try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* never captured */ }
+      this.palmsIgnored = (this.palmsIgnored || 0) + 1;
+      return;
+    }
     this.pointers.set(e.pointerId, { sp, wp, type: e.pointerType });
+    if (this.pointers.size === 1) { this._firstId = e.pointerId; this._firstAt = performance.now(); this._firstLast = sp; this._firstTravel = 0; }
     // Where the board was last touched, for anything later that needs a place
     // and was not given one - Ctrl+V, most of all.
     this.app.boardPoint = { x: wp.x, y: wp.y, at: performance.now() };
@@ -354,6 +379,14 @@ export class Interaction {
       if (this.action && e.pointerType === 'touch' && types.includes('pen')) {
         this.pointers.delete(e.pointerId);
         try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* never captured */ }
+        return;
+      }
+      // A finger that is already writing, and another touch arriving: the other hand, a sleeve,
+      // somebody else at the board. The writing carries on; the newcomer is left out. See PINCH_WINDOW.
+      if (this.lateTouch(e)) {
+        this.pointers.delete(e.pointerId);
+        try { this.canvas.releasePointerCapture?.(e.pointerId); } catch { /* never captured */ }
+        this.lateTouchesIgnored = (this.lateTouchesIgnored || 0) + 1;
         return;
       }
       if (this.action && !types.every((t) => t === 'touch')) this.startSecondaryPan(e, sp);
@@ -425,6 +458,13 @@ export class Interaction {
       if (zone === 'menu') {
         this.action = null; this.actionId = null; this.cancelHold?.();
         this.app.openRulerMenu({ x: e.clientX, y: e.clientY });
+        return;
+      }
+      // the ✕: put it away, there and then
+      if (zone === 'close') {
+        this.action = null; this.actionId = null; this.cancelHold?.();
+        this.pointers.delete(e.pointerId);
+        this.app.hideRuler();
         return;
       }
       // Whichever pointer grabbed the ruler owns it until it lifts, exactly as
@@ -716,6 +756,10 @@ export class Interaction {
     // A palm sliding on the screen therefore dragged the pen's stroke over to
     // the palm - the ink jumped, or looked like it had simply gone missing.
     if (this.actionId != null && e.pointerId !== this.actionId) return;
+    if (e.pointerId === this._firstId && this._firstLast) {
+      this._firstTravel = (this._firstTravel || 0) + Math.hypot(sp.x - this._firstLast.x, sp.y - this._firstLast.y);
+      this._firstLast = sp;
+    }
 
     // the ring is open under a pen that is still down: it follows the pen, and nothing draws
     if (this.action && this.action.type === 'radial') { this.app.radial?.track(e.clientX, e.clientY); return; }
@@ -1539,6 +1583,27 @@ export class Interaction {
       this.actionId = e.pointerId;
       this.surface.invalidate();
     }, e.pointerType === 'pen' ? PEN_HOLD_MS : HOLD_MS);
+  }
+
+  /** A hand lying flat, not a fingertip: far wider than any finger reports. */
+  isPalm(e) {
+    return e.pointerType === 'touch' && Math.max(e.width || 0, e.height || 0) >= PALM_SIZE;
+  }
+
+  /**
+   * A second touch arriving while the first finger is plainly writing - down longer than a
+   * pinch takes to start, or already travelled further. Only ink and the eraser are protected
+   * this way: a finger panning, selecting or dragging that is joined by a second one is
+   * somebody reaching for a zoom, as it always was.
+   */
+  lateTouch(e) {
+    if (e.pointerType !== 'touch') return false;
+    const a = this.action;
+    if (!a || (a.type !== 'draw' && a.type !== 'erase')) return false;
+    if (this.actionId == null || this.actionId !== this._firstId) return false;
+    const first = this.pointers.get(this._firstId);
+    if (!first || first.type !== 'touch') return false;
+    return performance.now() - (this._firstAt || 0) > PINCH_WINDOW || (this._firstTravel || 0) > PINCH_TRAVEL;
   }
 
   /** Whatever this was, it is not a press-and-hold. */
@@ -2646,7 +2711,7 @@ export class Interaction {
       // Only the parts that actually do something say so. The body under a pen
       // draws, and a "move" cursor over it would be the same old lie.
       if (zone === 'rotate' || zone === 'arm') cursor = 'grab';
-      else if (zone === 'menu') cursor = 'pointer';
+      else if (zone === 'menu' || zone === 'close') cursor = 'pointer';
       else if (zone === 'move') cursor = 'move';
       else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
     }
@@ -2912,6 +2977,13 @@ export class Interaction {
   static MOVE_GRIP = { halfLen: 34, pad: 11 };
   /** How far in from the left end the ruler's settings button sits. */
   static MENU_AT = 44;
+  /*
+   * The ✕ that puts the ruler away, right beside its ⋯ - on every kind: the ruler, both set
+   * squares and the protractor. Putting it down used to mean the + menu, every time, and on a
+   * phone that menu is a reach away from the ruler you are looking at. How far apart the two
+   * buttons sit: a fingertip needs a little more room between them than a mouse does.
+   */
+  static closeGap(coarse) { return coarse ? 34 : 26; }
 
   /*
    * The turning knob: how far in from each end it sits, and how big it is.
@@ -3002,6 +3074,7 @@ export class Interaction {
       knobs: [{ u: P[1].u - Math.max(46, h * 0.06 + 46), v: 11 }, { u: P[0].u + 16, v: 14 }],
       grip: { u: cu, v: cv },
       menu: { u: P[0].u + 22, v: Math.min(h - 18, 54) },
+      close: { u: P[0].u + 22 + Interaction.closeGap(this.coarsePointer), v: Math.min(h - 18, 54) },
       readout: { u: cu, v: cv + 30 }
     };
   }
@@ -3012,6 +3085,12 @@ export class Interaction {
     if (this.app.settings.rulerZero === 'up') deg += 90;
     deg = ((deg % 360) + 360) % 360;
     return Math.round(deg) % 360 + '°';
+  }
+
+  /** Which of the two buttons a press is on, if either: the nearer one, so the two never fight over a fingertip between them. */
+  menuOrClose(dMenu, dClose, reach) {
+    if (dMenu >= reach && dClose >= reach) return null;
+    return dClose < dMenu ? 'close' : 'menu';
   }
 
   rulerZone(sp) {
@@ -3034,8 +3113,10 @@ export class Interaction {
       const kx = end * (len / 2 - kb.inset);
       if (Math.hypot(along - kx, perp - thick / 2) < reach) return 'rotate';
     }
-    // the little settings button: shape, which way 0° points, how see-through
-    if (Math.hypot(along - (-len / 2 + Interaction.MENU_AT), perp - thick / 2) < reach) return 'menu';
+    // the little settings button (shape, which way 0° points, how see-through) and the ✕ beside it
+    const mx = -len / 2 + Interaction.MENU_AT, cx = mx + Interaction.closeGap(this.coarsePointer);
+    const btn = this.menuOrClose(Math.hypot(along - mx, perp - thick / 2), Math.hypot(along - cx, perp - thick / 2), reach);
+    if (btn) return btn;
     /*
      * A grip in the middle that moves the ruler whatever is being held.
      *
@@ -3063,7 +3144,8 @@ export class Interaction {
     const v = -dx * Math.sin(angle) + dy * Math.cos(angle);
     const C = this.triControls(), reach = this.coarsePointer ? 24 : 15, z = this.surface.cam.z;
     for (const k of C.knobs) if (Math.hypot(u - k.u, v - k.v) < reach) return 'rotate';
-    if (Math.hypot(u - C.menu.u, v - C.menu.v) < reach) return 'menu';
+    const btn = this.menuOrClose(Math.hypot(u - C.menu.u, v - C.menu.v), Math.hypot(u - C.close.u, v - C.close.v), reach);
+    if (btn) return btn;
     if (Math.abs(u - C.grip.u) < 34 && Math.abs(v - C.grip.v) < 20) return 'move';
     if (this.triInside(u / z, v / z) > -2 / z) return 'body';
     return null;
@@ -3148,6 +3230,7 @@ export class Interaction {
       Rz,
       knobs: [{ u: Rz * 0.6, v: -14 }, { u: -Rz * 0.6, v: -14 }],
       menu: { u: -Rz * 0.44, v: -14 },
+      close: { u: -Rz * 0.44 + Interaction.closeGap(this.coarsePointer), v: -14 },
       grip: { u: 0, v: -Rz * 0.58 },
       readout: { u: 0, v: -Rz * 0.58 + 30 },
       armKnob: Interaction.protAt(arm, Rz + Interaction.PROT_ARM_KNOB)
@@ -3162,7 +3245,8 @@ export class Interaction {
     const C = this.protControls(), reach = this.coarsePointer ? 24 : 15;
     if (Math.hypot(u - C.armKnob.u, v - C.armKnob.v) < reach) return 'arm';
     for (const k of C.knobs) if (Math.hypot(u - k.u, v - k.v) < reach) return 'rotate';
-    if (Math.hypot(u - C.menu.u, v - C.menu.v) < reach) return 'menu';
+    const btn = this.menuOrClose(Math.hypot(u - C.menu.u, v - C.menu.v), Math.hypot(u - C.close.u, v - C.close.v), reach);
+    if (btn) return btn;
     if (Math.abs(u - C.grip.u) < 34 && Math.abs(v - C.grip.v) < 20) return 'move';
     if (v <= 2 && Math.hypot(u, v) <= C.Rz + 2) return 'body';
     return null;
@@ -3578,6 +3662,7 @@ export class Interaction {
     ctx.fillText(this.rulerReadout(angle), 0, thick - 10);
     this.rulerReadoutAt = { u: 0, v: thick - 10, text: this.rulerReadout(angle) };
     drawMenuButton(ctx, -len / 2 + Interaction.MENU_AT, thick / 2, this.coarsePointer);
+    drawCloseButton(ctx, -len / 2 + Interaction.MENU_AT + Interaction.closeGap(this.coarsePointer), thick / 2, this.coarsePointer);
     const kb = Interaction.ROTATE_KNOB;
     const kr = this.coarsePointer ? kb.r + 3 : kb.r;
     for (const end of [1, -1]) {
@@ -3665,6 +3750,7 @@ export class Interaction {
     ctx.strokeStyle = 'rgba(0,0,0,0.42)'; ctx.lineWidth = 1.6;
     for (const dx2 of [-7, 0, 7]) { ctx.beginPath(); ctx.moveTo(C.grip.u + dx2, C.grip.v - 9); ctx.lineTo(C.grip.u + dx2, C.grip.v + 9); ctx.stroke(); }
     drawMenuButton(ctx, C.menu.u, C.menu.v, this.coarsePointer);
+    drawCloseButton(ctx, C.close.u, C.close.v, this.coarsePointer);
     ctx.restore();
   }
 
@@ -3766,6 +3852,7 @@ export class Interaction {
     }
     ctx.textBaseline = 'alphabetic';
     drawMenuButton(ctx, C.menu.u, C.menu.v, this.coarsePointer);
+    drawCloseButton(ctx, C.close.u, C.close.v, this.coarsePointer);
     ctx.restore();
   }
 }
@@ -3779,6 +3866,18 @@ function rulerOpacity(settings) {
 }
 
 /** The ruler's settings button: a small round button with three dots. */
+/** The ✕ that puts the ruler away: the same round white button as ⋯, so the two read as a pair. */
+function drawCloseButton(ctx, x, y, coarse) {
+  const r = coarse ? 12 : 9, k = r * 0.38;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.72)'; ctx.lineWidth = Math.max(1.4, r * 0.16); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x - k, y - k); ctx.lineTo(x + k, y + k); ctx.moveTo(x + k, y - k); ctx.lineTo(x - k, y + k); ctx.stroke();
+  ctx.restore();
+}
+
 function drawMenuButton(ctx, x, y, coarse) {
   const r = coarse ? 12 : 9;
   ctx.save();

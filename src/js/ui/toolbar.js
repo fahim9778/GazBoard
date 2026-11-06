@@ -249,20 +249,20 @@ function initPhoneToolbar(app, bar) {
   add.addEventListener('click', () => {
     const pickTool = (t) => () => { app.setTool(t); app.syncUI(); };
     openPopover(add, h('div', { class: 'menu' },
-      menuItem(t('Sticky note'), 'note', pickTool('note')),
-      menuItem(t('Text'), 'text', pickTool('text')),
+      menuItem(t('Sticky note'), 'note', pickTool('note'), { on: app.tool === 'note' }),
+      menuItem(t('Text'), 'text', pickTool('text'), { on: app.tool === 'text' }),
       menuItem(t('Maths'), 'maths', () => app.command('insert.math')),
       menuItem(t('Formula graph'), 'graph', () => app.command('insert.graph')),
-      menuItem(t('Emoji'), 'emoji', () => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, add, 'emoji'); }),
+      menuItem(t('Emoji'), 'emoji', () => { app.setTool('emoji'); app.syncUI(); openToolPopover(app, add, 'emoji'); }, { on: app.tool === 'emoji' }),
       // Shapes are a family, not one square. The chooser lives in the tool
       // popover, and on a phone there is no shape button to open it from - so
       // picking Shape here opens it, anchored where the finger already is.
-      menuItem(t('Shape'), 'shapes', () => { app.setTool('shape'); app.syncUI(); openToolPopover(app, add, 'shape'); }),
+      menuItem(t('Shape'), 'shapes', () => { app.setTool('shape'); app.syncUI(); openToolPopover(app, add, 'shape'); }, { on: app.tool === 'shape' }),
       // A phone has no Ctrl+V. Holding a finger on bare board opens the same
       // menu with a Paste that lands where you pressed; this is the one for
       // when you would rather not hunt for a clear patch of canvas.
       menuItem(t('Paste'), 'copy', () => app.pasteAt(null)),
-      menuItem(app.ruler.visible ? t('Hide ruler') : t('Ruler'), 'ruler', () => app.command('ruler')),
+      menuItem(app.ruler.visible ? t('Hide ruler') : t('Ruler'), 'ruler', () => app.command('ruler'), { on: app.ruler.visible }),
       h('div', { class: 'menu-sep' }),
       menuItem(t('Picture…'), 'image', () => app.command('insert.image')),
       menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
@@ -278,10 +278,10 @@ function initPhoneToolbar(app, bar) {
   more.addEventListener('click', () => {
     const pickTool = (t) => () => { app.setTool(t); app.syncUI(); };
     openPopover(more, h('div', { class: 'menu' },
-      menuItem(t('Select'), 'select', pickTool('select')),
-      menuItem(t('Lasso select'), 'lasso', pickTool('lasso')),
-      menuItem(t('Move the board'), 'hand', pickTool('pan')),
-      menuItem(t('Laser pointer'), 'laser', pickTool('laser')),
+      menuItem(t('Select'), 'select', pickTool('select'), { on: app.tool === 'select' }),
+      menuItem(t('Lasso select'), 'lasso', pickTool('lasso'), { on: app.tool === 'lasso' }),
+      menuItem(t('Move the board'), 'hand', pickTool('pan'), { on: app.tool === 'pan' }),
+      menuItem(t('Laser pointer'), 'laser', pickTool('laser'), { on: app.tool === 'laser' }),
       h('div', { class: 'menu-sep' }),
       ...teachingItems(app),
       h('div', { class: 'menu-sep' }),
@@ -742,7 +742,7 @@ export function openToolPopover(app, anchor, tool) {
 
 /* ------------------------------------------------------------------ */
 function menuItem(label, iconName, onClick, opts = {}) {
-  const b = h('button', { class: 'menu-item' + (opts.danger ? ' danger' : '') },
+  const b = h('button', { class: 'menu-item' + (opts.danger ? ' danger' : '') + (opts.on ? ' active-mode' : ''), ...(opts.on ? { 'aria-current': 'true' } : {}) },
     h('span', { html: icon(iconName, 17), style: 'display:flex' }),
     h('span', {}, label),
     opts.key ? h('span', { class: 'k' }, opts.key) : null
@@ -908,6 +908,18 @@ export function syncToolbar(app) {
       ? t('Your finger draws — tap to move the board with it instead')
       : t('Your finger moves the board — tap to draw with it instead');
   }
+
+  /*
+   * On the phone bar the sticky note, text, shapes, emoji and the ruler live behind +, and the
+   * pointing tools behind ⋯. Choosing one used to leave the bar looking exactly as before - no
+   * pen lifted, nothing lit - so there was no telling a sticky note was in hand until a tap on
+   * the board dropped one. The button they live behind lights up instead, and so does the item
+   * itself inside the menu.
+   */
+  const addBtn = bar.querySelector('.tool[data-pop="add"]');
+  if (addBtn) addBtn.classList.toggle('active', ['note', 'text', 'shape', 'emoji'].includes(app.tool) || !!app.ruler?.visible);
+  const moreBtn = bar.querySelector('.tool[data-pop="more"]');
+  if (moreBtn) moreBtn.classList.toggle('active', ['select', 'lasso', 'pan', 'laser'].includes(app.tool));
 
   for (const btn of bar.querySelectorAll('.tool')) {
     const t = btn.dataset.tool, c = btn.dataset.cmd;
