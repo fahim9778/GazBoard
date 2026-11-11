@@ -2,7 +2,7 @@
 
 import { uid, bboxOfPoints, clamp, dist, simplify, unionBox } from './util.js';
 import { boundsOf, worldBounds, withAttached, withGroups} from './store.js';
-import { pick, pickAll, inBox, inLasso, strokesAlong, normalizeBox, curtainAt, toLocal } from './hit.js';
+import { pick, pickAll, inBox, inLasso, strokesAlong, normalizeBox, curtainAt, toLocal, outlineAlong, ghost } from './hit.js';
 import { handlePositions, HANDLE, HANDLES, drawShape, inkPaint, linkRectsOf, inQuad } from './render.js';
 import { translateObject, scaleObject, rotateObjectAround, normalizeRect, anchorFor, CURSORS } from './transform.js';
 import { recognize, fitError, MAX_FIT_ERROR } from './recognize.js';
@@ -13,7 +13,7 @@ import { Surface } from './surface.js';
 import { t, currentLanguage } from '../i18n.js';
 import { SHAPE_LABELS } from '../ui/palettes.js';
 import * as PencilSound from './pencilsound.js';
-import { route as connectorRoute, midPoint, bendThrough, targetAt, sameTarget, dotsFor, drawConnector, endBox } from './connectors.js';
+import { route as connectorRoute, midPoint, bendThrough, targetAt, sameTarget, dotsFor, drawConnector, endBox, lineEnds } from './connectors.js';
 
 const TAP_SLOP = 4;
 /*
@@ -181,7 +181,7 @@ export class Interaction {
       if (this._lastDownType === 'pen' && this.action && this.action.type !== 'radial' && !this.app.viewMode) {
         const penId = [...this.pointers.entries()].find(([, p]) => p.type === 'pen')?.[0];
         const sp = this.surface.screenPoint(e), wp = this.surface.cam.toWorld(sp.x, sp.y);
-        if (penId != null && !pick(this.store, wp, 8 / this.surface.cam.z) && !(this.ruler.visible && this.rulerZone(sp))) {
+        if (penId != null && !this.heldThing(wp, 'pen') && !this.inSelection(wp, 12 / this.surface.cam.z) && !(this.ruler.visible && this.rulerZone(sp))) {
           this.discardTapMark();
           this.app.setSelection([]);
           this._boardMenuAt = Date.now();
@@ -500,8 +500,16 @@ export class Interaction {
     // Committing text can restore the pen and clear its selection. A handle
     // pressed before that commit still belongs to the object being edited.
     if (handleSelection) this.app.setSelection([...handleSelection]);
+    /*
+     * ...except the end of a line, under the Line or Arrow tool. The line just drawn stays selected,
+     * so its end handle sits exactly where the next line of a shape begins - and pressing there used
+     * to drag the old line's end about instead of starting the new one (issue #47). With a line tool
+     * in hand, a line's end is where the next line starts; Select is still there to move an end.
+     */
+    const lineFromEnd = tool === 'shape' && !e.altKey && ['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind)
+      && !!this.lineEndNear(wp);
     // a visible handle is always draggable, whatever tool is active
-    if (!this.spaceDown && e.button !== 1 && tool !== 'select' && !this.app.viewMode && this.startHandleGesture(sp, wp, handleKey)) {
+    if (!lineFromEnd && !this.spaceDown && e.button !== 1 && tool !== 'select' && !this.app.viewMode && this.startHandleGesture(sp, wp, handleKey)) {
       this.actionId = e.pointerId;
       this.surface.invalidate();
       return;
@@ -592,7 +600,18 @@ export class Interaction {
         if (this.startMoveOnSelection(wp)) break;
         this.action = { type: 'lasso', pts: [wp] };
         break;
-      case 'shape': this.action = { type: 'shapeDraw', start: wp, cur: wp, shift: e.shiftKey, dismissedMenu }; break;
+      case 'shape': {
+        // A line starts exactly where it is put - or exactly on the end of a line already there,
+        // when it is put within reach of one. Alt draws it loose: no meeting ends, nothing held.
+        const linear = ['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind);
+        const loose = !!e.altKey;
+        const met = linear && !loose ? this.lineEndNear(wp) : null;
+        const start = met || wp;
+        this.action = { type: 'shapeDraw', start, cur: start, shift: e.shiftKey, dismissedMenu, loose };
+        if (loose) { this.action.targetStart = null; this.action.targetEnd = null; }
+        else if (met) this.action.targetStart = null;      // it joins that line, rather than holding whatever box is under it
+        break;
+      }
       case 'emoji': {
         // Landing on something that is already there should pick it up rather
         // than stamp on top of it - the same courtesy notes and text extend.
@@ -873,7 +892,26 @@ export class Interaction {
            * out there, and coming back on starts afresh where the pen re-enters
            * rather than joining across the gap.
            */
-          if (a.view && !this.onScreen(a.view, raw)) { a.blocked = true; return; }
+          if (a.view) {
+            // ...and it stops exactly AT the edge, not at whichever sample last fell inside it: the
+            // crossing is found between that sample and the first one outside, and so is the
+            // point it comes back in at, so a line run off the screen and back meets the edge cleanly
+            if (!this.onScreen(a.view, raw)) {
+              if (!a.offView && a.lastIn) {
+                const edge = this.edgeBetween(a.view, a.lastIn, raw);
+                if (edge && keep(edge)) { a.obj.points.push({ ...edge, p: raw.p }); added = true; }
+              }
+              a.offView = true; a.lastOut = raw; a.blocked = true;
+              return;
+            }
+            if (a.offView) {
+              a.offView = false;
+              this.breakStroke(a); a.blocked = false;
+              const edge = a.lastOut ? this.edgeBetween(a.view, raw, a.lastOut) : null;
+              if (edge && keep(edge)) a.obj.points.push({ ...edge, p: raw.p });
+            }
+            a.lastIn = raw;
+          }
           const cand = this.snapToRuler(raw, a);
           const prev = a.obj.points[a.obj.points.length - 1];
           if (prev && dist(prev, cand) * this.surface.cam.z <= 1.2) return;
@@ -1038,10 +1076,15 @@ export class Interaction {
       }
       case 'shapeDraw': {
         a.cur = wp; a.shift = !!mods.shift;
-        // an arrow being drawn notices what each end lands on
-        if (['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind)) {
+        const linear = ['line', 'arrow', 'doubleArrow'].includes(this.app.settings.shapeKind);
+        if (linear && (mods.alt || a.loose)) { a.loose = true; a.targetStart = null; a.targetEnd = null; break; }
+        if (linear) {
+          // the far end meets a line's end too, when it comes within reach of one
+          const near = this.lineEndNear(wp, a.start);
+          if (near) a.cur = near;
+          // an arrow being drawn notices what each end lands on
           if (a.targetStart === undefined) a.targetStart = this.arrowTarget(a.start);
-          a.targetEnd = this.arrowTarget(wp, a.targetStart);
+          a.targetEnd = near ? null : this.arrowTarget(a.cur, a.targetStart);
         }
         break;
       }
@@ -1401,6 +1444,18 @@ export class Interaction {
   }
 
   /** What an arrow end at world point `wp` would hold on to, never the same thing as `other`. */
+  /** The end of a line already on the board within reach of `wp` (a few screen pixels), if any - never `not` itself. */
+  lineEndNear(wp, not = null) {
+    const reach = (this.coarsePointer ? 16 : 10) / this.surface.cam.z;
+    let best = null, bd = reach;
+    for (const p of lineEnds(this.store)) {
+      if (not && Math.hypot(p.x - not.x, p.y - not.y) < 1e-6) continue;
+      const d = Math.hypot(p.x - wp.x, p.y - wp.y);
+      if (d < bd) { bd = d; best = { x: p.x, y: p.y }; }
+    }
+    return best;
+  }
+
   arrowTarget(wp, other = null, except = null) {
     const t = targetAt(this.store, wp, 8 / this.surface.cam.z, { except, openGroup: this.app.openGroup });
     return t && !sameTarget(t, other) ? t : null;
@@ -1455,8 +1510,25 @@ export class Interaction {
     // could become "pick the object up", which is a question about drawing and
     // panning - so with Select in hand it said no, and the board menu was
     // unreachable under the one tool people most expect it from.
-    const hit = pick(this.store, wp, 8 / this.surface.cam.z);
-    if (!hit) { this.armHoldOnBoard(e, sp, wp); return; }
+    /*
+     * What the finger is actually on.
+     *
+     * A fingertip is far blunter than a pen line, and a drawing is mostly gaps:
+     * holding "on" a doodle usually means holding in the space between its
+     * lines. That space used to count as bare board, so the shortcut ring
+     * opened where the person was trying to pick the drawing up. Three things
+     * now count as being on something: near a line (a finger gets more room
+     * than a pen), anywhere inside a group, and anywhere inside what is already
+     * selected. Only truly empty board gets the ring.
+     */
+    const z = this.surface.cam.z;
+    const tol = (e.pointerType === 'touch' ? 20 : e.pointerType === 'pen' ? 12 : 8) / z;
+    const sel = this.surface.selection;
+    const inSel = this.inSelection(wp, tol);
+    const hit = this.heldThing(wp, e.pointerType);
+    if (!hit && !inSel) { this.armHoldOnBoard(e, sp, wp); return; }
+    // holding inside the selection picks the whole selection up, as it is
+    const keep = inSel || (hit && sel.has(hit.id));
     const eligible = () => this.action && (this.action.type === 'draw' || this.action.type === 'pan'
       || this.action.type === 'shapeDraw'
       || (this.action.type === 'move' && this.action.transient));
@@ -1480,16 +1552,69 @@ export class Interaction {
       this.surface.wet = null;
       this.surface.wetPieces = null;
       this.action = null;
-      this.app.setSelection([hit.id]);
-      if (hit.locked) this.action = { type: 'holdSelect' };
-      else if (!this.startMoveOnSelection(wp)) { this.actionId = null; return; }
+      const locked = !keep && hit.locked;
+      if (!keep) this.app.setSelection([hit.id]);
+      if (locked) this.action = { type: 'holdSelect' };
+      else if (!this.startMoveOnSelection(wp, true)) { this.actionId = null; return; }   // already known to be on it, finger's allowance and all
       this.actionId = this._holdId;
       this.action.holdMenu = true;
       if (document.documentElement?.dataset.platform !== 'android') this.app.showContextMenu(e);
       // A hidden gesture nobody is told about is a gesture nobody uses.
-      this.app.toast(hit.locked ? t('Locked — choose Unlock to resize or move') : t('Selected — drag a handle to resize'), 'check', 1400);
+      this.app.toast(locked ? t('Locked — choose Unlock to resize or move') : t('Selected — drag a handle to resize'), 'check', 1400);
       this.surface.invalidate();
     }, e.pointerType === 'pen' ? PEN_HOLD_MS : HOLD_MS);
+  }
+
+  /**
+   * What a press-and-hold at `wp` is holding, or null for bare board.
+   *
+   * Looked for in widening steps, so the nearest thing wins: on a line (with a
+   * finger's allowance), then anywhere inside a group, then ink close by. That
+   * last step is for a drawing that was never grouped - a face, a doodle - whose
+   * gaps are a finger's width from its lines: holding there picks up the line
+   * nearest the finger. Only board with nothing within about 48 screen pixels
+   * (36 for a pen) counts as empty, and only that opens the ring.
+   */
+  heldThing(wp, type) {
+    const z = this.surface.cam.z;
+    const steps = type === 'touch' ? [20, 34, 48] : type === 'pen' ? [12, 24, 36] : [8];
+    const first = pick(this.store, wp, steps[0] / z);
+    if (first) return first;
+    const g = this.groupAt(wp);
+    if (g) return g;
+    for (const px of steps.slice(1)) { const h = pick(this.store, wp, px / z); if (h) return h; }
+    return null;
+  }
+
+  /** Is `wp` on the current selection's box, give or take `pad`? */
+  inSelection(wp, pad = 0) {
+    const sel = this.surface.selection;
+    if (!sel.size) return false;
+    const b = this.surface.selectionBounds();
+    return !!b && wp.x >= b.x - pad && wp.x <= b.x + b.w + pad && wp.y >= b.y - pad && wp.y <= b.y + b.h + pad;
+  }
+
+  /**
+   * The topmost group whose outline (the box round all its members) holds `wp`.
+   * A group is one thing to the person who made it, gaps and all, so pressing
+   * anywhere inside it is pressing on it. Returns one of its members, or null.
+   */
+  groupAt(wp) {
+    const objs = this.store.doc.objects, order = this.store.doc.order, boxes = new Map();
+    for (const id of order) {
+      const o = objs[id];
+      if (!o || !o.groupId || ghost(o)) continue;
+      const b = worldBounds(o), g = boxes.get(o.groupId);
+      if (!g) boxes.set(o.groupId, { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h, top: o });
+      else { g.x0 = Math.min(g.x0, b.x); g.y0 = Math.min(g.y0, b.y); g.x1 = Math.max(g.x1, b.x + b.w); g.y1 = Math.max(g.y1, b.y + b.h); g.top = o; }
+    }
+    let best = null, at = -1;
+    for (const g of boxes.values()) {
+      if (wp.x < g.x0 || wp.x > g.x1 || wp.y < g.y0 || wp.y > g.y1) continue;
+      const i = order.indexOf(g.top.id);
+      if (i > at) { at = i; best = g.top; }
+    }
+    return best;
   }
 
   /**
@@ -1620,13 +1745,14 @@ export class Interaction {
     return true;
   }
 
-  startMoveOnSelection(wp) {
+  startMoveOnSelection(wp, already = false) {
     const sel = this.surface.selection;
     if (!sel.size || this.surface.selectionIsLocked()) return false;
     const b = this.surface.selectionBounds();
     const hit = pick(this.store, wp, 8 / this.surface.cam.z);
     const inside = b && wp.x >= b.x && wp.x <= b.x + b.w && wp.y >= b.y && wp.y <= b.y + b.h;
-    if (!inside && !(hit && sel.has(hit.id))) return false;
+    // `already`: the caller has checked the press is on the selection, with a finger's allowance
+    if (!already && !inside && !(hit && sel.has(hit.id))) return false;
     const objs = withAttached(this.store, [...sel])
       .map((id) => this.store.get(id)).filter(Boolean).filter((o) => !o.locked);
     if (!objs.length) return false;
@@ -1777,7 +1903,7 @@ export class Interaction {
     // where ink can be seen - only meaningful for a stroke that began somewhere it can be
     let view = this.visibleArea();
     if (view && !this.onScreen(view, wp)) view = null;
-    const act = { type: 'draw', obj, snapAxis: null, sheet, view,
+    const act = { type: 'draw', obj, snapAxis: null, sheet, view, lastIn: view ? { ...wp } : null,
       ruled: startEdges.length > 0, ruledEdge: startEdges.length ? startEdges[0] : 0,
       edgePending: startEdges.length ? { from: { x: wp.x, y: wp.y }, cands: startEdges, raw: [{ ...wp, p: this.pressure(e) }] } : null };
     obj.points.push(this.snapToRuler({ ...wp, p: this.pressure(e) }, act));
@@ -1933,6 +2059,15 @@ export class Interaction {
     return { w: sf.width, h: sf.height, holes };
   }
 
+  /** The last point still on screen along the way from `inside` to `outside` (world points). */
+  edgeBetween(view, inside, outside) {
+    let lo = 0, hi = 1;
+    const at = (k) => ({ x: inside.x + (outside.x - inside.x) * k, y: inside.y + (outside.y - inside.y) * k });
+    if (!this.onScreen(view, inside)) return null;
+    for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (this.onScreen(view, at(m))) lo = m; else hi = m; }
+    return at(lo);
+  }
+
   /** Is this world point somewhere the ink can be seen? (see visibleArea()) */
   onScreen(view, wp) {
     const p = this.surface.cam.toScreen(wp.x, wp.y);
@@ -2060,8 +2195,9 @@ export class Interaction {
      */
     this.surface.extendFreeze?.(obj);
 
-    // a pencil sketch stays a sketch: guide lines are meant to be rough
-    if (this.app.settings.inkToShape && obj.tool === 'pen' && obj.effect !== 'pencil' && !a.straight) {
+    // a pencil sketch stays a sketch: guide lines are meant to be rough. A neon line stays a
+    // glowing line too: a shape has no glow, and straightening it would put the light out.
+    if (this.app.settings.inkToShape && obj.tool === 'pen' && obj.effect !== 'pencil' && obj.effect !== 'neon' && !a.straight) {
       const r = recognize(obj.points);
       // classified AND actually shaped like the thing it was classified as
       const fit = r ? fitError(obj.points, r.kind, r) : 1;
@@ -2215,6 +2351,22 @@ export class Interaction {
       //
       // Removing a picture is what Select and Delete are for: deliberate,
       // visible, and aimed at one thing.
+      //
+      // Drawn shapes are the one exception. A circle that "Straighten shapes"
+      // made out of your ink, a line, an arrow, a box from the shape tray - these
+      // are drawing, and people reach for the eraser to get rid of them. Only
+      // their OUTLINE counts, and only a bare shape (no words in it, nothing
+      // locked): rubbing out ink written inside a box must leave the box, and a
+      // labelled flowchart box is a note, not a scribble. A shape goes whole, in
+      // either mode - it has no ink to split.
+      if (o.type === 'shape') {
+        if (o.text || !outlineAlong(o, from, to, r)) continue;
+        const index = store.rawRemove(o.id);
+        if (a.fragments.has(o.id)) a.fragments.delete(o.id);
+        else if (!a.originals.has(o.id)) a.originals.set(o.id, { obj: structuredClone(o), index });
+        changed = true;
+        continue;
+      }
       if (o.type !== 'stroke') continue;
       const partial = a.mode === 'partial';
       const isFragment = a.fragments.has(o.id);
@@ -2317,9 +2469,10 @@ export class Interaction {
      * An arrow drawn from or onto something holds on to it. One that touches
      * nothing at either end is the plain arrow shape it always was.
      */
-    if (isLinear) {
-      const ts = a.targetStart ?? this.arrowTarget(a.start);
-      const te = a.targetEnd ?? this.arrowTarget(a.cur, ts);
+    if (isLinear && !a.loose) {
+      // what each end was found to hold while drawing; null (met a line's end) is an answer, not a gap
+      const ts = a.targetStart !== undefined ? a.targetStart : this.arrowTarget(a.start);
+      const te = a.targetEnd !== undefined ? a.targetEnd : this.arrowTarget(a.cur, ts);
       if ((ts || te) && Math.hypot(a.cur.x - a.start.x, a.cur.y - a.start.y) * this.surface.cam.z >= 6) {
         const heads = kind === 'line' ? 'none' : kind === 'doubleArrow' ? 'both' : 'end';
         const o = this.app.addConnector(

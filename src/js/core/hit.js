@@ -157,6 +157,27 @@ export function strokesAlong(store, a, b, radius) {
   return hits;
 }
 
+/**
+ * Does the eraser, swept from a to b with this radius, touch a shape's outline?
+ * The outline only - never the inside, filled or not - so rubbing out what is
+ * written inside a box never takes the box with it.
+ */
+export function outlineAlong(o, a, b, radius) {
+  if (!o || o.type !== 'shape' || ghost(o)) return false;
+  const steps = Math.max(2, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / Math.max(2, radius / 2)));
+  scratch.save();
+  shapePath(scratch, o.kind, o.x, o.y, o.w, o.h);
+  scratch.lineWidth = (o.lineWidth || 3) + radius * 2;
+  scratch.lineCap = 'round'; scratch.lineJoin = 'round';
+  let hit = false;
+  for (let i = 0; i <= steps && !hit; i++) {
+    const p = toLocal(o, { x: a.x + ((b.x - a.x) * i) / steps, y: a.y + ((b.y - a.y) * i) / steps });
+    hit = scratch.isPointInStroke(p.x, p.y);
+  }
+  scratch.restore();
+  return hit;
+}
+
 export function normalizeBox(b) {
   return { x: b.w < 0 ? b.x + b.w : b.x, y: b.h < 0 ? b.y + b.h : b.y, w: Math.abs(b.w), h: Math.abs(b.h) };
 }

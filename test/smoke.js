@@ -258,12 +258,138 @@ async function run(win, app) {
     a.newBoard(true); a.store.clear();
     return r;
   `);
-  check('erasing whole strokes never touches images, pages, notes, text or shapes',
+  check('erasing whole strokes never touches images, pages, notes or text, nor a shape it does not reach',
     inkOnly.objectMode.survived.length === 5 && inkOnly.objectMode.inkGone === true,
     JSON.stringify(inkOnly.objectMode));
   check('and neither does part-erase',
     inkOnly.partialMode.survived.length === 5 && inkOnly.partialMode.inkGone === true,
     JSON.stringify(inkOnly.partialMode));
+  /* ---- drawn shapes ARE erasable: by their outline, never by their inside ---- */
+  const shapeErase = await js(`
+    const a = window.app, it = a.interaction, r = {};
+    const scrub = (mode, from, to, n = 20) => {
+      a.settings.eraserMode = mode; a.settings.eraserSize = 20;
+      it.startErase(from);
+      for (let i = 1; i <= n; i++) it.eraseSweep(it.action, { x: from.x + (to.x - from.x) * (i - 1) / n, y: from.y + (to.y - from.y) * (i - 1) / n }, { x: from.x + (to.x - from.x) * i / n, y: from.y + (to.y - from.y) * i / n });
+      if (it.action) { it.finishErase(it.action); it.action = null; }
+    };
+    const box = (id, extra) => a.store.add({ id, type: 'shape', kind: 'rect', x: 0, y: 0, w: 300, h: 200, rotation: 0, stroke: '#201f1e', fill: 'none', lineWidth: 3, ...(extra || {}) }, 'x');
+    const ink = (id, y) => { const pts = []; for (let i = 0; i < 30; i++) pts.push({ x: 60 + i * 6, y, p: .5 }); a.store.add({ id, type: 'stroke', tool: 'pen', color: '#e81123', width: 4, effect: 'none', points: pts, bbox: { x: 60, y, w: 174, h: 1 }, rotation: 0 }, 'x'); };
+    for (const mode of ['partial', 'object']) {
+      a.newBoard(true); a.store.clear();
+      // ink written inside a box, rubbed out from inside: the ink goes, the box stays
+      box('b1', { fill: '#fde68a' }); ink('w1', 100);
+      scrub(mode, { x: 50, y: 100 }, { x: 250, y: 100 });
+      r[mode + 'Inside'] = { box: a.store.has('b1'), ink: a.store.has('w1') };
+      // the same box rubbed across its edge: gone, and undo puts it back
+      scrub(mode, { x: 150, y: -40 }, { x: 150, y: 40 });
+      r[mode + 'Edge'] = { box: a.store.has('b1') };
+      a.store.undo();
+      r[mode + 'Undo'] = { box: a.store.has('b1') };
+      // a circle straightened out of ink, a line, a triangle
+      a.store.clear();
+      a.store.add({ id: 'c1', type: 'shape', kind: 'ellipse', x: 400, y: 0, w: 160, h: 160, rotation: 0, stroke: '#0078d4', fill: 'none', lineWidth: 4 }, 'x');
+      a.store.add({ id: 'l1', type: 'shape', kind: 'line', x: 0, y: 400, w: 300, h: 0, rotation: 0, stroke: '#201f1e', fill: 'none', lineWidth: 3 }, 'x');
+      a.store.add({ id: 't1', type: 'shape', kind: 'triangle', x: 400, y: 300, w: 200, h: 160, rotation: 0, stroke: '#107c10', fill: 'none', lineWidth: 3 }, 'x');
+      scrub(mode, { x: 380, y: 80 }, { x: 420, y: 80 });
+      scrub(mode, { x: 150, y: 370 }, { x: 150, y: 430 });
+      scrub(mode, { x: 500, y: 440 }, { x: 500, y: 480 });
+      r[mode + 'Drawn'] = ['c1', 'l1', 't1'].filter((id) => a.store.has(id));
+      // a box with words in it, and a locked one, stay
+      a.store.clear();
+      box('b2', { text: 'Start' }); box('b3', { x: 400, locked: true });
+      scrub(mode, { x: 150, y: -40 }, { x: 150, y: 40 });
+      scrub(mode, { x: 550, y: -40 }, { x: 550, y: 40 });
+      r[mode + 'Kept'] = ['b2', 'b3'].filter((id) => a.store.has(id));
+    }
+    a.settings.eraserMode = 'partial'; a.settings.eraserSize = 30;
+    a.newBoard(true); a.store.clear();
+    return r;
+  `);
+  for (const mode of ['partial', 'object']) {
+    const S = shapeErase;
+    check(`eraser (${mode}): ink inside a box is rubbed out and the box stays`, S[mode + 'Inside'].box === true && S[mode + 'Inside'].ink === false, JSON.stringify(S[mode + 'Inside']));
+    check(`eraser (${mode}): rubbing across a box's edge erases the box, undo brings it back`, S[mode + 'Edge'].box === false && S[mode + 'Undo'].box === true, JSON.stringify({ edge: S[mode + 'Edge'], undo: S[mode + 'Undo'] }));
+    check(`eraser (${mode}): a drawn circle, line and triangle are erased by their outline`, S[mode + 'Drawn'].length === 0, 'still there: ' + JSON.stringify(S[mode + 'Drawn']));
+    check(`eraser (${mode}): a box with words in it, and a locked box, are left alone`, S[mode + 'Kept'].length === 2, 'kept: ' + JSON.stringify(S[mode + 'Kept']));
+  }
+
+  /* ---- the neon pen: a glowing line, on dark pages and light ---- */
+  const neon = await js(`
+    const a = window.app, r = {};
+    const R = await import('app://board/js/core/render.js');
+    const { boundsOf } = await import('app://board/js/core/store.js');
+    const { hitObject } = await import('app://board/js/core/hit.js');
+    const { buildSvg } = await import('app://board/js/export.js');
+    const pts = []; for (let i = 0; i <= 40; i++) pts.push({ x: 20 + i * 4, y: 50, p: .5 });
+    const o = { id: 'neon1', type: 'stroke', tool: 'pen', color: '#b026ff', width: 6, effect: 'neon', opacity: 1, rotation: 0, points: pts, bbox: { x: 20, y: 50, w: 160, h: 0 } };
+    const paint = (dark) => {
+      const was = R.isDarkBoard(); R.setDarkBoard(dark);
+      const c = document.createElement('canvas'); c.width = 200; c.height = 100;
+      const x = c.getContext('2d'); x.fillStyle = dark ? '#1f1e1d' : '#ffffff'; x.fillRect(0, 0, 200, 100);
+      R.drawObject(x, o);
+      R.setDarkBoard(was);
+      const px = (y) => [...x.getImageData(100, y, 1, 1).data].slice(0, 3);
+      return { core: px(50), halo: px(58), far: px(90) };
+    };
+    r.dark = paint(true); r.light = paint(false);
+    const b = boundsOf(o), plain = boundsOf({ ...o, effect: 'none' });
+    r.bounds = { neonH: Math.round(b.h), plainH: Math.round(plain.h) };
+    r.hitOn = hitObject(o, { x: 100, y: 52 }, 2); r.hitGlow = hitObject(o, { x: 100, y: 62 }, 2);
+    a.newBoard(true); a.store.clear(); a.store.add(structuredClone(o), 'x');
+    const svg = buildSvg(a, { x: 0, y: 0, w: 200, h: 100 });
+    r.svg = /<filter id="gbneon\\d+"/.test(svg) && /filter="url\\(#gbneon\\d+\\)"/.test(svg);
+    a.store.clear();
+    // the pen menu: Neon is an effect; a black pen turned neon lights up purple; a colour picked keeps it neon
+    const s = a.settings, keep = { c: s.penColor, e: s.penEffect, pens: structuredClone(s.pens || {}), active: s.activePen, shape: s.inkToShape };
+    const { pickPenInk } = await import('app://board/js/ui/toolbar.js');
+    const { PEN_EFFECTS } = await import('app://board/js/ui/palettes.js');
+    r.effects = PEN_EFFECTS.map((e) => e.id).join(',');
+    a.setTool('pen'); s.activePen = 'black'; s.penColor = '#201f1e'; s.penEffect = 'none';
+    const anchor = document.querySelector('#toolbar .pen, #toolbar button') || document.body;
+    const { openToolPopover } = await import('app://board/js/ui/toolbar.js');
+    const { closePopover } = await import('app://board/js/ui/popover.js');
+    openToolPopover(a, anchor, 'pen');
+    const btn = [...document.querySelectorAll('.pop .btn')].find((b) => b.textContent.trim() === 'Neon');
+    r.hasButton = !!btn;
+    btn?.click();
+    r.afterNeon = { color: s.penColor, effect: s.penEffect };
+    pickPenInk(a, '#00e5ff');
+    r.afterPick = { color: s.penColor, effect: s.penEffect };
+    closePopover();
+    s.penColor = keep.c; s.penEffect = keep.e; s.pens = keep.pens; s.activePen = keep.active; a.saveSettings(); a.syncUI();
+    // drawn with "Straighten shapes" on, a neon circle stays a glowing line
+    s.inkToShape = true;
+    const circ = []; for (let i = 0; i <= 64; i++) circ.push({ x: 300 + Math.cos(i / 64 * Math.PI * 2) * 80, y: 300 + Math.sin(i / 64 * Math.PI * 2) * 80, p: .5 });
+    const it = a.interaction;
+    const st = { x: circ[0].x, y: circ[0].y };
+    a.settings.penEffect = 'neon'; a.settings.penColor = '#b026ff';
+    const ev = (p, b) => ({ pointerId: 7, pointerType: 'mouse', button: 0, buttons: b, pressure: b ? .5 : 0, clientX: p.x, clientY: p.y, shiftKey: false, altKey: false });
+    a.surface.cam.z = 1; a.surface.cam.x = 0; a.surface.cam.y = 0;
+    const rect = a.surface.canvas.getBoundingClientRect();
+    const sc = (p) => ({ x: rect.left + p.x, y: rect.top + p.y });
+    it.action = null; it.pointers.clear();
+    it.onDown(ev(sc(circ[0]), 1)); for (const p of circ.slice(1)) it.onMove(ev(sc(p), 1)); it.onUp(ev(sc(circ[circ.length - 1]), 0));
+    r.drawn = a.store.objects.map((q) => q.type + ':' + (q.effect || q.kind)).join(',');
+    s.penColor = keep.c; s.penEffect = keep.e; s.inkToShape = keep.shape; a.saveSettings();
+    a.store.clear(); a.setTool('pen');
+    return r;
+  `);
+  const bright = (c) => c[0] + c[1] + c[2];
+  check('neon: on a dark page the line has a pale hot core and a purple glow beside it',
+    bright(neon.dark.core) > 500 && neon.dark.halo[2] > neon.dark.halo[1] + 40 && bright(neon.dark.halo) > bright(neon.dark.far) + 60,
+    JSON.stringify(neon.dark));
+  check('neon: on a white page the glow still shows as a purple halo, and the core keeps its colour',
+    neon.light.halo[1] < 235 && neon.light.halo[0] > neon.light.halo[1] && neon.light.core[1] < 200 && bright(neon.light.far) > 700,
+    JSON.stringify(neon.light));
+  check('neon: its box takes the glow in, but only the line itself is hit',
+    neon.bounds.neonH > neon.bounds.plainH + 20 && neon.hitOn === true && neon.hitGlow === false, JSON.stringify({ bounds: neon.bounds, on: neon.hitOn, onTheGlow: neon.hitGlow }));
+  check('neon: an SVG export keeps the glow', neon.svg === true, 'filter found: ' + neon.svg);
+  check('neon: it is an effect in the pen menu; a black pen turned neon lights up purple; picking a colour keeps it neon',
+    neon.effects.includes('neon') && neon.hasButton && neon.afterNeon.effect === 'neon' && neon.afterNeon.color === '#b026ff' && neon.afterPick.effect === 'neon' && neon.afterPick.color === '#00e5ff',
+    JSON.stringify({ effects: neon.effects, button: neon.hasButton, afterNeon: neon.afterNeon, afterPick: neon.afterPick }));
+  check('neon: with "Straighten shapes" on, a neon circle stays a glowing line', neon.drawn === 'stroke:neon', 'on the board: ' + neon.drawn);
+
   check('erasing an end leaves one shorter run', erase.tailCount === 1 && erase.tailW < 500 && erase.tailW > 400, `${erase.tailCount} run(s), width ${erase.tailW}`);
 
   /* ---- the canvas must always fill the window ---- */
@@ -2096,7 +2222,8 @@ async function run(win, app) {
       up(X(cx + 30), Y(tbr.y - 70));
       const pts = a.store.objects.filter(o => o.type === 'stroke').flatMap(o => o.points.map(q => sf.cam.toScreen(q.x, q.y)));
       underBar = { strokes: a.store.objects.filter(o => o.type === 'stroke').length,
-        inside: pts.filter(q => q.x >= tbr.x && q.x <= tbr.x + tbr.w && q.y >= tbr.y && q.y <= tbr.y + tbr.h).length,
+        // more than a pixel in: ink stopping exactly ON the toolbar's edge is the edge, not under it
+        inside: pts.filter(q => q.x > tbr.x + 1 && q.x < tbr.x + tbr.w - 1 && q.y > tbr.y + 1 && q.y < tbr.y + tbr.h - 1).length,
         bar: [Math.round(tbr.x), Math.round(tbr.y), Math.round(tbr.w), Math.round(tbr.h)] };
     }
     a.store.clear(); it.action = null; it.pointers.clear();
@@ -2225,12 +2352,12 @@ async function run(win, app) {
   }
   check('and the ink lands right at the margin where the pen was',
     pan.marginLeft !== null && pan.marginLeft >= 3 && pan.marginLeft <= 12, `stroke's left edge at ${pan.marginLeft}px on screen (pen went to 6px)`);
-  check('a pen carried past the edge lays no ink out of sight, and coming back starts a new stroke',
-    pan.offEdge.strokes === 2 && pan.offEdge.leftmost !== null && pan.offEdge.leftmost >= 0,
-    `${pan.offEdge.strokes} stroke(s) (wanted 2), leftmost ink at ${pan.offEdge.leftmost}px on screen (wanted 0 or more)`);
+  check('a pen carried past the edge lays no ink out of sight, stops right at the edge, and coming back starts a new stroke there',
+    pan.offEdge.strokes === 2 && pan.offEdge.leftmost !== null && pan.offEdge.leftmost >= 0 && pan.offEdge.leftmost <= 1,
+    `${pan.offEdge.strokes} stroke(s) (wanted 2), leftmost ink at ${pan.offEdge.leftmost}px on screen (wanted 0 to 1: at the edge, not short of it)`);
   check('no ink is laid under the toolbar either',
-    pan.underBar === null || (pan.underBar.inside === 0 && pan.underBar.strokes === 2),
-    pan.underBar ? `${pan.underBar.inside} point(s) under the toolbar at ${JSON.stringify(pan.underBar.bar)}, ${pan.underBar.strokes} stroke(s) (wanted 2)` : 'no toolbar on screen');
+    pan.underBar === null || (pan.underBar.inside === 0 && pan.underBar.strokes >= 2),
+    pan.underBar ? `${pan.underBar.inside} point(s) under the toolbar at ${JSON.stringify(pan.underBar.bar)}, ${pan.underBar.strokes} stroke(s) (wanted 2 or more: the stroke is cut where it goes under the bar, and the strip of board below the bar is board too)` : 'no toolbar on screen');
   check('no auto-pan away from the edges', pan.middleVel === null);
   check('edge velocity points inward', pan.leftDir > 0 && pan.rightDir < 0, `left ${pan.leftDir}, right ${pan.rightDir}`);
   check('dragging a selection box into the edge still scrolls the board',
@@ -4097,8 +4224,11 @@ async function run(win, app) {
     a.radial?.close(); (await import('app://board/js/ui/popover.js')).closePopover(); it._boardMenuAt = 0;
     // the "Hold the pen still for menus" switch: off means no ring for a pen, but a finger still gets one
     a.settings.penHold = false;
+    // nothing selected first: holding inside a selection picks it up rather than opening the ring
+    a.setSelection([]);
     await hold(320, 320, 'pen'); r.penOffRing = !!ringEl(); it.onUp(mk(320, 320, 0, 'pen'));
-    await hold(340, 320, 'touch'); r.fingerStillRing = !!ringEl(); it.onUp(mk(340, 320, 0)); a.radial?.close();
+    // a clear patch of board: a finger is now on anything within 20 px of it, and the earlier checks pasted around 280, 300
+    await hold(520, 520, 'touch'); r.fingerStillRing = !!ringEl(); it.onUp(mk(520, 520, 0)); a.radial?.close();
     a.settings.penHold = holdWas; a.settings.recentPens = recentWas;
     a.settings.activePen = penWas.active; a.settings.penColor = penWas.color; a.settings.penEffect = penWas.effect; a.saveSettings(); a.syncUI();
     a.store.doc.pages = pagesWere;
@@ -4129,6 +4259,105 @@ async function run(win, app) {
   check('with "Hold the pen still for menus" off, a held pen opens no ring, while a finger still does',
     ring.penOffRing === false && ring.fingerStillRing === true,
     `pen with the switch off opened a ring: ${ring.penOffRing} (wanted false); finger: ${ring.fingerStillRing} (wanted true)`);
+
+  /*
+   * The ring must never get in the way of picking a drawing up. A finger held
+   * in the gaps of a doodle, inside a group, or inside what is already
+   * selected is holding the drawing, not bare board - the ring is for empty
+   * board only. On a phone there is no right button to fall back on.
+   */
+  const ringVsMove = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface, r = {};
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z }, pagesWere = a.store.doc.pages, toolWas = a.tool;
+    // far out on empty board, so nothing the earlier checks left behind is in the way - and none of it is touched
+    const OX = 600000, mine = new Set();
+    const had = new Set(a.store.objects.map((o) => o.id));
+    a.store.doc.pages = []; a.setSelection([]);
+    sf.cam.x = -OX; sf.cam.y = 0; sf.cam.z = 1;
+    const clearMine = () => { const ids = a.store.objects.filter((o) => !had.has(o.id)).map((o) => o.id); if (ids.length) a.store.remove(ids); };
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, buttons, type = 'touch') => { const p = sf.cam.toScreen(x + OX, y); return { pointerId: 31, pointerType: type, button: 0, buttons, shiftKey: false, altKey: false, pressure: 0.5, width: 10, height: 10, clientX: rect.left + p.x, clientY: rect.top + p.y }; };
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const ringOpen = () => !!document.getElementById('radialMenu');
+    const hold = async (x, y, type = 'touch') => { a.radial?.close(); it._boardMenuAt = 0; it.action = null; it.pointers.clear(); it.onDown(mk(x, y, 1, type)); await wait(type === 'pen' ? 820 : 560); };
+    const lift = (x, y, type = 'touch') => { it.onUp(mk(x, y, 0, type)); a.radial?.close(); };
+    const drag = (x0, y0, x1, y1, type = 'touch') => { for (let k = 1; k <= 8; k++) it.onMove(mk(x0 + (x1 - x0) * k / 8, y0 + (y1 - y0) * k / 8, 1, type)); };
+    // two ring-shaped doodles, side by side, each with an empty middle
+    const doodle = (id, cx, cy, g) => { const pts = []; for (let i = 0; i <= 48; i++) { const t = i / 48 * Math.PI * 2; pts.push({ x: OX + cx + Math.cos(t) * 50, y: cy + Math.sin(t) * 50, p: .5 }); } return { id, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: pts, bbox: { x: OX + cx - 50, y: cy - 50, w: 100, h: 100 }, ...(g ? { groupId: g } : {}) }; };
+    const at = (id) => { const o = a.store.get(id); return o ? Math.round(o.bbox.x - OX) : null; };
+    const sel = () => [...sf.selection].sort().join(',');
+
+    // 1. a group, pen in hand: hold in the gap in the middle of a doodle - it picks the group up, no ring
+    a.store.addMany([doodle('g1a', 200, 200, 'G1'), doodle('g1b', 330, 200, 'G1')]);
+    a.setTool('pen'); a.setSelection([]);
+    await hold(265, 200);
+    r.group = { ring: ringOpen(), sel: sel(), action: it.action && it.action.type };
+    drag(265, 200, 305, 240); lift(305, 240);
+    r.group.moved = [at('g1a'), at('g1b')];
+    r.group.inkLeft = a.store.objects.filter((o) => o.type === 'stroke').length;
+
+    // 2. the same group already selected, Select in hand: hold inside its box before dragging - no ring, it moves
+    a.setTool('select'); a.setSelection(['g1a']);
+    await hold(290, 240);
+    r.selected = { ring: ringOpen(), action: it.action && it.action.type, sel: sel() };
+    drag(290, 240, 290, 300); lift(290, 300);
+    r.selected.moved = [a.store.get('g1a').bbox.y, a.store.get('g1b').bbox.y].map(Math.round);
+
+    // 3. two separate doodles selected together, pen in hand: hold between them - both come along, no ring
+    clearMine();
+    a.store.addMany([doodle('s1', 600, 200), doodle('s2', 760, 200)]);
+    a.setTool('pen'); a.setSelection(['s1', 's2']);
+    await hold(680, 200);
+    r.multi = { ring: ringOpen(), sel: sel(), action: it.action && it.action.type };
+    drag(680, 200, 680, 260); lift(680, 260);
+    r.multi.moved = [a.store.get('s1').bbox.y, a.store.get('s2').bbox.y].map(Math.round);
+
+    // 4. a finger held just beside a line (14 px off) is on it, not on bare board
+    a.setSelection([]);
+    const top = a.store.get('s1').bbox.y;          // the doodle's top edge, wherever the last drag left it
+    await hold(600, top - 14);
+    r.beside = { ring: ringOpen(), sel: sel(), heldAt: top - 14 };
+    lift(600, top - 14);
+
+    // 4b. a drawing that was never grouped - a face of five lines: holding in its gaps picks up the nearest line, no ring
+    clearMine(); a.setSelection([]);
+    const line = (id, pts) => ({ id, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: pts.map(([x, y]) => ({ x: OX + x, y, p: .5 })), bbox: { x: OX + Math.min(...pts.map((q) => q[0])), y: Math.min(...pts.map((q) => q[1])), w: Math.max(...pts.map((q) => q[0])) - Math.min(...pts.map((q) => q[0])), h: Math.max(...pts.map((q) => q[1])) - Math.min(...pts.map((q) => q[1])) } });
+    const ring = []; for (let i = 0; i <= 48; i++) { const t = i / 48 * Math.PI * 2; ring.push([400 + Math.cos(t) * 90, 400 + Math.sin(t) * 90]); }
+    a.store.addMany([line('f-head', ring), line('f-eyeL', [[370, 380], [372, 380]]), line('f-eyeR', [[428, 380], [430, 380]]), line('f-mouth', [[365, 430], [400, 445], [435, 430]]), line('f-nose', [[400, 395], [400, 412]])]);
+    await hold(400, 365);                                   // between the eyes, above the nose: 15-30 px from ink
+    r.face = { ring: ringOpen(), sel: sel(), action: it.action && it.action.type };
+    lift(400, 365); a.setSelection([]);
+    await hold(400, 600);                                   // 110 px below the chin: bare board
+    r.faceAway = ringOpen(); lift(400, 600);
+    clearMine();
+
+    // 5. truly empty board still opens the ring, for a finger and a pen
+    a.setSelection([]);
+    await hold(200, 600); r.emptyFinger = ringOpen(); lift(200, 600);
+    a.settings.penHold = true;
+    await hold(260, 620, 'pen'); r.emptyPen = ringOpen(); lift(260, 620, 'pen');
+
+    a.setSelection([]); clearMine(); a.store.doc.pages = pagesWere;
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    a.setTool(toolWas || 'pen'); it.action = null; it.pointers.clear(); it._boardMenuAt = 0;
+    return r;
+  `);
+  check('holding in the gap of a grouped drawing picks the whole group up and moves it - no ring',
+    ringVsMove.group.ring === false && ringVsMove.group.sel === 'g1a,g1b' && ringVsMove.group.action === 'move' && ringVsMove.group.moved[0] === 190 && ringVsMove.group.moved[1] === 320 && ringVsMove.group.inkLeft === 2,
+    JSON.stringify(ringVsMove.group) + ' (wanted ring false, both selected, a move, both shifted 40 to x 190 and 320, still 2 strokes - no dot left)');
+  check('holding inside an already selected group before dragging gives no ring, and the drag moves it',
+    ringVsMove.selected.ring === false && ringVsMove.selected.moved[0] === 250 && ringVsMove.selected.moved[1] === 250,
+    JSON.stringify(ringVsMove.selected) + ' (wanted ring false, both moved down 60, from y 190 to 250)');
+  check('holding between two things selected together keeps both selected and moves both - no ring',
+    ringVsMove.multi.ring === false && ringVsMove.multi.sel === 's1,s2' && ringVsMove.multi.moved[0] === 210 && ringVsMove.multi.moved[1] === 210,
+    JSON.stringify(ringVsMove.multi) + ' (wanted ring false, s1 and s2 still selected, both moved down 60 to y 210)');
+  check('a finger held just beside a line picks the line up instead of opening the ring',
+    ringVsMove.beside.ring === false && ringVsMove.beside.sel === 's1', JSON.stringify(ringVsMove.beside) + ' (wanted ring false, s1 selected)');
+  check('a drawing that was never grouped: holding in its gaps picks up the nearest line, while board well away from it still gets the ring',
+    ringVsMove.face.ring === false && /^f-/.test(ringVsMove.face.sel) && ringVsMove.face.action === 'move' && ringVsMove.faceAway === true,
+    `in the gaps of the face: ${JSON.stringify(ringVsMove.face)} (wanted ring false, one of its lines selected and ready to drag); 110 px below it: ring ${ringVsMove.faceAway} (wanted true)`);
+  check('holding on truly empty board still opens the ring, for a finger and for a pen',
+    ringVsMove.emptyFinger === true && ringVsMove.emptyPen === true, `finger: ${ringVsMove.emptyFinger}, pen: ${ringVsMove.emptyPen} (wanted both true)`);
 
   /*
    * Android raises a contextmenu event after about half a second of holding -
@@ -14453,6 +14682,7 @@ module.exports.run = async (win, app) => {
   const onPhone = [];
   let typingOnPhone = null;
   let phoneBar = null;
+  let turnedPhone = null;
   let phonePageSize = null;
   try {
     win.webContents.debugger.attach('1.3');
@@ -14617,6 +14847,36 @@ module.exports.run = async (win, app) => {
 
     // The toolbar has to stand down while the keyboard is up, or it sits on
     // the very box being typed into.
+    /*
+     * Turned on its side: the bar is rebuilt with more on it - the other pens, the highlighter,
+     * select, text, sticky note and the ruler - and still fits on one row. Turned back upright it is
+     * the compact bar again. What was in hand survives both turns.
+     */
+    {
+      const read = () => js(`
+        const a = window.app, bar = document.getElementById('toolbar');
+        const kids = [...bar.children].filter((el) => el.tagName === 'BUTTON');
+        return { w: innerWidth, wide: bar.classList.contains('wide'), compact: bar.classList.contains('phone'), buttons: kids.length,
+          fits: bar.scrollWidth <= bar.clientWidth + 1, tallest: Math.round(bar.getBoundingClientRect().height),
+          order: kids.map((b) => b.dataset.pen || b.dataset.tool || b.dataset.cmd || b.dataset.pop || '?'),
+          tool: a.tool, pen: a.settings.activePen, noteLit: !!bar.querySelector('.tool[data-tool="note"].active'), addLit: !!bar.querySelector('[data-pop="add"].active') };`);
+      await js(`const a = window.app; const T = await import('app://board/js/ui/toolbar.js'); T.choosePen(a, 'red'); a.syncUI(); return 1;`);
+      const upright = await read();
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 915, height: 412, deviceScaleFactor: 2.625, mobile: true });
+      await sleep(600);
+      const turned = await read();
+      // a sticky note chosen from its own button lights that button, not +
+      await js(`document.querySelector('#toolbar .tool[data-tool="note"]')?.click(); return 1;`);
+      const noteOnBar = await read();
+      await js(`window.app.setTool('pen'); window.app.hideMenus(); return 1;`);
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 740, height: 360, deviceScaleFactor: 2.625, mobile: true });
+      await sleep(600);
+      const narrower = await read();
+      await cdp('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true });
+      await sleep(600);
+      const back = await read();
+      turnedPhone = { upright, turned, noteOnBar, narrower, back };
+    }
     typingOnPhone = await js(`
       const a = window.app;
       const bar = document.getElementById('toolbar');
@@ -14655,6 +14915,22 @@ module.exports.run = async (win, app) => {
   // stylesheet said `auto`, so it cannot answer this question.
   const withKeyboard = onPhone.find((p) => p.label === 'phone with keyboard');
   const movedToTheTop = !!withKeyboard && withKeyboard.zoombar.top < 120;
+  if (turnedPhone) {
+    const S = turnedPhone, has = (o, ...k) => k.every((x) => o.order.includes(x));
+    check('a phone turned on its side gets the bigger bar: every pen, the highlighter, select, lasso, text, sticky note, shapes and the ruler, on one row',
+      S.turned.wide && S.turned.fits && has(S.turned, 'black', 'red', 'blue', 'green', 'rainbow', 'galaxy', 'pencil', 'highlighter', 'eraser', 'select', 'lasso', 'text', 'note', 'shape', 'ruler', 'undo', 'add', 'more')
+        && S.turned.tallest <= S.upright.tallest + 2,
+      JSON.stringify(S.turned) + ' upright bar height ' + S.upright.tallest);
+    check('and the pen in hand survives the turn', S.turned.tool === 'pen' && S.turned.pen === 'red' && S.upright.pen === 'red', `before ${S.upright.tool}/${S.upright.pen}, after ${S.turned.tool}/${S.turned.pen}`);
+    check('a sticky note picked from its own button lights that button, and not +',
+      S.noteOnBar.noteLit && !S.noteOnBar.addLit, JSON.stringify({ note: S.noteOnBar.noteLit, add: S.noteOnBar.addLit }));
+    check('a smaller phone on its side keeps a few pens and tools in their menus, so the row still fits',
+      S.narrower.wide && S.narrower.fits && has(S.narrower, 'select', 'text', 'note', 'ruler', 'highlighter', 'pens') && S.narrower.buttons < S.turned.buttons,
+      JSON.stringify(S.narrower));
+    check('turned back upright it is the compact bar again',
+      !S.back.wide && S.back.compact && S.back.buttons === S.upright.buttons && S.back.order.join() === S.upright.order.join(),
+      JSON.stringify({ back: S.back.order, upright: S.upright.order }));
+  }
   if (phoneBar) {
     const L = phoneBar.lights || {};
     check('on the phone bar, + lights up while a sticky note, text, shape, emoji or the ruler is in hand, and goes out again',
@@ -18529,6 +18805,151 @@ module.exports.run = async (win, app) => {
       r.box && r.t37.arm === 37 && r.t37.reading === 37 && /143/.test(r.t37.outer || '') && r.t250.arm === 180 && r.shownAfter250 === '180' &&
         r.tNeg.arm === 0 && r.tJunk.arm === 0 && r.boxOnRuler === false,
       `box offered: ${r.box}; typed 37 → ${JSON.stringify(r.t37)} (wanted arm 37, reading 37, outer 143°); 250 → ${JSON.stringify(r.t250)} then box shows "${r.shownAfter250}" (wanted 180); -5 → ${JSON.stringify(r.tNeg)} (wanted 0); "abc" → ${JSON.stringify(r.tJunk)} (wanted unchanged 0); box on a straight ruler: ${r.boxOnRuler} (wanted false)`);
+  }
+
+  /* ---- several straight arrows between the same two things lie side by side, not on top of each other ---- */
+  {
+    const r = await js(`const a = window.app; a.toast = () => {}; a.newBoard(true);
+      const P = await import('app://board/js/core/connectors.js');
+      const box = (id, x, y) => a.store.add({ id, type: 'shape', kind: 'rect', x, y, w: 160, h: 100, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2, text: '' });
+      box('pA', 200, 300); box('pB', 700, 340);
+      const R = (o) => { const q = P.route(a.store.get(o.id)); return { a: { x: +q.a.x.toFixed(1), y: +q.a.y.toFixed(1) }, b: { x: +q.b.x.toFixed(1), y: +q.b.y.toFixed(1) } }; };
+      // distance between two segments' midpoints, measured across the line
+      const across = (p, q) => { const mx = (p.a.x + p.b.x) / 2 - (q.a.x + q.b.x) / 2, my = (p.a.y + p.b.y) / 2 - (q.a.y + q.b.y) / 2;
+        const dx = p.b.x - p.a.x, dy = p.b.y - p.a.y, L = Math.hypot(dx, dy) || 1; return +Math.abs((mx * -dy + my * dx) / L).toFixed(1); };
+      const onBorder = (pt, id) => { const b = a.store.get(id); const gx = Math.min(Math.abs(pt.x - b.x), Math.abs(pt.x - b.x - b.w)), gy = Math.min(Math.abs(pt.y - b.y), Math.abs(pt.y - b.y - b.h));
+        const insideX = pt.x >= b.x - 8 && pt.x <= b.x + b.w + 8, insideY = pt.y >= b.y - 8 && pt.y <= b.y + b.h + 8; return insideX && insideY && Math.min(gx, gy) <= 7; };
+      const out = {};
+      const c1 = a.addConnector({ id: 'pA' }, { id: 'pB' }, { route: 'straight' });
+      out.alone = R(c1);
+      const c2 = a.addConnector({ id: 'pB' }, { id: 'pA' }, { route: 'straight' });     // the reverse direction
+      out.two = { c1: R(c1), c2: R(c2), apart: across(R(c1), R(c2)) };
+      out.twoOnBorders = [onBorder(R(c1).a, 'pA'), onBorder(R(c1).b, 'pB'), onBorder(R(c2).a, 'pB'), onBorder(R(c2).b, 'pA')];
+      const c3 = a.addConnector({ id: 'pA' }, { id: 'pB' }, { route: 'straight' });
+      out.three = { apart12: across(R(c1), R(c2)), apart23: across(R(c2), R(c3)), apart13: across(R(c1), R(c3)) };
+      // a curved one between the same two takes no lane, and the straight ones keep theirs
+      const cc = a.addConnector({ id: 'pA' }, { id: 'pB' }, { route: 'curved' });
+      out.curvedLeavesLanes = across(R(c1), R(c3));
+      // back to one: it goes back to the middle, exactly where a lone arrow sits
+      a.store.remove([c2.id, c3.id, cc.id]);
+      out.backAlone = R(c1);
+      // and the hit test follows the lane: a click on the second arrow's own line finds it
+      const c4 = a.addConnector({ id: 'pB' }, { id: 'pA' }, { route: 'straight' });
+      const q = P.route(a.store.get(c4.id)), mid = { x: (q.a.x + q.b.x) / 2, y: (q.a.y + q.b.y) / 2 };
+      out.hit = { own: P.hitConnector(a.store.get(c4.id), mid, 4), other: P.hitConnector(a.store.get(c1.id), mid, 4) };
+      a.store.clear();
+      return out;`);
+    const same = (p, q) => Math.abs(p.a.x - q.a.x) < 0.5 && Math.abs(p.a.y - q.a.y) < 0.5 && Math.abs(p.b.x - q.b.x) < 0.5 && Math.abs(p.b.y - q.b.y) < 0.5;
+    check('two straight arrows between the same two boxes, A to B and B back to A, lie side by side, ending on both boxes',
+      Math.abs(r.two.apart - 18) < 0.6 && r.twoOnBorders.every(Boolean), JSON.stringify(r.two) + ' on borders ' + JSON.stringify(r.twoOnBorders) + ' (wanted 18 apart)');
+    check('three of them make three evenly spaced lanes',
+      Math.abs(r.three.apart12 - 18) < 0.6 && Math.abs(r.three.apart23 - 18) < 0.6 && Math.abs(r.three.apart13 - 36) < 0.6, JSON.stringify(r.three));
+    check('a curved arrow between the same two takes no lane, and a lone arrow is exactly where it always was',
+      Math.abs(r.curvedLeavesLanes - 36) < 0.6 && same(r.backAlone, r.alone), JSON.stringify({ curved: r.curvedLeavesLanes, alone: r.alone, backAlone: r.backAlone }));
+    check('clicking an arrow in its own lane picks that arrow, not its neighbour',
+      r.hit.own === true && r.hit.other === false, JSON.stringify(r.hit));
+  }
+
+  /* ---- issue #47: a line drawn onto another line starts where it is put, and joins its end ---- */
+  {
+    const r = await js(`const a = window.app, it = a.interaction, sf = a.surface; a.toast = () => {}; a.newBoard(true);
+      sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0;
+      const cv = sf.canvas.getBoundingClientRect();
+      const ev = (x, y, b, alt) => ({ pointerId: 71, pointerType: 'mouse', button: 0, buttons: b, pressure: b ? 0.5 : 0,
+        clientX: cv.left + x, clientY: cv.top + y, shiftKey: false, altKey: !!alt });
+      const draw = (x0, y0, x1, y1, alt) => {
+        it.action = null; it.pointers.clear();
+        it.onDown(ev(x0, y0, 1, alt));
+        for (let k = 1; k <= 6; k++) it.onMove(ev(x0 + (x1 - x0) * k / 6, y0 + (y1 - y0) * k / 6, 1, alt));
+        it.onUp(ev(x1, y1, 0, alt));
+      };
+      const lines = () => a.store.objects.filter((o) => o.type === 'shape' && o.kind === 'line');
+      const conns = () => a.store.objects.filter((o) => o.type === 'connector');
+      const ends = (o) => [{ x: Math.round(o.x), y: Math.round(o.y) }, { x: Math.round(o.x + o.w), y: Math.round(o.y + o.h) }];
+      a.settings.shapeKind = 'line'; a.setTool('shape'); a.setSelection([]);
+      const out = {};
+      // the first line, then a second started on the MIDDLE of it (the report): it starts there, not at a box edge
+      draw(200, 300, 500, 300);
+      draw(330, 300, 330, 480);
+      const l2 = lines()[1];
+      out.middle = { lines: lines().length, connectors: conns().length, second: l2 ? ends(l2) : null };
+      // a third started a few pixels off the first line's END: it starts exactly on that end, and ends on the second's end
+      draw(504, 304, 334, 476);
+      const l3 = lines()[2];
+      out.join = { lines: lines().length, connectors: conns().length, third: l3 ? ends(l3) : null };
+      // two lines, then a third joining them anywhere along each - a quarter along one, three quarters along the other
+      a.store.clear();
+      draw(200, 200, 600, 200); a.setSelection([]);
+      draw(200, 400, 600, 400); a.setSelection([]);
+      draw(300, 200, 500, 400);
+      const j = lines()[2];
+      out.anywhere = { lines: lines().length, connectors: conns().length, joining: j ? ends(j) : null };
+      // a closed triangle from three lines: every corner shared exactly
+      a.store.clear();
+      draw(100, 600, 300, 600); draw(303, 602, 200, 450); draw(198, 452, 101, 599);
+      const T = lines().map(ends);
+      out.triangle = T;
+      // a line from a rectangle still makes an arrow that holds on to it (arrows-that-hold, unchanged)
+      a.store.clear();
+      a.store.add({ id: 'q47', type: 'shape', kind: 'rect', x: 600, y: 200, w: 160, h: 100, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2, text: '' });
+      draw(680, 250, 900, 420);
+      out.fromBox = { connectors: conns().length, holds: conns()[0] ? conns()[0].a.id : null };
+      // two arrows out of one box, the second started right beside where the first leaves it: both hold the box
+      a.store.clear(); a.settings.shapeKind = 'arrow';
+      const box = (id, x, y) => a.store.add({ id, type: 'shape', kind: 'rect', x, y, w: 160, h: 100, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2, text: '' });
+      box('bA', 200, 500); box('bB', 600, 420); box('bC', 600, 620);
+      draw(330, 550, 680, 470); a.setSelection([]);
+      const first = conns()[0];
+      const P = await import('app://board/js/core/connectors.js');
+      const leave = first ? P.route(first).a : null;
+      if (leave) draw(Math.round(leave.x) - 6, Math.round(leave.y) + 4, 680, 670); else draw(354, 554, 680, 670);
+      out.twoArrows = { connectors: conns().map((o) => (o.a.id || '-') + '→' + (o.b.id || '-')), leave: leave && [Math.round(leave.x), Math.round(leave.y)] };
+      a.settings.shapeKind = 'line';
+      // an arrow with a free end: a line started beside that end meets it exactly
+      a.store.clear(); a.settings.shapeKind = 'arrow';
+      box('bD', 200, 500);
+      draw(280, 550, 520, 700); a.setSelection([]);
+      const free = conns()[0] ? P.route(conns()[0]).b : null;
+      a.settings.shapeKind = 'line';
+      draw(526, 706, 700, 760);
+      const fl = lines()[0];
+      out.freeEnd = { free: free && [Math.round(free.x), Math.round(free.y)], line: fl ? ends(fl) : null };
+      // Alt: loose - from the same rectangle it does not hold on, and near a line end it does not join
+      a.store.clear();
+      a.store.add({ id: 'q47', type: 'shape', kind: 'rect', x: 600, y: 200, w: 160, h: 100, rotation: 0, stroke: '#000', fill: 'none', lineWidth: 2, text: '' });
+      draw(680, 250, 900, 420, true);
+      draw(200, 300, 500, 300);
+      a.setSelection([]);                          // (a selected line's handle is its own matter; this is about joining)
+      draw(504, 304, 600, 500, true);
+      const L = lines();
+      out.alt = { connectors: conns().length, lines: L.length, looseFromBox: L[0] ? ends(L[0])[0] : null, looseNearEnd: L[2] ? ends(L[2])[0] : null };
+      a.store.clear(); a.settings.shapeKind = 'rect'; a.setTool('select');
+      return out;`);
+    check('issue #47: a line started on the middle of another line starts exactly there - no jump to the middle of its box, no arrow holding it',
+      r.middle.lines === 2 && r.middle.connectors === 0 && r.middle.second && r.middle.second[0].x === 330 && r.middle.second[0].y === 300,
+      JSON.stringify(r.middle) + ' (wanted 2 plain lines, the second starting at 330,300)');
+    check('and started within reach of a line\'s end, it starts exactly on that end - and finishes exactly on another\'s',
+      r.join.lines === 3 && r.join.connectors === 0 && r.join.third && r.join.third[0].x === 500 && r.join.third[0].y === 300 && r.join.third[1].x === 330 && r.join.third[1].y === 480,
+      JSON.stringify(r.join) + ' (wanted the third line from 500,300 to 330,480)');
+    check('a line joining two lines meets each exactly where the mouse went down and came up - anywhere along them, not their middles',
+      r.anywhere.lines === 3 && r.anywhere.connectors === 0 && r.anywhere.joining && r.anywhere.joining[0].x === 300 && r.anywhere.joining[0].y === 200
+        && r.anywhere.joining[1].x === 500 && r.anywhere.joining[1].y === 400,
+      JSON.stringify(r.anywhere) + ' (wanted the joining line from 300,200 to 500,400)');
+    const tri = r.triangle || [];
+    const closes = tri.length === 3 && tri[1][0].x === tri[0][1].x && tri[1][0].y === tri[0][1].y && tri[2][0].x === tri[1][1].x && tri[2][0].y === tri[1][1].y
+      && tri[2][1].x === tri[0][0].x && tri[2][1].y === tri[0][0].y;
+    check('three lines drawn corner to corner close into a triangle', closes, JSON.stringify(tri));
+    check('two arrows out of one box, the second started right beside where the first leaves it, both hold the box',
+      JSON.stringify(r.twoArrows.connectors) === JSON.stringify(['bA→bB', 'bA→bC']), JSON.stringify(r.twoArrows) + ' (wanted bA→bB and bA→bC)');
+    check('a line started beside an arrow\'s free end meets that end exactly',
+      !!r.freeEnd.free && !!r.freeEnd.line && r.freeEnd.line[0].x === r.freeEnd.free[0] && r.freeEnd.line[0].y === r.freeEnd.free[1],
+      JSON.stringify(r.freeEnd));
+    check('a line drawn from a rectangle still holds on to it, as arrows always have',
+      r.fromBox.connectors === 1 && r.fromBox.holds === 'q47', JSON.stringify(r.fromBox));
+    check('with Alt held a line is drawn loose: it holds nothing and meets no line end',
+      r.alt.connectors === 0 && r.alt.lines === 3 && r.alt.looseFromBox && r.alt.looseFromBox.x === 680 && r.alt.looseFromBox.y === 250
+        && r.alt.looseNearEnd && r.alt.looseNearEnd.x === 504 && r.alt.looseNearEnd.y === 304,
+      JSON.stringify(r.alt) + ' (wanted 0 arrows, 3 lines, starting at 680,250 and 504,304)');
   }
 
   /* ---- the tray's ruler button lights up on the click that shows the ruler, and goes out with the ✕ ---- */

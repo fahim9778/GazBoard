@@ -84,6 +84,56 @@ function borderPoint(box, aim, gap = GAP) {
   return { x: c.x + dx * t, y: c.y + dy * t };
 }
 
+/*
+ * Lanes: several straight arrows between the same two things.
+ *
+ * A straight arrow runs from the middle of one box towards the middle of the other, so a second
+ * arrow between the same pair - A to B again, or B back to A - lay exactly on top of the first,
+ * and two arrows read as one line with a head at each end. They are now laid side by side, LANE
+ * apart, centred on the line between the two middles, like the lanes of a road: one arrow alone is
+ * exactly where it always was. Only straight arrows holding a thing at BOTH ends take a lane; a
+ * curved or elbow arrow already has its own path, and a loose end goes where it was put.
+ */
+const LANE = 18;
+const endKey = (e) => (e && e.id ? 'i:' + e.id : e && e.group ? 'g:' + e.group : null);
+const pairOf = (o) => {
+  const ka = endKey(o.a), kb = endKey(o.b);
+  return ka && kb && ka !== kb ? (ka < kb ? ka + '|' + kb : kb + '|' + ka) : null;
+};
+let lanesCache = { rev: -1, doc: null, map: null };
+/** pair -> the straight, both-ends-held arrows between it, in board order. Rebuilt when the board changes. */
+function lanesFor(pair) {
+  if (!store || !pair) return null;
+  const doc = store.doc;
+  if (lanesCache.rev !== store.rev || lanesCache.doc !== doc) {
+    const map = new Map();
+    for (const id of doc.order) {
+      const o = doc.objects[id];
+      if (!o || o.type !== 'connector' || (ROUTES.includes(o.route) ? o.route : 'straight') !== 'straight') continue;
+      if (!endBox(o.a) || !endBox(o.b)) continue;
+      const k = pairOf(o);
+      if (!k) continue;
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(o.id);
+    }
+    lanesCache = { rev: store.rev, doc, map };
+  }
+  return lanesCache.map.get(pair) || null;
+}
+
+/** Where a line from `from` towards `to` leaves `box` (pushed GAP out), or null if `from` is not inside it. */
+function rayExit(box, from, to, gap = GAP) {
+  const x0 = box.x - gap, x1 = box.x + box.w + gap, y0 = box.y - gap, y1 = box.y + box.h + gap;
+  if (from.x < x0 || from.x > x1 || from.y < y0 || from.y > y1) return null;
+  const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy);
+  if (len < 1e-9) return null;
+  const ux = dx / len, uy = dy / len;
+  const tx = ux > 0 ? (x1 - from.x) / ux : ux < 0 ? (x0 - from.x) / ux : Infinity;
+  const ty = uy > 0 ? (y1 - from.y) / uy : uy < 0 ? (y0 - from.y) / uy : Infinity;
+  const t = Math.min(tx, ty);
+  return { x: from.x + ux * t, y: from.y + uy * t };
+}
+
 /** Which side of `box` faces `aim`: 'e', 'w', 'n' or 's'. */
 function sideFacing(box, aim) {
   const c = center(box);
@@ -226,6 +276,21 @@ export function route(o) {
   } else {
     pA = boxA ? borderPoint(boxA, refB) : refA;
     pB = boxB ? borderPoint(boxB, refA) : refB;
+    // more than one straight arrow between these two things: this one keeps to its own lane
+    const pair = boxA && boxB ? pairOf(o) : null;
+    const lane = pair ? lanesFor(pair) : null;
+    const i = lane ? lane.indexOf(o.id) : -1;
+    if (lane && lane.length > 1 && i >= 0) {
+      // the same sideways direction for every arrow of the pair, whichever way each one points
+      const [first] = pair.split('|');
+      const fromRef = endKey(o.a) === first ? refA : refB, toRef = fromRef === refA ? refB : refA;
+      const dx = toRef.x - fromRef.x, dy = toRef.y - fromRef.y, len = Math.hypot(dx, dy) || 1;
+      const off = (i - (lane.length - 1) / 2) * LANE;
+      const nx = (-dy / len) * off, ny = (dx / len) * off;
+      const sA = { x: refA.x + nx, y: refA.y + ny }, sB = { x: refB.x + nx, y: refB.y + ny };
+      const eA = rayExit(boxA, sA, sB), eB = rayExit(boxB, sB, sA);
+      if (eA && eB) { pA = eA; pB = eB; }
+    }
     pts = [pA, pB];
   }
 
@@ -386,12 +451,50 @@ export function targetAt(s, p, slack = 8, { except = null, openGroup = null } = 
     // Handwriting is not a thing to point at: an arrow drawn past some ink
     // must not grab it. Ink grouped with other things is part of that group.
     if (o.type === 'stroke' && !(o.groupId && o.groupId !== openGroup)) continue;
+    // Nor is a line. Its box is just the rectangle its two ends happen to span, so holding on to it
+    // pulled the new line's end to the edge of that box - near the line's middle, nowhere near
+    // where it was put (issue #47). A line's ENDS are what a new line meets; see lineEnds().
+    if (o.type === 'shape' && LINEAR.has(o.kind) && !(o.groupId && o.groupId !== openGroup)) continue;
     const b = worldBounds(o);
     if (p.x < b.x - slack || p.x > b.x + b.w + slack || p.y < b.y - slack || p.y > b.y + b.h + slack) continue;
     if (o.groupId && o.groupId !== openGroup) return { group: o.groupId };
     return { id: o.id };
   }
   return null;
+}
+
+const LINEAR = new Set(['line', 'arrow', 'doubleArrow']);
+
+/**
+ * The two ends of every line on the board: the line shapes (turned with their shape, if turned)
+ * and the free or attached ends of every arrow. A new line started or finished within reach of
+ * one of these lands exactly on it, so lines meet - a triangle drawn from three lines closes.
+ */
+export function lineEnds(s) {
+  const out = [];
+  for (const id of s.doc.order) {
+    const o = s.doc.objects[id];
+    if (!o || gone(o)) continue;
+    if (o.type === 'shape' && LINEAR.has(o.kind)) {
+      const ends = [{ x: o.x, y: o.y }, { x: o.x + o.w, y: o.y + o.h }];
+      const r = o.rotation || 0;
+      if (r) {
+        const cx = o.x + o.w / 2, cy = o.y + o.h / 2, c = Math.cos(r), sn = Math.sin(r);
+        for (const e of ends) { const dx = e.x - cx, dy = e.y - cy; e.x = cx + dx * c - dy * sn; e.y = cy + dx * sn + dy * c; }
+      }
+      out.push(...ends);
+    } else if (o.type === 'connector') {
+      // Only an arrow's FREE ends. An end holding a box sits just outside that box, right where the
+      // next arrow out of the same box would be started - and meeting it there would leave that
+      // second arrow loose instead of holding the box like the first.
+      try {
+        const r = route(o);
+        if (r && r.a && !r.attachedA) out.push({ x: r.a.x, y: r.a.y });
+        if (r && r.b && !r.attachedB) out.push({ x: r.b.x, y: r.b.y });
+      } catch { /* an arrow that cannot be routed has no ends to meet */ }
+    }
+  }
+  return out;
 }
 
 export const sameTarget = (u, v) => !!u && !!v && ((u.id && u.id === v.id) || (u.group && u.group === v.group));

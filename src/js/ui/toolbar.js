@@ -3,7 +3,7 @@
 import { icon } from './icons.js';
 import { openPopover, closePopover, h, isOpen } from './popover.js';
 import {
-  PEN_COLORS, PEN_EFFECTS, HIGHLIGHTER_COLORS, NOTE_COLORS, TEXT_COLORS,
+  PEN_COLORS, PEN_EFFECTS, NEON_COLORS, HIGHLIGHTER_COLORS, NOTE_COLORS, TEXT_COLORS,
   SHAPE_STROKES, SHAPE_FILLS, SHAPES, SHAPE_LABELS, shapeIcon,
   PENS, penList, penById, rememberPen, heldPenId, penIcon, FONTS, PENCIL_GRAPHITE
 } from './palettes.js';
@@ -40,10 +40,63 @@ export function isPhoneLayout() {
     && (matchMedia('(max-width: 760px)').matches || matchMedia('(max-height: 460px)').matches);
 }
 
+/**
+ * A phone turned on its side: wide enough for more than the three pens, but no taller. Asked for
+ * by testers - "turned sideways, it should show more of the pens and buttons, as if expanded".
+ */
+export function isWidePhone() {
+  return isPhoneLayout() && typeof innerWidth === 'number' && innerWidth > innerHeight && innerWidth >= 640;
+}
+
+/*
+ * Turning the phone round rebuilds the bar - the sideways one has room the upright one does not.
+ * The bar was once deliberately left alone on rotation ("rebuilding a toolbar under somebody's
+ * thumb"), but nothing is lost doing it: the pen, tool, colours and ruler all live in the app, not
+ * in the buttons, and a menu left open is closed first. Only a phone ever switches; a tablet or a
+ * desktop window keeps the tray it started with.
+ */
+let watchingTurns = false;
+function watchTurns(app) {
+  if (watchingTurns || typeof matchMedia !== 'function') return;
+  watchingTurns = true;
+  // what kind of bar this screen gets: desktop tray, upright phone, sideways phone, or a roomy sideways one
+  const kind = () => !isPhoneLayout() ? 'desk' : !isWidePhone() ? 'phone' : innerWidth >= 820 ? 'wide+' : 'wide';
+  let was = kind();
+  const turned = () => {
+    const now = kind();
+    if (now === was) return;
+    const fromDesk = was === 'desk';
+    was = now;
+    if (fromDesk || now === 'desk') return;          // only a phone ever changes bars
+    closePopover();
+    rebuildToolbar(app);
+  };
+  try { matchMedia('(orientation: landscape)').addEventListener('change', turned); } catch { /* an engine without it keeps its first bar */ }
+  addEventListener('resize', () => { clearTimeout(watchTurns._t); watchTurns._t = setTimeout(turned, 150); });
+}
+
+/** Build the bar again for the screen as it is now, with everything in hand kept. */
+export function rebuildToolbar(app) {
+  const bar = document.getElementById('toolbar');
+  bar.innerHTML = '';
+  bar.classList.remove('phone', 'wide');
+  if (isPhoneLayout()) initPhoneToolbar(app, bar);
+  else buildDesktopTray(app, bar);
+  app.syncUI();
+  if (typeof app.surface?.resize === 'function') requestAnimationFrame(() => app.surface.resize());
+}
+
 export function initToolbar(app) {
   const bar = document.getElementById('toolbar');
   bar.innerHTML = '';
+  bar.classList.remove('phone', 'wide');
+  watchTurns(app);
   if (isPhoneLayout()) { initPhoneToolbar(app, bar); wireTopBar(app); return; }
+  buildDesktopTray(app, bar);
+  wireTopBar(app);
+}
+
+function buildDesktopTray(app, bar) {
 
   const sep = () => bar.appendChild(h('div', { class: 'sep' }));
 
@@ -140,8 +193,6 @@ export function initToolbar(app) {
   iconTool({ cmd: 'undo', icon: 'undo', title: t('Undo (Ctrl+Z)'), onClick: () => app.command('undo') });
   iconTool({ cmd: 'redo', icon: 'redo', title: t('Redo (Ctrl+Y)'), onClick: () => app.command('redo') });
   iconTool({ cmd: 'more', icon: 'more', pop: 'more', title: t('More'), onClick: (e, b) => openMorePopover(app, b) });
-
-  wireTopBar(app);
 }
 
 /* ==================================================================
@@ -168,6 +219,15 @@ const PHONE_PENS = ['black', 'red', 'blue'];
 
 function initPhoneToolbar(app, bar) {
   bar.classList.add('phone');
+  /*
+   * Sideways, the same bar with more on it: the other pens and the highlighter come out of their
+   * menu, and select, text, sticky note, shapes and the ruler get buttons of their own. Still one
+   * row, still no scrolling, still no taller - on its side a phone has width to spare and no height.
+   */
+  const wide = isWidePhone();
+  if (wide) bar.classList.add('wide');
+  const roomy = wide && innerWidth >= 820;
+  const barPens = wide ? PENS.map((p) => p.id).slice(0, roomy ? PENS.length : 5) : PHONE_PENS;
 
   const btn = (cls, title, html) => {
     const b = h('button', { class: cls, title });
@@ -179,8 +239,8 @@ function initPhoneToolbar(app, bar) {
 
   const pickPen = (pen, b) => choosePen(app, pen.id, b);
 
-  /* ---- the three everyday pens ---- */
-  for (const id of PHONE_PENS) {
+  /* ---- the three everyday pens (more, sideways) ---- */
+  for (const id of barPens) {
     const pen = PENS.find((p) => p.id === id);
     if (!pen) continue;
     const now = penById(app.settings, pen.id) || pen;
@@ -192,13 +252,25 @@ function initPhoneToolbar(app, bar) {
     b.addEventListener('click', () => pickPen(pen, b));
   }
 
+  /* ---- sideways: the highlighter on the bar, beside the pens ---- */
+  if (wide) {
+    const hl = btn('pen', t('Highlighter — tap again for options'), penIcon(app.settings.highlighterColor, 'none', 'highlighter'));
+    hl.dataset.tool = 'highlighter';
+    hl.addEventListener('click', () => {
+      const was = app.tool === 'highlighter';
+      app.setTool('highlighter'); app.syncUI();
+      if (was) openToolPopover(app, hl, 'highlighter'); else closePopover();
+    });
+  }
+
   /* ---- everything else that makes a mark, one tap deeper ---- */
-  const rest = btn('tool tool-sm', t('More pens and the highlighter'), icon('chevronUp', 18));
-  rest.dataset.pop = 'pens';
-  rest.addEventListener('click', () => {
+  const morePens = PENS.filter((p) => !barPens.includes(p.id));
+  const rest = (!wide || morePens.length) ? btn('tool tool-sm', wide ? t('More pens') : t('More pens and the highlighter'), icon('chevronUp', 18)) : null;
+  if (rest) rest.dataset.pop = 'pens';
+  rest?.addEventListener('click', () => {
     const body = h('div', { class: 'menu' });
     for (const pen of PENS) {
-      if (PHONE_PENS.includes(pen.id)) continue;
+      if (barPens.includes(pen.id)) continue;
       const now = penById(app.settings, pen.id) || pen;
       const row = h('button', { class: 'menu-item' },
         h('span', { html: penIcon(inkPaint(now.color), now.effect), style: 'display:flex;width:17px' }),
@@ -206,8 +278,10 @@ function initPhoneToolbar(app, bar) {
       row.addEventListener('click', () => { closePopover(); pickPen(pen, null); });
       body.appendChild(row);
     }
-    body.appendChild(h('div', { class: 'menu-sep' }));
-    body.appendChild(menuItem(t('Highlighter'), 'highlighter', () => { app.setTool('highlighter'); app.syncUI(); }));
+    if (!wide) {
+      body.appendChild(h('div', { class: 'menu-sep' }));
+      body.appendChild(menuItem(t('Highlighter'), 'highlighter', () => { app.setTool('highlighter'); app.syncUI(); }));
+    }
     openPopover(rest, body, { key: 'pens' });
   });
 
@@ -222,6 +296,29 @@ function initPhoneToolbar(app, bar) {
     if (was) openToolPopover(app, er, 'eraser'); else closePopover();
   });
   sep();
+
+  /* ---- sideways: the tools that otherwise live behind ⋯ and + ---- */
+  if (wide) {
+    const tool = (name, ic, title, onClick) => {
+      const b = btn('tool tool-sm', title, icon(ic, 18));
+      if (name) b.dataset.tool = name;
+      b.addEventListener('click', () => onClick(b));
+      return b;
+    };
+    const toggle = (name) => (b) => {
+      const was = app.tool === name;
+      app.setTool(name); app.syncUI();
+      if (was) openToolPopover(app, b, name); else closePopover();
+    };
+    tool('select', 'select', t('Select'), () => { app.setTool('select'); app.syncUI(); });
+    if (roomy) tool('lasso', 'lasso', t('Lasso select'), () => { app.setTool('lasso'); app.syncUI(); });
+    tool('text', 'text', t('Text'), toggle('text'));
+    tool('note', 'note', t('Sticky note'), toggle('note'));
+    if (roomy) tool('shape', 'shapes', t('Shape'), (b) => { app.setTool('shape'); app.syncUI(); openToolPopover(app, b, 'shape'); });
+    const ruler = tool(null, 'ruler', t('Ruler'), () => app.command('ruler'));
+    ruler.dataset.cmd = 'ruler';
+    sep();
+  }
 
   /*
    * Finger draws / finger moves the board.
@@ -550,8 +647,8 @@ function emojiPicker(app) {
  */
 export function pickPenInk(app, c) {
   const s = app.settings;
-  // a pencil given a new colour is a coloured pencil, still a pencil
-  const effect = s.penEffect === 'pencil' ? 'pencil' : 'none';
+  // a pencil given a new colour is a coloured pencil, still a pencil; a neon pen stays neon
+  const effect = s.penEffect === 'pencil' || s.penEffect === 'neon' ? s.penEffect : 'none';
   s.penColor = c; s.penEffect = effect;
   const held = heldPenId(s);
   if (held) rememberPen(s, held, { color: c, effect });
@@ -571,8 +668,10 @@ export function openToolPopover(app, anchor, tool) {
         b.style.fontSize = '12.5px';
         b.addEventListener('click', () => {
           markActive(effects, b, 'primary');
-          const crossing = (s.penEffect === 'pencil') !== (e.id === 'pencil');
+          const crossing = (s.penEffect === 'pencil') !== (e.id === 'pencil') || (s.penEffect === 'neon') !== (e.id === 'neon');
           s.penEffect = e.id;
+          // turning a pen neon with plain black in it would glow black: it lights up purple instead
+          if (e.id === 'neon' && !NEON_COLORS.includes(s.penColor) && /^#(201f1e|201f1f|4b4a48)$/i.test(s.penColor || '#201f1e')) s.penColor = NEON_COLORS[0];
           const held = heldPenId(s);
           if (held) rememberPen(s, held, { color: s.penColor, effect: e.id });
           app.saveSettings();
@@ -618,7 +717,8 @@ export function openToolPopover(app, anchor, tool) {
     body = h('div', {},
       h('h4', {}, t('Ink colour')),
       // a pencil offers its own graphite first, so a coloured pencil can always go back to plain lead
-      swatchRow(s.penEffect === 'pencil' ? [PENCIL_GRAPHITE, ...PEN_COLORS] : PEN_COLORS, s.penEffect === 'none' || s.penEffect === 'pencil' ? s.penColor : null, (c) => {
+      swatchRow(s.penEffect === 'pencil' ? [PENCIL_GRAPHITE, ...PEN_COLORS] : s.penEffect === 'neon' ? NEON_COLORS : PEN_COLORS,
+        s.penEffect === 'none' || s.penEffect === 'pencil' || s.penEffect === 'neon' ? s.penColor : null, (c) => {
         pickInk(c); closePopover();
       }, [customInk]),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('label', {}, t('Effect'))),
@@ -916,10 +1016,17 @@ export function syncToolbar(app) {
    * the board dropped one. The button they live behind lights up instead, and so does the item
    * itself inside the menu.
    */
+  // (sideways, some of them have buttons of their own - then that button lights, not the menu's)
+  const ownButton = (tool) => !!bar.querySelector(`.tool[data-tool="${tool}"]`);
   const addBtn = bar.querySelector('.tool[data-pop="add"]');
-  if (addBtn) addBtn.classList.toggle('active', ['note', 'text', 'shape', 'emoji'].includes(app.tool) || !!app.ruler?.visible);
+  if (addBtn) addBtn.classList.toggle('active', (['note', 'text', 'shape', 'emoji'].includes(app.tool) && !ownButton(app.tool))
+    || (!!app.ruler?.visible && !bar.querySelector('.tool[data-cmd="ruler"]')));
   const moreBtn = bar.querySelector('.tool[data-pop="more"]');
-  if (moreBtn) moreBtn.classList.toggle('active', ['select', 'lasso', 'pan', 'laser'].includes(app.tool));
+  if (moreBtn) moreBtn.classList.toggle('active', ['select', 'lasso', 'pan', 'laser'].includes(app.tool) && !ownButton(app.tool));
+  // a pen kept in the "more pens" menu lights that menu's button while it is in hand
+  const pensBtn = bar.querySelector('.tool[data-pop="pens"]');
+  if (pensBtn) pensBtn.classList.toggle('active', (app.tool === 'pen' && !bar.querySelector(`.pen[data-pen="${held}"]`))
+    || (app.tool === 'highlighter' && !bar.querySelector('.pen[data-tool="highlighter"]')));
 
   for (const btn of bar.querySelectorAll('.tool')) {
     const t = btn.dataset.tool, c = btn.dataset.cmd;

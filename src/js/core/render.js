@@ -591,6 +591,8 @@ export function drawStroke(ctx, o) {
     return;
   }
 
+  if (o.effect === 'neon' && !highlighter) { drawNeon(ctx, o, path, pts); return; }
+
   ctx.save();
   if (highlighter) {
     ctx.globalAlpha = o.opacity ?? 0.38;
@@ -647,6 +649,52 @@ export function drawStroke(ctx, o) {
     ctx.stroke(path);
     ctx.restore();
   }
+  ctx.restore();
+}
+
+/* =================================================================== *
+ *  Neon
+ *
+ *  A glowing tube of light: a soft halo in the ink's own colour, and a hot,
+ *  paler core down the middle. On a dark page the halo is laid twice and the
+ *  core runs almost white, so it reads like a sign at night; on a light page
+ *  the core keeps more of its colour, or it would vanish into the paper.
+ *  The halo reaches about three widths past the line - boundsOf() knows that,
+ *  so selecting, culling and repainting take the glow in too.
+ * =================================================================== */
+export const NEON_REACH = 3;
+const neonHex = (c) => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(c || ''));
+  if (!m) return [176, 38, 255];
+  const n = parseInt(m[1], 16);
+  return [n >> 16, (n >> 8) & 255, n & 255];
+};
+function drawNeon(ctx, o, path, pts) {
+  const [r, g, b] = neonHex(inkPaint(o.color));
+  const dark = lightInk();
+  let scale = 1;
+  try { const m = ctx.getTransform(); scale = Math.hypot(m.a, m.b) || 1; } catch { scale = 1; }
+  const w = strokeWeight(pts, o.width || 4, o.pressure !== false);
+  const blur = Math.min(160, w * scale * NEON_REACH);
+  const base = o.opacity ?? 1;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  // the halo: the tube itself, casting its own colour all round it
+  ctx.strokeStyle = `rgb(${r},${g},${b})`;
+  ctx.lineWidth = w;
+  ctx.shadowColor = `rgba(${r},${g},${b},${dark ? 1 : 0.8})`;
+  ctx.globalAlpha = base;
+  ctx.shadowBlur = blur;
+  ctx.stroke(path);
+  if (dark) { ctx.shadowBlur = blur * 0.4; ctx.stroke(path); }
+  // the core: paler, thinner, no glow of its own
+  const k = dark ? 0.7 : 0.45;
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = `rgb(${Math.round(r + (255 - r) * k)},${Math.round(g + (255 - g) * k)},${Math.round(b + (255 - b) * k)})`;
+  ctx.lineWidth = Math.max(1 / scale, w * 0.42);
+  ctx.stroke(path);
   ctx.restore();
 }
 
