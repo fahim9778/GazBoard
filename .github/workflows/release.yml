@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   validate-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 in Nov 2026 and its package mirror broke the release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -135,7 +135,7 @@ jobs:
 
   linux:
     needs: [validate-version]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 in Nov 2026 and its package mirror broke the release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -172,8 +172,13 @@ jobs:
           ARCH: x86_64
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq zsync desktop-file-utils  # zsyncmake and desktop-file-validate
+          # Ubuntu's mirrors sometimes stop answering for a few minutes: try again rather than fail the release
+          for i in 1 2 3 4 5; do
+            sudo apt-get -o Acquire::Retries=5 update -qq || true
+            if sudo apt-get -o Acquire::Retries=5 install -y -qq zsync desktop-file-utils; then break; fi  # zsyncmake and desktop-file-validate
+            [ "$i" = 5 ] && { echo "::error::could not install zsync and desktop-file-utils after 5 tries"; exit 1; }
+            echo "apt failed (try $i of 5), waiting before trying again"; sleep 30
+          done
 
           UPDATE_INFO="gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY##*/}|latest|GazBoard-*.AppImage.zsync"
 
@@ -446,7 +451,7 @@ jobs:
 
   web:
     needs: [validate-version]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest became 26.04 in Nov 2026 and its package mirror broke the release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

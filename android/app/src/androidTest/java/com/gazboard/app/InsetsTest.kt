@@ -34,6 +34,32 @@ class InsetsTest {
     }
     fail(message)
   }
+  /** What Android itself says, for a failure message: who has focus, and the editor's last words. */
+  private fun shell(command: String): String {
+    val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+    return android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).bufferedReader().use { it.readText() }
+  }
+  private fun focusReport(scenario: ActivityScenario<MainActivity>): String {
+    var activity = "gone"
+    try {
+      scenario.onActivity { a ->
+        activity = "focus=${a.web.hasWindowFocus()} attached=${a.web.isAttachedToWindow} " +
+          "inFrame=${a.web.parent === a.frame} finishing=${a.isFinishing} orientation=${a.resources.configuration.orientation}"
+      }
+    } catch (e: Throwable) { activity = "unreachable: $e" }
+    val windows = try {
+      shell("dumpsys window windows").lines().filter { "mCurrentFocus" in it || "mFocusedApp" in it || "mFocusedWindow" in it }
+        .joinToString(" | ") { it.trim() }
+    } catch (e: Throwable) { "dumpsys failed: $e" }
+    val log = try {
+      shell("logcat -d -t 600").lines().filter { line ->
+        listOf("chromium", "AndroidRuntime", "Reopen", "renderer", "Render", "lowmemory", "ActivityManager: Process", "ANR", "FATAL", "crash", "Window focus")
+          .any { line.contains(it, ignoreCase = true) }
+      }.takeLast(40).joinToString("\n")
+    } catch (e: Throwable) { "logcat failed: $e" }
+    screenshot("android-focus-lost.png")
+    return "activity: $activity; windows: $windows\nlog:\n$log"
+  }
   private fun ready(scenario: ActivityScenario<MainActivity>) {
     until("Editor did not load") { js(scenario, "!!window.app && !!document.getElementById('toolbar').children.length") == "true" }
     js(scenario, "app.commitTextEdit(); app.dismissOverlay(); app.panels.close(); app.setTool('pen');")
@@ -117,10 +143,15 @@ class InsetsTest {
       checkGap(before)
       assertEquals("Native padding already protects the page", 0.0, before.getValue("padding").jsonPrimitive.double, 1.0)
       screenshot("android-toolbar.png")
-      until("Editor window did not gain focus") {
-        var focused = false
-        scenario.onActivity { focused = it.web.hasWindowFocus() }
-        focused
+      try {
+        until("Editor window did not gain focus") {
+          var focused = false
+          scenario.onActivity { focused = it.web.hasWindowFocus() }
+          focused
+        }
+      } catch (error: AssertionError) {
+        // say who took the focus and whether the editor itself went away, so one run tells us why
+        throw AssertionError(error.message + "; " + focusReport(scenario))
       }
       val target = Json.parseToJsonElement(js(scenario, """
         (() => { const r = document.getElementById('boardTitle').getBoundingClientRect();
