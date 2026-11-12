@@ -1169,6 +1169,7 @@ class App {
     this.tool = tool;
     // a pen nib left behind by the tool it belonged to is just a stray picture
     if (tool !== 'pen' && tool !== 'highlighter') this.interaction.hideInkPointer();
+    if (tool !== 'eraser') this.interaction.hideRing?.();
     if (tool !== 'laser') this.surface.laser.length = 0;   // no stale dot left behind
     // panning is a view change, not an edit - it must not throw a selection away
     if (tool !== 'select' && tool !== 'lasso' && tool !== 'pan') this.setSelection([]);

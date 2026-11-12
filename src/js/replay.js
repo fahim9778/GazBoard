@@ -546,22 +546,29 @@ export class ReplayPlayer {
 
   pause() { this.playing = false; this.kick(); }
 
-  seek(t) { this.t = Math.max(0, Math.min(this.total, t)); this.last = performance.now(); this.kick(); }
+  /*
+   * A jump along the slider. While it is being reached the clock holds still and the drawing gets the
+   * bigger budget a paused replay gets, even if the replay is playing: a jump forward is a long way
+   * to draw, and the slow-machine rule below (hold the clock back to what is drawn) used to pull a
+   * click while playing back to wherever the drawing had got to in one frame - well short of the click.
+   */
+  seek(t) { this.t = Math.max(0, Math.min(this.total, t)); this.seeking = true; this.last = performance.now(); this.kick(); }
 
   kick() { if (!this.raf) this.raf = requestAnimationFrame(this.frame); }
 
   frame(now) {
     this.raf = null;
     const t0 = performance.now();
-    if (this.playing) {
+    if (this.playing && !this.seeking) {
       const dt = Math.min(100, Math.max(0, now - this.last));
       this.t = Math.min(this.total, this.t + dt * this.speed);
     }
     this.last = now;
     this.r.update?.(this.t, now);
-    // paused (dragging the slider) it may take longer per frame: getting to the spot quickly matters more than smoothness
-    const there = this.r.advanceTo(this.t, this.playing ? this.budget : 45);
-    if (!there && this.playing) {
+    // paused, or getting to where the slider was put, it may take longer per frame: getting to the spot quickly matters more than smoothness
+    const there = this.r.advanceTo(this.t, this.playing && !this.seeking ? this.budget : 45);
+    if (there) this.seeking = false;
+    else if (this.playing && !this.seeking) {
       // the machine could not keep up: the clock waits for the drawing
       this.t = Math.max(this.r.reached(), Math.min(this.t, this.r.reached() + 50));
       this.stats.slowed++;

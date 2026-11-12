@@ -133,7 +133,23 @@ export class Interaction {
       // else entirely, is worse than no nib at all
       this.hideInkPointer();
       this.eraserCursor = null;
+      this.hideRing();
       this.surface.invalidate();
+    });
+    /*
+     * The ring rides on the raw pointer reports as well. Windows hands a pen's position to the page
+     * several times a frame; pointermove only passes on one per frame. Moving the ring layer costs
+     * nothing, so it can take every report and stay on the nib while the board catches up.
+     */
+    c.addEventListener('pointerrawupdate', (e) => {
+      if (e.pointerType === 'touch') return;
+      const a = this.action;
+      // the eraser in hand, or a pen's tail (hovering or rubbing): the ring rides along
+      if (this.tool !== 'eraser' && !(a && a.type === 'erase') && !(e.pointerType === 'pen' && (e.buttons & 32))) return;
+      const el = this._ringEl;
+      if (!el || el.hidden) return;
+      const sp = this.surface.screenPoint(e);
+      this.placeRing(sp, a && a.type === 'erase' ? a.radiusPx : this.app.settings.eraserSize / 2);
     });
     c.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
     c.addEventListener('dblclick', (e) => this.onDoubleClick(e));
@@ -207,6 +223,14 @@ export class Interaction {
     });
 
     this.surface.overlays.push((ctx, s) => this.drawOverlay(ctx, s));
+    /*
+     * The board's idle copy waits while a hand is at work (see Surface.warmFreeze): a gesture under
+     * way, with a pointer that has PRESSED in the last second. The second half matters: a
+     * lift that never arrives (the window lost focus mid-rub, a pen whisked out of range) would
+     * otherwise leave the board "busy" for good, and the idle copy would never be taken again.
+     */
+    this._heardAt = 0;
+    this.surface.isBusy = () => !!this.action && this.pointers.size > 0 && performance.now() - this._heardAt < 1000;
   }
 
   get tool() { return this.app.tool; }
@@ -291,6 +315,7 @@ export class Interaction {
 
   /* ------------------------------------------------------------ */
   onDown(e) {
+    this._heardAt = performance.now();             // a hand at work (see isBusy, in the constructor)
     if (e.button === 2) {
       this.app.hideMenus();
       // Right-drag pans, for anyone without a pen, a middle button or a
@@ -594,7 +619,7 @@ export class Interaction {
         this.startStroke(e, wp, tool);
         if (this.action) this.action.selectionAtDown = selectionAtDown;
         break;
-      case 'eraser': this.startErase(wp); break;
+      case 'eraser': this.startErase(wp); if (this.action) this.placeRing(sp, this.action.radiusPx); break;
       case 'lasso':
         // after a lasso select, dragging inside the selection moves it
         if (this.startMoveOnSelection(wp)) break;
@@ -715,6 +740,9 @@ export class Interaction {
   }
 
   onMove(e) {
+    // Only a pointer that is pressing counts as a hand at work. A mouse merely hovering - or a pen's
+    // tail held over the glass - keeps moving too, and it must not keep a stuck gesture alive.
+    if ((e.buttons & 1) || e.pressure > 0) this._heardAt = performance.now();
     if (this.moveRightPan(e)) return;
     if (e.pointerType === 'pen' && e.buttons) this.app.notePenSeen();
     const sp = this.surface.screenPoint(e);
@@ -767,7 +795,7 @@ export class Interaction {
         this._penSp = null;
         this._mouseSp = null;
       }
-      this.updateHover(sp, wp, e.pointerType);
+      this.updateHover(sp, wp, e.pointerType, e.pointerType === 'pen' && (e.buttons & 32) !== 0);
       return;
     }
 
@@ -798,6 +826,7 @@ export class Interaction {
 
     this.lastMotion = { sp, mods: { shift: e.shiftKey, alt: e.altKey }, pressure: this.pressure(e) };
     this.applyMotion(sp, this.lastMotion.mods, e);
+    if (this.action && this.action.type === 'erase') this.placeRing(sp, this.action.radiusPx);
     this.updateEdgePan();
     /*
      * Every other gesture asks for the whole board here, as it always has.
@@ -1181,7 +1210,11 @@ export class Interaction {
         // Neither should become ink or an undo entry. See tappedAnObject().
         if (this.app.viewMode || !this.tappedAnObject(a, e)) this.finishStroke(a);
         break;
-      case 'erase': this.finishErase(a); break;
+      case 'erase':
+        this.finishErase(a);
+        // back to the resting size where the pen or mouse still hovers; a finger has no hover, so it goes
+        if (e && e.pointerType === 'touch') this.hideRing(); else if (this._ringSp) this.placeRing(this._ringSp, this.app.settings.eraserSize / 2);
+        break;
       case 'marquee': {
         const box = normalizeBox({ x: a.start.x, y: a.start.y, w: a.cur.x - a.start.x, h: a.cur.y - a.start.y });
         const found = (Math.abs(box.w) < 3 && Math.abs(box.h) < 3) ? [] : inBox(this.store, box, false);
@@ -2400,27 +2433,13 @@ export class Interaction {
      * A generous margin on top, because ink is drawn with a width of its own
      * and round caps that reach past the centreline.
      */
-    const ringWorld = (r) => r / this.surface.cam.z;
-    const ringR = ringWorld(a.radiusPx) + 6 / this.surface.cam.z;
-    const boxes = [{
+    // (the ring is its own layer now - see placeRing - so it leaves nothing on the canvas to clear)
+    const band = {
       x: Math.min(from.x, to.x) - r - 4,
       y: Math.min(from.y, to.y) - r - 4,
       w: Math.abs(to.x - from.x) + (r + 4) * 2,
       h: Math.abs(to.y - from.y) + (r + 4) * 2
-    }, {
-      x: to.x - ringR, y: to.y - ringR, w: ringR * 2, h: ringR * 2
-    }];
-    if (a.lastRing) {
-      boxes.push({ x: a.lastRing.x - a.lastRing.r, y: a.lastRing.y - a.lastRing.r,
-        w: a.lastRing.r * 2, h: a.lastRing.r * 2 });
-    }
-    a.lastRing = { x: to.x, y: to.y, r: ringR };
-    let band = boxes[0];
-    for (const b of boxes.slice(1)) {
-      const x = Math.min(band.x, b.x), y = Math.min(band.y, b.y);
-      const x2 = Math.max(band.x + band.w, b.x + b.w), y2 = Math.max(band.y + band.h, b.y + b.h);
-      band = { x, y, w: x2 - x, h: y2 - y };
-    }
+    };
     /*
      * One case takes the whole board anyway: something is selected.
      *
@@ -2801,9 +2820,11 @@ export class Interaction {
       tool === 'highlighter' ? s.highlighterColor : inkPaint(s.penColor));
   }
 
-  updateHover(sp, wp, deviceType = 'mouse') {
+  updateHover(sp, wp, deviceType = 'mouse', tail = false) {
     let cursor = 'default';
-    const t = this.tool;
+    // a pen turned over: its tail hovers as the eraser, whatever tool is in hand, ring and all
+    const t = tail ? 'eraser' : this.tool;
+    if (t !== 'eraser') this.hideRing();          // first: several of the hovers below return early
     const inkTool = t === 'pen' || t === 'highlighter';
     const mousePointer = deviceType === 'mouse' && !this.app.mouseInks && inkTool;
     if (this.spaceDown) cursor = 'grab';
@@ -2870,21 +2891,9 @@ export class Interaction {
       else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
     }
     if (t === 'eraser') {
-      // The hover ring, when no button is down. Only the ring moved, so only
-      // where it was and where it is now need repainting - on a heavy board
-      // that is the difference between a ring that glides and one that stutters.
-      const prev = this.eraserCursor;
+      // The hover ring is a layer of its own (see placeRing): moving it repaints nothing on the board.
       this.eraserCursor = sp;
-      const rPx = this.app.settings.eraserSize / 2 + 6;
-      const z = this.surface.cam.z;
-      const boxOf = (p) => { const w = this.surface.cam.toWorld(p.x - rPx, p.y - rPx);
-        return { x: w.x, y: w.y, w: (rPx * 2) / z, h: (rPx * 2) / z }; };
-      if (prev && this.surface.invalidateBand) {
-        const a = boxOf(prev), b = boxOf(sp);
-        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
-        this.surface.invalidateBand({ x, y,
-          w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y });
-      } else this.surface.invalidate();
+      this.placeRing(sp, this.app.settings.eraserSize / 2);
     }
     this.setCursor(cursor);
   }
@@ -3745,14 +3754,49 @@ export class Interaction {
       ctx.restore();
     }
 
-    if (this.tool === 'eraser' && this.eraserCursor && !this.pointers.size) {
-      this.drawEraserRing(ctx, this.eraserCursor);
-    }
-    if (a && a.type === 'erase' && a.cursor) {
-      this.drawEraserRing(ctx, cam.toScreen(a.cursor.x, a.cursor.y), a.radiusPx);
-    }
+    // the eraser's ring is not painted here any more: it is its own layer, moved with the pointer (placeRing)
 
     if (this.ruler.visible) this.drawRuler(ctx);
+  }
+
+  /**
+   * The eraser's ring, on a layer of its own above the board.
+   *
+   * It used to be painted into the board canvas, so it could only move as fast as the board could be
+   * repainted under it: every frame of a rub had to rub out the old ring and paint the new one along
+   * with the ink. As its own layer it is moved by the compositor - like the system cursor - straight
+   * from the pointer, and it stays on the pen even on a frame where the ink takes longer.
+   */
+  ringEl() {
+    if (this._ringEl === undefined) {
+      // a host with no real page (the Android unit tests) simply has no ring layer
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (!doc || typeof doc.getElementById !== 'function' || typeof doc.createElement !== 'function') { this._ringEl = null; return null; }
+      let el = doc.getElementById('eraserRing');
+      if (!el && this.canvas && this.canvas.parentElement && typeof this.canvas.parentElement.appendChild === 'function') {
+        el = doc.createElement('div');
+        el.id = 'eraserRing';
+        el.hidden = true;
+        this.canvas.parentElement.appendChild(el);
+      }
+      this._ringEl = el || null;
+    }
+    return this._ringEl;
+  }
+
+  placeRing(sp, radius) {
+    const el = this.ringEl();
+    if (!el || !sp) return;
+    this._ringSp = sp;
+    const d = Math.max(4, Math.round((radius || this.app.settings.eraserSize / 2) * 2));
+    if (this._ringD !== d) { this._ringD = d; el.style.width = d + 'px'; el.style.height = d + 'px'; }
+    el.style.transform = 'translate3d(' + (sp.x - d / 2) + 'px,' + (sp.y - d / 2) + 'px,0)';
+    if (el.hidden) el.hidden = false;
+  }
+
+  hideRing() {
+    const el = this._ringEl;
+    if (el && !el.hidden) el.hidden = true;
   }
 
   drawEraserRing(ctx, sp, radius) {

@@ -1,7 +1,7 @@
 // The canvas view: sizing, the draw loop, culling, overlays.
 
 import { Camera } from './camera.js';
-import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint, setPageColor } from './render.js';
+import { drawBackground, drawRuling, drawObject, drawSelection, drawMemberOutline, drawLockBadge, drawGroupHint, drawLockedOutline, FONT, setDarkBoard, isDarkBoard, faceOf, inkPaint, setPageColor, setPaintBand } from './render.js';
 import { worldBounds, boundsOf } from './store.js';
 import { pageRects, pageIndexForBox, pageIndexForBoxIn, stripBounds } from './pages.js';
 import { boxesIntersect, wrapText } from './util.js';
@@ -428,7 +428,19 @@ export class Surface {
   }
 
   /** Background and every object, in world space. No selection chrome. */
+  /**
+   * Paint the board, or only the band `clip` of it. While a band is painted, render.js is told which
+   * part of the board that is (setPaintBand), so an imported page skips its blurred drop shadow when
+   * the band is nowhere near its edge - rubbing out notes on a PDF page no longer repaints the
+   * shadow of the whole page on every move.
+   */
   drawScene(ctx, w = this.width, h = this.height, onload = () => this.invalidate(), clip = null) {
+    if (!clip) return this._drawScene(ctx, w, h, onload, null);
+    setPaintBand(clip);
+    try { return this._drawScene(ctx, w, h, onload, clip); } finally { setPaintBand(null); }
+  }
+
+  _drawScene(ctx, w = this.width, h = this.height, onload = () => this.invalidate(), clip = null) {
     const cam = this.cam;
     this.screenTransform(ctx);
     const pages = this.store.doc.pages;
@@ -785,6 +797,9 @@ export class Surface {
    * second pan mid-wait produces a copy of where the board ended up rather
    * than a stale one nobody wants.
    */
+  /** Is a pointer gesture under way? The interaction layer answers (see Interaction); alone, nothing is. */
+  busy() { return typeof this.isBusy === 'function' ? !!this.isBusy() : false; }
+
   warmFreeze() {
     // A timer handle of 0 is a real handle. `!= null` so a queued rebuild is
     // never mistaken for "nothing queued" and scheduled a second time.
@@ -794,6 +809,14 @@ export class Surface {
       // Something is being drawn: the live path owns the copy and builds its
       // own. Stepping in here would repaint the board underneath a moving pen.
       if (this.wet || this.laser.length || this.ghosts.length) return;
+      /*
+       * A hand is still at work - an eraser rubbing, something being dragged. Each move changes the
+       * board, so a copy taken now is stale a frame later, and taking it means painting the WHOLE
+       * board: on a board with a PDF page in view that was a full page repaint in nearly every gap
+       * between eraser moves (78 in a two-second rub), which is what made the eraser drag there.
+       * The copy is taken once, when the hand lifts.
+       */
+      if (this.busy()) return;
       // A very full board builds its copy a slice a frame; a rebuild here would do it all in one go.
       if (this._build) return;
       const key = this.freezeKey();
@@ -980,7 +1003,7 @@ export class Surface {
 
     // The board is drawn and nothing is in flight: a good moment to have the
     // frozen copy ready for whatever comes next. See warmFreeze().
-    if (!this.wet && !this.laser.length && !this.ghosts.length && !this._build
+    if (!this.wet && !this.laser.length && !this.ghosts.length && !this._build && !this.busy()
         && (!this._ink || this._ink.key !== this.freezeKey())) this.warmFreeze();
 
     // ---- screen-space overlays (CSS pixels) ----

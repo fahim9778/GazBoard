@@ -742,6 +742,14 @@ body.presenting.view-mode #backPill { top: 54px; }
   will-change: transform;
 }
 
+/* the eraser's ring - moved by the compositor, never painted into the board (see placeRing) */
+#eraserRing {
+  position: absolute; left: 0; top: 0; box-sizing: border-box;
+  border: 1.5px solid #605e5c; border-radius: 50%; background: rgba(255, 255, 255, 0.6);
+  pointer-events: none; z-index: 14; will-change: transform;
+}
+#eraserRing[hidden] { display: none; }
+[dir="rtl"] #eraserRing { direction: ltr; }
 #editLayer { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
 /*
  * The box you type in.

@@ -46,6 +46,8 @@
     <!-- The ink pointer. A layer of its own so moving it is a compositor
          transform rather than a repaint of the board - see showInkPointer(). -->
     <div id="inkNib" hidden></div>
+    <!-- The eraser's ring: its own layer too, so it follows the pen without a repaint (see placeRing). -->
+    <div id="eraserRing" hidden></div>
     <div id="editLayer"></div>
 
     <div id="ctxbar"></div>

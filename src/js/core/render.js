@@ -1147,15 +1147,38 @@ export function drawMath(ctx, o, onload) {
   ctx.restore();
 }
 
+/*
+ * The part of the board being repainted right now, when it is only a band (an eraser rub), or null
+ * for a whole frame. Set by the surface around a band paint; see Surface.drawScene.
+ */
+let paintBand = null;
+export function setPaintBand(box) { paintBand = box ? { ...box } : null; }
+/** How many page shadows a band paint has skipped - for the tests. */
+export const bandStats = { shadowSkips: 0, off: false };   // off: the tests' way to compare with and without
+
 export function drawImage(ctx, o, onload) {
   const img = getImage(o.src, onload);
+  // the band being repainted, when it lies wholly inside this page: its shadow is nowhere near
+  const band = paintBand && !bandStats.off && o.kind === 'page' && !o.rotation && o.w > 0 && o.h > 0 ? paintBand : null;
+  let inside = false;
+  if (band) {
+    // the band is painted a device pixel or so wider than asked (see drawScene): keep that much inside too
+    let scale = 1;
+    try { const m = ctx.getTransform(); scale = Math.hypot(m.a, m.b) || 1; } catch { scale = 1; }
+    const g = 3 / scale;
+    inside = band.x - g >= o.x && band.y - g >= o.y && band.x + band.w + g <= o.x + o.w && band.y + band.h + g <= o.y + o.h;
+  }
   ctx.save();
   if (o.kind === 'page') {
     ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.18)';
-    ctx.shadowBlur = 12;
-    ctx.shadowOffsetY = 3;
-    ctx.fillRect(o.x, o.y, o.w, o.h);
+    // The shadow lives outside the page's edge. A band well inside the page cannot reach it, so
+    // blurring a whole page's shadow for every eraser move over a PDF was work nobody could see.
+    if (!inside) {
+      ctx.shadowColor = 'rgba(0,0,0,0.18)';
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetY = 3;
+    }
+    if (inside) { bandStats.shadowSkips++; ctx.fillRect(band.x, band.y, band.w, band.h); } else ctx.fillRect(o.x, o.y, o.w, o.h);
     ctx.shadowColor = 'transparent';
   }
   if (img) {

@@ -345,6 +345,195 @@ async function run(win, app) {
     check(`eraser with shapes on (${mode}): a box with words in it, and a locked box, are left alone`, S[mode + 'Kept'].length === 2, 'kept: ' + JSON.stringify(S[mode + 'Kept']));
   }
 
+  /*
+   * The eraser's ring is a layer of its own, moved with the pointer, not painted into the board.
+   * Painted, it could only move as fast as the board repainted under it - a rub felt like the ring
+   * was trailing the pen. As a layer it moves the moment the pointer does.
+   */
+  const ringLayer = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface, r = {};
+    a.newBoard(true); a.store.clear();
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0; sf.invalidate(); sf.draw();
+    const sizeWas = a.settings.eraserSize, modeWas = a.settings.eraserMode;
+    const penSeenWas = a.penSeenThisSession;            // the pen-tail part below makes the app think a stylus is about
+    a.settings.eraserSize = 30; a.settings.eraserMode = 'partial';
+    a.setTool('eraser');
+    const rect = sf.canvas.getBoundingClientRect();
+    const ev = (x, y, b, type = 'mouse') => ({ pointerId: 41, pointerType: type, button: 0, buttons: b, pressure: b ? .5 : 0, clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, width: 1, height: 1 });
+    const el = () => document.getElementById('eraserRing');
+    const box = () => { const e = el(); if (!e || e.hidden) return null; const b = e.getBoundingClientRect(); return { cx: Math.round(b.left + b.width / 2 - rect.left), cy: Math.round(b.top + b.height / 2 - rect.top), d: Math.round(b.width) }; };
+    // hovering: the layer sits on the pointer, at the eraser's size, and the board is not asked to repaint
+    it.action = null; it.pointers.clear();
+    it.onMove(ev(300, 200, 0));
+    sf.draw();
+    sf.dirty = false; sf._band = null;
+    it.onMove(ev(340, 230, 0));
+    r.hover = { ring: box(), repaint: !!sf.dirty };
+    // rubbing: it follows the pen move by move, and grows as the eraser does
+    const pts = []; for (let i = 0; i < 40; i++) pts.push({ x: 300 + i * 8, y: 300, p: .5 });
+    a.store.add({ id: 'rl-ink', type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: pts, bbox: { x: 300, y: 300, w: 312, h: 1 } }, 'x');
+    it.onDown(ev(300, 300, 1));
+    const track = [];
+    for (let k = 1; k <= 60; k++) { it.onMove(ev(300 + k * 6, 300 + (k % 2) * 4, 1)); const b = box(); track.push(b ? Math.abs(b.cx - (300 + k * 6)) + Math.abs(b.cy - (300 + (k % 2) * 4)) : 999); }
+    r.rub = { worstOff: Math.max(...track), grown: box()?.d, radius: Math.round((it.action?.radiusPx || 0) * 2) };
+    it.onUp(ev(660, 300, 0));
+    r.afterLift = box();
+    // nothing of the ring is in the board's own pixels
+    sf.invalidate(); sf.draw();
+    const px = sf.ctx.getImageData(Math.round(660 * sf.dpr) + 4, Math.round(300 * sf.dpr) - Math.round(13 * sf.dpr), 1, 1).data;
+    r.canvasAtRingEdge = [px[0], px[1], px[2]].join(',');
+    // a finger has no hover: its ring goes when it lifts
+    it.onDown(ev(200, 500, 1, 'touch')); it.onMove(ev(230, 500, 1, 'touch'));
+    r.touchDuring = !!box();
+    it.onUp(ev(230, 500, 0, 'touch'));
+    r.touchAfter = !!box();
+    // another tool takes it away
+    it.onMove(ev(400, 400, 0));
+    a.setTool('pen');
+    r.otherTool = !!box();
+    // a pen turned over: with the pen in hand, its tail hovers and rubs as the eraser, ring and all
+    const tail = (x, y, b, button = -1) => ({ ...ev(x, y, b, 'pen'), buttons: b, button, pressure: b & 1 ? .5 : 0 });
+    const pts2 = []; for (let i = 0; i < 30; i++) pts2.push({ x: 300 + i * 8, y: 450, p: .5 });
+    a.store.add({ id: 'rl-ink2', type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: pts2, bbox: { x: 300, y: 450, w: 232, h: 1 } }, 'x');
+    it.action = null; it.pointers.clear();
+    it.onMove(tail(310, 420, 32));
+    r.tailHover = box();
+    it.onDown(tail(300, 450, 32, 5));
+    const tailTrack = [];
+    for (let k = 1; k <= 30; k++) { it.onMove(tail(300 + k * 8, 450, 32)); const b = box(); tailTrack.push(b ? Math.abs(b.cx - (300 + k * 8)) + Math.abs(b.cy - 450) : 999); }
+    r.tailRub = { worstOff: Math.max(...tailTrack), action: it.action && it.action.type };
+    it.onUp(tail(540, 450, 0, 5));
+    r.tailInkLeft = a.store.has('rl-ink2') ? a.store.get('rl-ink2').points.length : 0;
+    it.onMove(tail(560, 420, 0));
+    r.tipHover = !!box();
+    r.toolAfter = a.tool;
+    // a stylus seen here would turn the mouse into a hand for every test after this one
+    a.penSeenThisSession = penSeenWas; it._penAt = 0; it._penSp = null; it._mouseSp = null; a.syncUI();
+    a.settings.eraserSize = sizeWas; a.settings.eraserMode = modeWas;
+    a.store.clear(); it.action = null; it.pointers.clear();
+    return r;
+  `);
+  check('eraser ring: hovering puts its own layer on the pointer at the eraser\'s size, without repainting the board',
+    !!ringLayer.hover.ring && Math.abs(ringLayer.hover.ring.cx - 340) <= 1 && Math.abs(ringLayer.hover.ring.cy - 230) <= 1 && Math.abs(ringLayer.hover.ring.d - 30) <= 1 && ringLayer.hover.repaint === false,
+    JSON.stringify(ringLayer.hover) + ' (wanted centred on 340,230, 30 wide, no repaint asked)');
+  check('eraser ring: during a rub it stays on the pen every move and grows with the eraser; after the lift it is back to its size',
+    ringLayer.rub.worstOff <= 2 && Math.abs(ringLayer.rub.grown - ringLayer.rub.radius) <= 1 && !!ringLayer.afterLift && Math.abs(ringLayer.afterLift.d - 30) <= 1,
+    JSON.stringify({ rub: ringLayer.rub, afterLift: ringLayer.afterLift }) + ' (wanted at most 2 px off the pen, as wide as the eraser, 30 again after the lift)');
+  check('eraser ring: a pen\'s tail hovers and rubs with the ring, the pen stays the tool in hand, and the tip hides the ring again',
+    !!ringLayer.tailHover && Math.abs(ringLayer.tailHover.cx - 310) <= 1 && ringLayer.tailRub.action === 'erase' && ringLayer.tailRub.worstOff <= 2 && ringLayer.tipHover === false && ringLayer.toolAfter === 'pen',
+    JSON.stringify({ tailHover: ringLayer.tailHover, tailRub: ringLayer.tailRub, inkLeft: ringLayer.tailInkLeft, tipHover: ringLayer.tipHover, toolAfter: ringLayer.toolAfter }) + ' (wanted a ring over 310,420 while the tail hovers, an erase that the ring follows within 2 px, no ring for the tip, pen still in hand)');
+  check('eraser ring: none of it is painted into the board; a finger\'s ring goes when it lifts; another tool hides it',
+    ringLayer.canvasAtRingEdge === '255,255,255' && ringLayer.touchDuring === true && ringLayer.touchAfter === false && ringLayer.otherTool === false,
+    JSON.stringify({ canvasAtRingEdge: ringLayer.canvasAtRingEdge, touchDuring: ringLayer.touchDuring, touchAfter: ringLayer.touchAfter, otherTool: ringLayer.otherTool }) + ' (wanted plain white board under the ring\'s edge, ring while the finger rubs, none after, none for the pen)');
+
+  /*
+   * Rubbing out notes written on an imported PDF page repaints only the band under the eraser, and
+   * inside the page that band skips the page's blurred drop shadow - it cannot reach there. The
+   * picture must be exactly what a full repaint gives.
+   */
+  const pageRub = await js(`
+    const a = window.app, sf = a.surface, it = a.interaction, r = {};
+    const R = await import('app://board/js/core/render.js');
+    const c = document.createElement('canvas'); c.width = 1200; c.height = 1700;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#334';
+    g.font = '30px serif'; for (let y = 80; y < 1650; y += 46) g.fillText('A printed line of the page, number ' + y, 60, y);
+    const src = c.toDataURL('image/jpeg', 0.9);
+    const modeWas = a.settings.eraserMode, sizeWas = a.settings.eraserSize;
+    // the same rub twice: once the old way (shadow repainted every move), once the new way
+    const rub = async (off) => {
+      R.bandStats.off = off;
+      a.newBoard(true); a.store.clear();
+      a.store.add({ id: 'pr-page', type: 'image', kind: 'page', x: 0, y: 0, w: 600, h: 850, rotation: 0, src, name: 'doc', label: 'p1' }, 'x');
+      const ink = []; for (let i = 0; i < 6; i++) { const pts = []; for (let j = 0; j < 50; j++) pts.push({ x: 80 + j * 9, y: 200 + i * 40 + Math.sin(j / 4) * 6, p: .5 }); ink.push({ id: 'pr-ink' + i, type: 'stroke', tool: 'pen', color: '#e81123', width: 4, effect: 'none', rotation: 0, points: pts, bbox: { x: 80, y: 194 + i * 40, w: 441, h: 12 } }); }
+      a.store.addMany(ink);
+      sf.cam.z = 1; sf.cam.x = 40; sf.cam.y = 20;
+      await new Promise((res) => setTimeout(res, 500));
+      sf.invalidate(); sf.draw();
+      a.setTool('eraser'); a.settings.eraserMode = 'partial'; a.settings.eraserSize = 30;
+      const rect = sf.canvas.getBoundingClientRect();
+      const ev = (x, y, b) => ({ pointerId: 43, pointerType: 'mouse', button: 0, buttons: b, pressure: b ? .5 : 0, clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, width: 1, height: 1 });
+      const skips0 = R.bandStats.shadowSkips;
+      let banded = 0;
+      it.action = null; it.pointers.clear();
+      it.onDown(ev(160, 230, 1)); sf.draw();
+      for (let k = 1; k <= 40; k++) { it.onMove(ev(160 + k * 8, 230 + Math.sin(k / 5) * 90, 1)); if (sf._bandOnly) banded++; sf.draw(); }
+      const px = sf.ctx.getImageData(0, 0, sf.canvas.width, sf.canvas.height).data;
+      it.onUp(ev(480, 230, 0));
+      it.action = null; it.pointers.clear();
+      return { banded, skips: R.bandStats.shadowSkips - skips0, px };
+    };
+    // a first rub warms the picture's decoded copy up; after that the same rub gives the same pixels every time
+    await rub(true);
+    const before = await rub(true), after = await rub(false);
+    R.bandStats.off = false;
+    let diff = 0, worst = 0;
+    for (let i = 0; i < after.px.length; i += 4) { const d = Math.max(Math.abs(after.px[i] - before.px[i]), Math.abs(after.px[i + 1] - before.px[i + 1]), Math.abs(after.px[i + 2] - before.px[i + 2])); if (d > 0) diff++; if (d > worst) worst = d; }
+    r.banded = after.banded; r.skips = after.skips; r.skipsOld = before.skips; r.diff = diff; r.worst = worst; r.px = after.px.length / 4;
+    a.settings.eraserMode = modeWas; a.settings.eraserSize = sizeWas; a.setTool('pen'); a.store.clear();
+    return r;
+  `);
+  check('rubbing ink off a PDF page repaints only the band, skips the page shadow inside it, and the picture is the same as before the change',
+    pageRub.banded >= 30 && pageRub.skips >= 30 && pageRub.skipsOld === 0 && pageRub.diff === 0,
+    `banded moves ${pageRub.banded} of 40 (wanted most), page shadows skipped ${pageRub.skips} (wanted one per band inside the page; ${pageRub.skipsOld} with the change off), pixels different from the same rub the old way ${pageRub.diff} of ${pageRub.px} (worst by ${pageRub.worst}; wanted none)`);
+
+  /*
+   * While a hand is at work the board's idle copy is NOT rebuilt. Each eraser move changes the board,
+   * and the idle rebuild paints the whole board: with a PDF page in view that was a full page repaint
+   * in nearly every gap between moves (78 in a two-second rub), which made the eraser drag near PDFs.
+   * Real mouse input, so the gaps between moves are real.
+   */
+  await js(`
+    const a = window.app, sf = a.surface;
+    a.newBoard(true); a.store.clear();
+    const c = document.createElement('canvas'); c.width = 1240; c.height = 1754;
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#333'; g.font = '28px serif';
+    for (let y = 60; y < 1700; y += 40) g.fillText('A printed line ' + y, 60, y);
+    a.store.add({ id: 'wf-page', type: 'image', kind: 'page', x: 520, y: 0, w: 400, h: 566, rotation: 0, src: c.toDataURL('image/jpeg', .85), name: 'doc', label: 'p1' }, 'x');
+    const bulk = []; for (let i = 0; i < 40; i++) { const pts = []; const x0 = 20 + (i % 8) * 55, y0 = 60 + Math.floor(i / 8) * 45; for (let j = 0; j < 25; j++) pts.push({ x: x0 + j * 1.5, y: y0 + Math.sin(j / 3) * 8, p: .5 }); bulk.push({ id: 'wf' + i, type: 'stroke', tool: 'pen', color: '#e81123', width: 4, effect: 'none', rotation: 0, points: pts, bbox: { x: x0, y: y0 - 8, w: 37, h: 16 } }); }
+    a.store.addMany(bulk);
+    sf.cam.z = 1; sf.cam.x = 20; sf.cam.y = 20; sf.invalidate();
+    window.__wfWas = { mode: a.settings.eraserMode, size: a.settings.eraserSize };
+    a.settings.eraserMode = 'partial'; a.settings.eraserSize = 30; a.setTool('eraser');
+    window.__wf = 0; window.__wfOrig = sf._freezeScene; sf._freezeScene = function (k) { window.__wf++; return window.__wfOrig.call(this, k); };
+    return true;`);
+  await sleep(1200);
+  const wfRect = await js(`const r = window.app.surface.canvas.getBoundingClientRect(); window.__wf = 0; return { x: r.left, y: r.top };`);
+  win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(wfRect.x + 60), y: Math.round(wfRect.y + 120) });
+  await sleep(60);
+  win.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(wfRect.x + 60), y: Math.round(wfRect.y + 120), button: 'left', clickCount: 1 });
+  for (let k = 1; k <= 60; k++) {
+    win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(wfRect.x + 60 + k * 6), y: Math.round(wfRect.y + 160 + Math.sin(k / 6) * 90), button: 'left', modifiers: ['leftButtonDown'] });
+    await sleep(25);
+  }
+  const wfDuring = await js(`return { n: window.__wf, action: window.app.interaction.action?.type || null };`);
+  win.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(wfRect.x + 420), y: Math.round(wfRect.y + 160), button: 'left', clickCount: 1 });
+  await sleep(900);
+  const wfAfter = await js(`
+    const a = window.app, sf = a.surface; const n = window.__wf;
+    sf._freezeScene = window.__wfOrig; delete window.__wfOrig;
+    a.settings.eraserMode = window.__wfWas.mode; a.settings.eraserSize = window.__wfWas.size; delete window.__wfWas;
+    const erased = a.store.objects.filter((o) => o.type === 'stroke').length;
+    // real input: if the lift landed anywhere but the board, nothing must be left looking pressed for the tests after this
+    a.interaction.action = null; a.interaction.pointers.clear();
+    a.setTool('pen'); a.store.clear(); return { n, erased };`);
+  const stuck = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    it.action = { type: 'erase' }; it.actionId = 99; it.pointers.set(99, { sp: { x: 0, y: 0 }, wp: { x: 0, y: 0 }, type: 'mouse' }); it._heardAt = performance.now();
+    const busyNow = sf.busy();
+    it._heardAt = performance.now() - 1500;                 // a lift that never came, a second and a half ago
+    const busyLater = sf.busy();
+    // and a mouse merely hovering about afterwards does not bring it back to life
+    const rect = sf.canvas.getBoundingClientRect();
+    for (let k = 0; k < 5; k++) it.onMove({ pointerId: 1, pointerType: 'mouse', button: -1, buttons: 0, pressure: 0, clientX: rect.left + 200 + k * 9, clientY: rect.top + 200, shiftKey: false, altKey: false });
+    const busyAfterHover = sf.busy();
+    it.action = null; it.actionId = null; it.pointers.clear();
+    return { busyNow, busyLater, busyAfterHover };`);
+  check('a gesture whose lift never arrived stops holding the idle copy back after a second, and hovering does not revive it',
+    stuck.busyNow === true && stuck.busyLater === false && stuck.busyAfterHover === false, JSON.stringify(stuck) + ' (wanted busy while it presses, not once it has gone quiet, not even with a mouse hovering about)');
+  check('while the eraser rubs, the board\'s idle copy is not rebuilt (it was nearly every frame - a full PDF page repaint each time); it is rebuilt once after the lift',
+    wfDuring.action === 'erase' && wfDuring.n === 0 && wfAfter.n >= 1,
+    `idle rebuilds during a 1.5 s rub with a PDF page in view: ${wfDuring.n} (wanted 0; the rub was under way: ${wfDuring.action}); after the lift: ${wfAfter.n} (wanted at least 1)`);
+
   /* ---- the neon pen: a glowing line, on dark pages and light ---- */
   const neon = await js(`
     const a = window.app, r = {};
@@ -11277,6 +11466,8 @@ async function run(win, app) {
      * So let the board finish opening first, then take the camera.
      */
     await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+    // no gesture left over from an earlier test: this one is about a board at rest
+    it.action = null; it.actionId = null; it.pointers.clear(); it._heardAt = 0;
     cam.z = 0.4; cam.x = 0; cam.y = 0;          // a lot of it on screen at once
     sf.invalidate(); sf.draw();
 
@@ -11331,6 +11522,9 @@ async function run(win, app) {
     r.keyAfterSettle = sf._ink ? sf._ink.key : '(no copy held)';
     r.wantedAfterSettle = sf.freezeKey();
     r.warmAfterSettle = !!sf._ink && sf._ink.key === r.wantedAfterSettle;
+    // what would make the rebuild step aside, as it stood after the settle
+    r.state = { busy: sf.busy(), action: it.action ? it.action.type : null, pointers: it.pointers.size, wet: !!sf.wet,
+      laser: sf.laser.length, ghosts: sf.ghosts.length, building: !!sf._build };
 
     // --- 3. so the stroke that follows pays nothing -----------------------
     r.freezesForWarmStroke = oneStroke(320, 300);
@@ -11390,7 +11584,8 @@ async function run(win, app) {
     warmFreeze.settled === true && warmFreeze.warmAfterSettle === true,
     `after settle held ${warmFreeze.keyAfterSettle}, view wants ${warmFreeze.wantedAfterSettle}, ` +
     `rebuild finished: ${warmFreeze.settled}, camera moved under the test: ${warmFreeze.camMovedDuringSettle} ` +
-    `(anything but "no" means something else moved the board, not that the rebuild was wrong)`);
+    `(anything but "no" means something else moved the board, not that the rebuild was wrong); ` +
+    `what makes a rebuild step aside, after the settle: ${JSON.stringify(warmFreeze.state)}`);
   check('so the stroke that lands next repaints the board not at all',
     warmFreeze.freezesForWarmStroke === 0,
     `${warmFreeze.freezesForWarmStroke} full board repaints during the stroke ` +
@@ -15949,6 +16144,23 @@ module.exports.run = async (win, app) => {
         out.every = f.every;
         probe.dispose();
       }
+      // a click on the slider while it PLAYS lands where it was clicked - it used to be pulled back to wherever the
+      // drawing had got to in one frame, short of the click, a jump forward most of all
+      {
+        p.speed = 1; p.seek(p.total * 0.1);
+        while (R.renderer.drawn !== R.renderer.doneBy(p.t)) await new Promise((res) => requestAnimationFrame(res));
+        p.play();
+        await new Promise((res) => setTimeout(res, 250));
+        const target = p.total * 0.7;
+        p.seek(target);
+        let lowest = Infinity, frames = 0;
+        while (R.renderer.drawn !== R.renderer.doneBy(p.t) && frames < 600) { lowest = Math.min(lowest, p.t); frames++; await new Promise((res) => requestAnimationFrame(res)); }
+        lowest = Math.min(lowest, p.t);
+        const landed = p.t;
+        await new Promise((res) => setTimeout(res, 200));
+        out.playSeek = { target: Math.round(target), lowest: Math.round(lowest), landed: Math.round(landed), after: Math.round(p.t), frames, playing: p.playing };
+        p.pause();
+      }
       // a machine far too slow for the speed asked: the replay slows down rather than skipping or stalling
       p.seek(p.total * 0.1); await new Promise((res) => setTimeout(res, 100));
       p.budget = 0; p.speed = 16; p.stats.slowed = 0; p.play();
@@ -15993,6 +16205,10 @@ module.exports.run = async (win, app) => {
       `to 80% ${big.jumps.to80} ms; back to 5% ${big.jumps.back5} ms (back allowed under ${backAllowed}, forward under 1200); ` +
       `${big.jumps.marks} checkpoints kept (at most 16), one every ${big.jumps.every} strokes; this machine draws one such stretch in ${big.jumps.gapMs} ms; ` +
       `step by step: ${JSON.stringify(big.jumps.detail)}` : JSON.stringify(big));
+  check('a click forward on the slider while the replay plays lands where it was clicked, then plays on from there',
+    !!big && !!big.jumps && !!big.jumps.playSeek && big.jumps.playSeek.lowest >= big.jumps.playSeek.target - 1 && big.jumps.playSeek.landed - big.jumps.playSeek.target <= 1
+      && big.jumps.playSeek.after > big.jumps.playSeek.landed && big.jumps.playSeek.playing === true,
+    big && big.jumps ? JSON.stringify(big.jumps.playSeek) + ' (wanted it never below the clicked time while getting there, landing on it, then moving on while still playing)' : JSON.stringify(big));
   check('when the machine cannot keep up, the replay slows down instead of skipping strokes or freezing',
     !!big && !!big.jumps && big.jumps.slow.slowed > 0 && big.jumps.slow.ahead === 0 && big.jumps.slow.frames >= 8,
     big && big.jumps ? `with almost no drawing time per frame: slowed ${big.jumps.slow.slowed} times, ran ahead of the drawing ` +
