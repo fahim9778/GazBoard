@@ -781,7 +781,14 @@ export function openToolPopover(app, anchor, tool) {
           b.style.alignItems = 'flex-start';
           b.addEventListener('click', () => { closePopover(); app.command('edit.erasePencil'); });
           return b;
-        })())
+        })()),
+      // off unless asked for: rubbing out ink beside a box must never take the box by accident
+      h('div', { class: 'row', style: 'margin-top:12px' },
+        toggle(t('Erase shapes too'), s.eraseShapes === true, (v) => {
+          s.eraseShapes = v;
+          app.saveSettings();
+          app.toast(v ? t('The eraser now also rubs out lines and shapes it crosses') : t('The eraser leaves shapes alone'), 'eraser');
+        }))
     );
   } else if (tool === 'note') {
     body = h('div', {},

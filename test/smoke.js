@@ -275,6 +275,19 @@ async function run(win, app) {
     };
     const box = (id, extra) => a.store.add({ id, type: 'shape', kind: 'rect', x: 0, y: 0, w: 300, h: 200, rotation: 0, stroke: '#201f1e', fill: 'none', lineWidth: 3, ...(extra || {}) }, 'x');
     const ink = (id, y) => { const pts = []; for (let i = 0; i < 30; i++) pts.push({ x: 60 + i * 6, y, p: .5 }); a.store.add({ id, type: 'stroke', tool: 'pen', color: '#e81123', width: 4, effect: 'none', points: pts, bbox: { x: 60, y, w: 174, h: 1 }, rotation: 0 }, 'x'); };
+    // out of the box the eraser leaves every shape alone, however it is rubbed across one
+    const shapesWas = a.settings.eraseShapes;
+    r.defaultSetting = a.settings.eraseShapes;
+    a.settings.eraseShapes = false;
+    for (const mode of ['partial', 'object']) {
+      a.newBoard(true); a.store.clear();
+      box('d1');
+      a.store.add({ id: 'd2', type: 'shape', kind: 'line', x: 0, y: 400, w: 300, h: 0, rotation: 0, stroke: '#201f1e', fill: 'none', lineWidth: 3 }, 'x');
+      ink('dw', 100);
+      scrub(mode, { x: 150, y: -40 }, { x: 150, y: 440 });
+      r[mode + 'Off'] = { box: a.store.has('d1'), line: a.store.has('d2'), ink: a.store.has('dw') };
+    }
+    a.settings.eraseShapes = true;
     for (const mode of ['partial', 'object']) {
       a.newBoard(true); a.store.clear();
       // ink written inside a box, rubbed out from inside: the ink goes, the box stays
@@ -302,16 +315,34 @@ async function run(win, app) {
       scrub(mode, { x: 550, y: -40 }, { x: 550, y: 40 });
       r[mode + 'Kept'] = ['b2', 'b3'].filter((id) => a.store.has(id));
     }
+    a.settings.eraseShapes = shapesWas;
+    // the switch lives in the eraser's own menu
+    a.setTool('eraser');
+    const { openToolPopover } = await import('app://board/js/ui/toolbar.js');
+    const { closePopover } = await import('app://board/js/ui/popover.js');
+    openToolPopover(a, document.querySelector('#toolbar button') || document.body, 'eraser');
+    const label = [...document.querySelectorAll('.pop label.toggle')].find((l) => /Erase shapes too/.test(l.textContent));
+    r.menu = { found: !!label, checked: !!label?.querySelector('input')?.checked };
+    if (label) { label.querySelector('input').click(); r.menu.after = a.settings.eraseShapes; label.querySelector('input').click(); r.menu.back = a.settings.eraseShapes; }
+    closePopover();
+    a.settings.eraseShapes = shapesWas; a.saveSettings();
     a.settings.eraserMode = 'partial'; a.settings.eraserSize = 30;
+    a.setTool('pen');
     a.newBoard(true); a.store.clear();
     return r;
   `);
+  check('eraser: shapes are left alone out of the box (the switch starts off), in both modes, while ink still goes',
+    shapeErase.defaultSetting === false && ['partial', 'object'].every((m) => shapeErase[m + 'Off'].box && shapeErase[m + 'Off'].line && !shapeErase[m + 'Off'].ink),
+    `setting out of the box: ${shapeErase.defaultSetting} (wanted false); after rubbing across a box, a line and ink: ${JSON.stringify({ partial: shapeErase.partialOff, object: shapeErase.objectOff })} (wanted box and line kept, ink gone)`);
+  check('eraser: "Erase shapes too" is a switch in the eraser\'s menu, off at first, and flips the setting both ways',
+    shapeErase.menu.found && shapeErase.menu.checked === false && shapeErase.menu.after === true && shapeErase.menu.back === false,
+    JSON.stringify(shapeErase.menu) + ' (wanted found, unchecked, true after a click, false after another)');
   for (const mode of ['partial', 'object']) {
     const S = shapeErase;
-    check(`eraser (${mode}): ink inside a box is rubbed out and the box stays`, S[mode + 'Inside'].box === true && S[mode + 'Inside'].ink === false, JSON.stringify(S[mode + 'Inside']));
-    check(`eraser (${mode}): rubbing across a box's edge erases the box, undo brings it back`, S[mode + 'Edge'].box === false && S[mode + 'Undo'].box === true, JSON.stringify({ edge: S[mode + 'Edge'], undo: S[mode + 'Undo'] }));
-    check(`eraser (${mode}): a drawn circle, line and triangle are erased by their outline`, S[mode + 'Drawn'].length === 0, 'still there: ' + JSON.stringify(S[mode + 'Drawn']));
-    check(`eraser (${mode}): a box with words in it, and a locked box, are left alone`, S[mode + 'Kept'].length === 2, 'kept: ' + JSON.stringify(S[mode + 'Kept']));
+    check(`eraser with shapes on (${mode}): ink inside a box is rubbed out and the box stays`, S[mode + 'Inside'].box === true && S[mode + 'Inside'].ink === false, JSON.stringify(S[mode + 'Inside']));
+    check(`eraser with shapes on (${mode}): rubbing across a box's edge erases the box, undo brings it back`, S[mode + 'Edge'].box === false && S[mode + 'Undo'].box === true, JSON.stringify({ edge: S[mode + 'Edge'], undo: S[mode + 'Undo'] }));
+    check(`eraser with shapes on (${mode}): a drawn circle, line and triangle are erased by their outline`, S[mode + 'Drawn'].length === 0, 'still there: ' + JSON.stringify(S[mode + 'Drawn']));
+    check(`eraser with shapes on (${mode}): a box with words in it, and a locked box, are left alone`, S[mode + 'Kept'].length === 2, 'kept: ' + JSON.stringify(S[mode + 'Kept']));
   }
 
   /* ---- the neon pen: a glowing line, on dark pages and light ---- */

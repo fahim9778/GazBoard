@@ -73,7 +73,7 @@ export const DEFAULT_SETTINGS = {
   // rememberPen() creates the map on first use; leaving it out is also what
   // makes Reset to defaults put every pen back to the colour it shipped with.
   highlighterColor: '#fff100', highlighterWidth: 20,
-  eraserSize: 30, eraserMode: 'partial',
+  eraserSize: 30, eraserMode: 'partial', eraseShapes: false,
   // the pencil's scratch while it draws: on, so the pencil is heard to be a pencil; Settings or its own menu turn it off
   pencilSound: true,
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,

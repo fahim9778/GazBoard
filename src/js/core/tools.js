@@ -2352,7 +2352,7 @@ export class Interaction {
       // Removing a picture is what Select and Delete are for: deliberate,
       // visible, and aimed at one thing.
       //
-      // Drawn shapes are the one exception. A circle that "Straighten shapes"
+      // Drawn shapes are the one exception, when "Erase shapes too" is on. A circle that "Straighten shapes"
       // made out of your ink, a line, an arrow, a box from the shape tray - these
       // are drawing, and people reach for the eraser to get rid of them. Only
       // their OUTLINE counts, and only a bare shape (no words in it, nothing
@@ -2360,7 +2360,8 @@ export class Interaction {
       // labelled flowchart box is a note, not a scribble. A shape goes whole, in
       // either mode - it has no ink to split.
       if (o.type === 'shape') {
-        if (o.text || !outlineAlong(o, from, to, r)) continue;
+        // only when switched on in the eraser's menu (off out of the box: a stray rub must not cost a diagram)
+        if (this.app.settings.eraseShapes !== true || o.text || !outlineAlong(o, from, to, r)) continue;
         const index = store.rawRemove(o.id);
         if (a.fragments.has(o.id)) a.fragments.delete(o.id);
         else if (!a.originals.has(o.id)) a.originals.set(o.id, { obj: structuredClone(o), index });

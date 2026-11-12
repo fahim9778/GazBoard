@@ -172,13 +172,21 @@ jobs:
           ARCH: x86_64
         run: |
           set -euo pipefail
-          # Ubuntu's mirrors sometimes stop answering for a few minutes: try again rather than fail the release
-          for i in 1 2 3 4 5; do
-            sudo apt-get -o Acquire::Retries=5 update -qq || true
-            if sudo apt-get -o Acquire::Retries=5 install -y -qq zsync desktop-file-utils; then break; fi  # zsyncmake and desktop-file-validate
-            [ "$i" = 5 ] && { echo "::error::could not install zsync and desktop-file-utils after 5 tries"; exit 1; }
-            echo "apt failed (try $i of 5), waiting before trying again"; sleep 30
-          done
+          # Ubuntu's package servers sometimes stop answering. Short timeouts and a few quick tries, so a bad
+          # spell costs a couple of minutes, not half an hour. Only zsync (zsyncmake) is essential;
+          # desktop-file-validate is a nice-to-have check that appimagetool skips when it is missing.
+          APT="-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+          if ! command -v zsyncmake >/dev/null; then
+            for i in 1 2 3; do
+              timeout 180 sudo apt-get $APT update -qq || true
+              if timeout 180 sudo apt-get $APT install -y -qq --no-install-recommends zsync; then break; fi
+              [ "$i" = 3 ] && { echo "::error::could not install zsync after 3 tries - Ubuntu's package servers are not answering"; exit 1; }
+              echo "apt failed (try $i of 3), waiting before trying again"; sleep 20
+            done
+          fi
+          command -v desktop-file-validate >/dev/null || timeout 120 sudo apt-get $APT install -y -qq --no-install-recommends desktop-file-utils \
+            || echo "::warning::desktop-file-utils could not be installed; the .desktop file check is skipped this time"
+          command -v zsyncmake >/dev/null || { echo "::error::zsyncmake is missing"; exit 1; }
 
           UPDATE_INFO="gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY##*/}|latest|GazBoard-*.AppImage.zsync"
 
