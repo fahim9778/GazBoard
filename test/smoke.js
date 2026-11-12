@@ -378,10 +378,17 @@ async function run(win, app) {
     r.rub = { worstOff: Math.max(...track), grown: box()?.d, radius: Math.round((it.action?.radiusPx || 0) * 2) };
     it.onUp(ev(660, 300, 0));
     r.afterLift = box();
-    // nothing of the ring is in the board's own pixels
+    // nothing of the ring is in the board's own pixels: the board under it is the same with the ring shown and hidden
+    // (compared with itself, not with plain white - a board may have a grid or dots under the ring)
     sf.invalidate(); sf.draw();
-    const px = sf.ctx.getImageData(Math.round(660 * sf.dpr) + 4, Math.round(300 * sf.dpr) - Math.round(13 * sf.dpr), 1, 1).data;
-    r.canvasAtRingEdge = [px[0], px[1], px[2]].join(',');
+    const d = sf.dpr || 1, rx = Math.round((660 - 20) * d), ry = Math.round((300 - 20) * d), rs = Math.round(40 * d);
+    const withRing = sf.ctx.getImageData(rx, ry, rs, rs).data;
+    r.ringShownForCompare = !!box();
+    a.interaction.hideRing(); sf.invalidate(); sf.draw();
+    const withoutRing = sf.ctx.getImageData(rx, ry, rs, rs).data;
+    let differ = 0; for (let i = 0; i < withRing.length; i++) if (withRing[i] !== withoutRing[i]) differ++;
+    r.canvasDiffersUnderRing = differ;
+    it.placeRing(a.interaction._ringSp || { x: 660, y: 300 }, 15);
     // a finger has no hover: its ring goes when it lifts
     it.onDown(ev(200, 500, 1, 'touch')); it.onMove(ev(230, 500, 1, 'touch'));
     r.touchDuring = !!box();
@@ -423,8 +430,8 @@ async function run(win, app) {
     !!ringLayer.tailHover && Math.abs(ringLayer.tailHover.cx - 310) <= 1 && ringLayer.tailRub.action === 'erase' && ringLayer.tailRub.worstOff <= 2 && ringLayer.tipHover === false && ringLayer.toolAfter === 'pen',
     JSON.stringify({ tailHover: ringLayer.tailHover, tailRub: ringLayer.tailRub, inkLeft: ringLayer.tailInkLeft, tipHover: ringLayer.tipHover, toolAfter: ringLayer.toolAfter }) + ' (wanted a ring over 310,420 while the tail hovers, an erase that the ring follows within 2 px, no ring for the tip, pen still in hand)');
   check('eraser ring: none of it is painted into the board; a finger\'s ring goes when it lifts; another tool hides it',
-    ringLayer.canvasAtRingEdge === '255,255,255' && ringLayer.touchDuring === true && ringLayer.touchAfter === false && ringLayer.otherTool === false,
-    JSON.stringify({ canvasAtRingEdge: ringLayer.canvasAtRingEdge, touchDuring: ringLayer.touchDuring, touchAfter: ringLayer.touchAfter, otherTool: ringLayer.otherTool }) + ' (wanted plain white board under the ring\'s edge, ring while the finger rubs, none after, none for the pen)');
+    ringLayer.ringShownForCompare === true && ringLayer.canvasDiffersUnderRing === 0 && ringLayer.touchDuring === true && ringLayer.touchAfter === false && ringLayer.otherTool === false,
+    JSON.stringify({ ringShown: ringLayer.ringShownForCompare, canvasValuesThatChangeWithTheRing: ringLayer.canvasDiffersUnderRing, touchDuring: ringLayer.touchDuring, touchAfter: ringLayer.touchAfter, otherTool: ringLayer.otherTool }) + ' (wanted the board under the ring identical with it shown and hidden, ring while the finger rubs, none after, none for the pen)');
 
   /*
    * Rubbing out notes written on an imported PDF page repaints only the band under the eraser, and
