@@ -518,6 +518,8 @@
  "Rainbow": "Arco-íris",
  "Galaxy": "Galáxia",
  "Neon": "Neon",
+ "Draw ahead of the pen": "Desenhar à frente da caneta",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "Desligado por padrão. Ligado: enquanto você escreve, um breve palpite de para onde a caneta vai é desenhado logo à frente da tinta, para a linha acompanhar a ponta. O palpite nunca é guardado: o que é salvo é exatamente o que você escreveu. Desligue se notar a ponta passando do lugar.",
  "Erase shapes too": "Apagar formas também",
  "The eraser now also rubs out lines and shapes it crosses": "Agora a borracha também apaga as linhas e formas que tocar",
  "The eraser leaves shapes alone": "A borracha não mexe nas formas",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "Segurar a caneta parada abre menus",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "Ativado (padrão): segurar a caneta parada no quadro abre o menu e, sobre um objeto, o pega. Desativado: a caneta só escreve, então preencher formas pequenas nunca abre um menu. Use o botão lateral da caneta ou a barra de seleção para os menus. Com o dedo, manter pressionado continua funcionando.",
  "Insert & more…": "Inserir e mais…",
- "Shortcuts": "Atalhos"
+ "Shortcuts": "Atalhos",
+ "Search settings…": "Pesquisar configurações…",
+ "Search settings": "Pesquisar configurações",
+ "No setting matches that.": "Nenhuma configuração corresponde.",
+ "Show the pen in screen recordings": "Mostrar a caneta em gravações de tela",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "Desligado por padrão. O Zoom e outros gravadores só capturam o ponteiro do mouse, então no vídeo a caneta escreve sem ponteiro e a seta fica parada onde o mouse estava. Ligado: um brilho suave segue a caneta sempre que ela está perto da tela, pairando ou escrevendo, para que as gravações mostrem onde você está. A caneta e o ponteiro continuam exatamente iguais."
 }

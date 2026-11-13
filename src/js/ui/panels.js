@@ -1127,10 +1127,14 @@ export function createPanels(app) {
     return host;
   }
 
+  // What is typed in the Settings search. Kept outside the panel so a switch
+  // that redraws the panel (rerender) leaves the search as it was.
+  let settingsWords = '';
   function settings() {
+    settingsWords = '';
     open('settings', t('Settings'), () => {
       const s = app.settings;
-      const row = (label, control, hint) => h('div', { style: 'margin-bottom:16px' },
+      const row = (label, control, hint) => h('div', { class: 'set-row', style: 'margin-bottom:16px' },
         h('div', { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px' },
           h('span', { style: 'font-size:13.5px' }, label), control),
         hint ? h('div', { style: 'font-size:12px;color:var(--text-2);margin-top:4px' }, hint) : null);
@@ -1260,7 +1264,7 @@ export function createPanels(app) {
           platformLines;
       });
 
-      return h('div', {},
+      const page = h('div', {},
         h('div', { class: 'section' },
           h('h5', {}, t('Appearance')),
           row(t('Language'), languagePicker(),
@@ -1324,6 +1328,8 @@ export function createPanels(app) {
                   app.interaction.hideInkPointer(); }),
                 t('Off (default): drawing with a finger shows no pen nib, because your fingertip is already on the spot and the nib only hides under your hand. A stylus or a mouse on this machine still gets one. Switch on if you are on a Surface or another touchscreen PC and want the nib under your finger too.'))
             : null,
+          row(t('Show the pen in screen recordings'), mkToggle(() => s.recordPointer === true, (v) => { s.recordPointer = v; app.interaction.hideGlow(); }),
+            t('Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.')),
           row(t('Hold the pen still for menus'), mkToggle(() => s.penHold !== false, (v) => { s.penHold = v; app.interaction.cancelHold(); }),
             t('On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen\'s side button or the selection bar for menus instead. A finger keeps press-and-hold either way.')),
           row(t('Ruler snapping'), mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
@@ -1359,6 +1365,8 @@ export function createPanels(app) {
               t('Asks GitHub at most twice a day whether a newer version exists, and tells you if so. Nothing is downloaded or installed automatically, and nothing about you or your boards is ever sent. Off means the app never touches the network.')),
           row(t('Shortcut letters on the toolbar'), mkToggle(() => s.showToolKeys !== false, (v) => (s.showToolKeys = v)),
             t('Shows the key for each tool in the corner of its button — V, P, H, E and so on — so you can switch without stopping to look them up.')),
+          row(t('Draw ahead of the pen'), mkToggle(() => s.drawAhead === true, (v) => { s.drawAhead = v; app.saveSettings(); }),
+            t('Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.')),
           row(t('Low-latency inking'), mkToggle(() => s.lowLatencyInk, (v) => { s.lowLatencyInk = v; app.toast(t('Takes effect next time GazBoard opens')); }),
             t('Shaves a little lag off the pen by letting the canvas skip a buffering step. On some graphics drivers this makes the board flicker while you write or drag, especially with imported document pages on it — leave it off if you see that. Applies when the app is reopened.')),
           // Windows only: elsewhere the switch would do nothing, so it is not offered.
@@ -1459,7 +1467,95 @@ export function createPanels(app) {
           h('p', { style: 'font-size:12px;color:var(--text-2);margin-top:10px;line-height:1.6' },
             t('Boards save automatically on this device. Use My boards to reopen them, or Save a copy to keep a board file in a folder you choose. There is no sign-in, no account and no cloud. The one thing that ever leaves this device is a board you hand to another GazBoard yourself, over your own network, and even then it goes straight from here to there, never through anybody\'s server.')))
       );
+      return settingsSearch(page);
     });
+  }
+
+  /*
+   * The search at the top of Settings.
+   *
+   * The list is long, so typing a word or two hides everything that does not
+   * mention it. Each switch is searched by its name and its explanation, and
+   * a section whose heading matches shows whole - "inking" brings up every
+   * inking switch. Several words must all be there, in any order.
+   */
+  function settingsSearch(page) {
+    const input = h('input', { class: 'board-search-input', type: 'search', placeholder: t('Search settings…'),
+      'aria-label': t('Search settings'), autocomplete: 'off', spellcheck: 'false', value: settingsWords });
+    const box = h('div', { class: 'board-search settings-search' },
+      h('span', { class: 'bs-icon', html: icon('search', 16), 'aria-hidden': 'true' }), input);
+    const none = h('div', { class: 'settings-none', hidden: true, style: 'font-size:13px;color:var(--text-2);padding:8px 2px' },
+      t('No setting matches that.'));
+    const norm = (x) => (x || '').toLocaleLowerCase().replace(/\s+/g, ' ');
+    const apply = () => {
+      const words = norm(settingsWords).trim().split(' ').filter(Boolean);
+      // each word must start a word in the text, so "pen" finds pens but not "open";
+      // Chinese and Japanese have no spaces between words, so there any part will do
+      const tests = words.map((w) => /[\u3040-\u30ff\u3400-\u9fff]/.test(w)
+        ? (n) => n.includes(w)
+        : ((re) => (n) => re.test(n))(new RegExp('(^|[^\\p{L}\\p{M}\\p{N}])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'u')));
+      const has = (text) => { const n = norm(text); return tests.every((f) => f(n)); };
+      let shown = 0;
+      for (const sec of page.querySelectorAll(':scope > .section')) {
+        if (!words.length) { sec.hidden = false; for (const c of sec.children) c.hidden = false; continue; }
+        const head = sec.querySelector(':scope > h5');
+        const whole = head && has(head.textContent);
+        let any = false;
+        for (const c of sec.children) {
+          if (c === head) continue;
+          const hit = whole || has(c.textContent);
+          c.hidden = !hit;
+          if (hit) any = true;
+        }
+        sec.hidden = !any;
+        if (any) shown++;
+      }
+      none.hidden = !words.length || shown > 0;
+      markWords(words);
+    };
+    // The words found are lit up the way they are in My boards. Only text is
+    // touched - the switches and buttons stay the very same elements - and the
+    // old highlights are taken off first, so the text is always back as it was.
+    const markWords = (words) => {
+      for (const m of page.querySelectorAll('mark.set-mark')) {
+        const parent = m.parentNode;
+        parent.replaceChild(document.createTextNode(m.textContent), m);
+        parent.normalize();
+      }
+      if (!words.length) return;
+      const esc = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const parts = [...words].sort((x, y) => y.length - x.length)
+        .map((w) => /[\u3040-\u30ff\u3400-\u9fff]/.test(w) ? esc(w) : '(?<![\\p{L}\\p{M}\\p{N}])' + esc(w));
+      const re = new RegExp(parts.join('|'), 'giu');
+      const walker = document.createTreeWalker(page, NodeFilter.SHOW_TEXT, {
+        acceptNode: (n) => {
+          const el = n.parentElement;
+          if (!el || el.closest('[hidden], input, select, option, textarea, script, style')) return NodeFilter.FILTER_REJECT;
+          return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        }
+      });
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      for (const n of nodes) {
+        const text = n.nodeValue; re.lastIndex = 0;
+        const found = [...text.matchAll(re)];
+        if (!found.length) continue;
+        const frag = document.createDocumentFragment();
+        let at = 0;
+        for (const m of found) {
+          if (!m[0]) continue;
+          if (m.index > at) frag.append(text.slice(at, m.index));
+          frag.append(h('mark', { class: 'set-mark' }, m[0]));
+          at = m.index + m[0].length;
+        }
+        if (at < text.length) frag.append(text.slice(at));
+        n.parentNode.replaceChild(frag, n);
+      }
+    };
+    input.addEventListener('input', () => { settingsWords = input.value; apply(); });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Escape' && input.value) { e.stopPropagation(); input.value = ''; settingsWords = ''; apply(); } });
+    apply();
+    return h('div', {}, box, none, page);
   }
 
   /*

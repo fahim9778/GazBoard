@@ -750,6 +750,17 @@ body.presenting.view-mode #backPill { top: 54px; }
 }
 #eraserRing[hidden] { display: none; }
 [dir="rtl"] #eraserRing { direction: ltr; }
+/* The pen glow for screen recordings: a faint light centred on the tip (see followGlow in tools.js) */
+#penGlow {
+  position: absolute; left: -24px; top: -24px; width: 48px; height: 48px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 200, 40, .5) 0%, rgba(255, 200, 40, .24) 38%, rgba(255, 200, 40, 0) 70%);
+  /* hard-light: the warm channels lighten a dark page and the blue darkens a white one,
+     so the same glow reads as a soft yellow light on either */
+  mix-blend-mode: hard-light;
+  pointer-events: none; z-index: 13; will-change: transform;
+}
+#penGlow[hidden] { display: none; }
+[dir="rtl"] #penGlow { direction: ltr; }
 #editLayer { position: absolute; inset: 0; pointer-events: none; z-index: 15; }
 /*
  * The box you type in.
@@ -1485,7 +1496,7 @@ body.presenting.show-tools #toolbar { translate: 0 0; opacity: 1; pointer-events
 .folder-hits { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .folder-hits .folder-hit { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .folder-hits .folder-hit .rt-text { padding: 7px 14px 7px 6px; }
-.search-hit mark, .board-tile mark, .board-row mark { background: rgba(255, 217, 74, .7); color: inherit; border-radius: 3px; padding: 0 1px; }
+.search-hit mark, .board-tile mark, .board-row mark, .panel mark.set-mark { background: rgba(255, 217, 74, .7); color: inherit; border-radius: 3px; padding: 0 1px; }
 /* Recent boards, at the top of My boards: one row that scrolls sideways */
 .recent { margin: 2px 0 18px; }
 .recent-title { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-2); margin: 0 0 8px; }
@@ -1750,3 +1761,6 @@ body.presenting #pagestrip { display: none; }
 #radialMenu .rad-label.show { opacity: 1; }
 @keyframes rad-in { from { opacity: 0; transform: scale(.85); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #radialMenu .rad-ring, #radialMenu .rad-btn { animation: none; } }
+/* Settings search stays at the top while the list scrolls under it */
+.settings-search { position: sticky; top: -14px; z-index: 2; margin: -14px -14px 12px; padding: 14px 14px 10px; background: var(--surface); }
+.panel .section[hidden], .panel .section > [hidden], .settings-none[hidden] { display: none !important; }

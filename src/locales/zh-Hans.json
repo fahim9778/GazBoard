@@ -518,6 +518,8 @@
  "Rainbow": "彩虹",
  "Galaxy": "星河",
  "Neon": "霓虹",
+ "Draw ahead of the pen": "在笔尖前预先绘制",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "默认关闭。开启后：书写时，会在墨迹前方绘制一小段对笔尖去向的预测，让线条紧跟笔尖。预测部分从不保存：保存的正是你写下的内容。如果看到笔尖超前，可以关闭此项。",
  "Erase shapes too": "也擦除形状",
  "The eraser now also rubs out lines and shapes it crosses": "橡皮擦现在也会擦除碰到的线条和形状",
  "The eraser leaves shapes alone": "橡皮擦不会擦除形状",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "笔静止按住时打开菜单",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "开（默认）：在白板上按住笔不动会打开菜单，按在对象上则会拿起它。关：笔只用于书写，涂满小图形时绝不会弹出菜单。请改用笔的侧键或选择栏打开菜单。手指长按在两种情况下都照常有效。",
  "Insert & more…": "插入及更多…",
- "Shortcuts": "快捷方式"
+ "Shortcuts": "快捷方式",
+ "Search settings…": "搜索设置…",
+ "Search settings": "搜索设置",
+ "No setting matches that.": "没有匹配的设置。",
+ "Show the pen in screen recordings": "在屏幕录制中显示笔",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "默认关闭。Zoom 等录制工具只捕获鼠标指针，所以录像里笔在写字却没有指针，箭头还停在鼠标原来的位置。开启后：只要笔靠近屏幕，无论悬停还是书写，都会有一圈淡淡的光跟着笔，录像里就能看出你在哪儿。笔和指针的手感完全不变。"
 }

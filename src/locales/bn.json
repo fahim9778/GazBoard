@@ -518,6 +518,8 @@
  "Rainbow": "রংধনু",
  "Galaxy": "গ্যালাক্সি",
  "Neon": "নিয়ন",
+ "Draw ahead of the pen": "পেনের একটু আগে আঁকুন",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "ডিফল্টভাবে বন্ধ। চালু করলে: লেখার সময় পেন কোন দিকে যাচ্ছে তার একটা ছোট অনুমান কালির ঠিক আগে আঁকা হয়, তাই লাইন নিবের সাথে তাল রাখে। অনুমানটা কখনো রাখা হয় না: যা সেভ হয় তা হুবহু আপনি যা লিখেছেন। কখনো ডগাটা বেশি এগিয়ে যেতে দেখলে এটা বন্ধ করুন।",
  "Erase shapes too": "শেপও মুছুন",
  "The eraser now also rubs out lines and shapes it crosses": "ইরেজার এখন যে লাইন আর শেপের ওপর দিয়ে যাবে, সেগুলোও মুছবে",
  "The eraser leaves shapes alone": "ইরেজার শেপগুলো মুছবে না",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "পেন স্থির ধরে রাখলে মেনু খুলবে",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "চালু (ডিফল্ট): বোর্ডে পেন স্থির ধরে রাখলে মেনু খোলে, আর কোনো অবজেক্টের ওপর ধরলে সেটা তুলে নেয়। বন্ধ: পেন শুধু লিখবে, তাই ছোট আকার ভরাট করার সময় কখনো মেনু খুলবে না। মেনুর জন্য পেনের সাইড বাটন বা সিলেকশন বার ব্যবহার করুন। আঙুলে চেপে ধরা দুই অবস্থাতেই কাজ করবে।",
  "Insert & more…": "ইনসার্ট ও আরও…",
- "Shortcuts": "শর্টকাট"
+ "Shortcuts": "শর্টকাট",
+ "Search settings…": "সেটিংসে খুঁজুন…",
+ "Search settings": "সেটিংসে খুঁজুন",
+ "No setting matches that.": "এর সাথে মেলে এমন কোনো সেটিং নেই।",
+ "Show the pen in screen recordings": "স্ক্রিন রেকর্ডিংয়ে পেন দেখান",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "ডিফল্টভাবে বন্ধ। Zoom আর অন্য রেকর্ডাররা শুধু মাউস পয়েন্টার ধরে, তাই ভিডিওতে পেন কোনো পয়েন্টার ছাড়াই লেখে আর তীরটা মাউস যেখানে ছিল সেখানেই পড়ে থাকে। চালু করলে: পেন স্ক্রিনের কাছে এলেই — ভেসে থাকুক বা লিখুক — একটা হালকা আলো পেনের সাথে সাথে চলে, তাই রেকর্ডিংয়ে বোঝা যায় আপনি কোথায়। পেন আর তার পয়েন্টারের অনুভূতি একদম আগের মতোই থাকে।"
 }

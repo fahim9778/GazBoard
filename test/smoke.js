@@ -541,6 +541,134 @@ async function run(win, app) {
     wfDuring.action === 'erase' && wfDuring.n === 0 && wfAfter.n >= 1,
     `idle rebuilds during a 1.5 s rub with a PDF page in view: ${wfDuring.n} (wanted 0; the rub was under way: ${wfDuring.action}); after the lift: ${wfAfter.n} (wanted at least 1)`);
 
+  /*
+   * Drawing ahead of the pen: a short predicted tail keeps the line up with the nib, and is never kept.
+   */
+  const predict = await js(`
+    const a = window.app, sf = a.surface, it = a.interaction, r = {};
+    a.newBoard(true); a.store.clear(); a.setTool('pen');
+    const penSeenWas = a.penSeenThisSession; a.notePenSeen();
+    const predWas = a.settings.drawAhead, colorWas = a.settings.penColor, widthWas = a.settings.penWidth;
+    a.settings.penColor = '#201f1e'; a.settings.penWidth = 6;
+    sf.cam.z = 1; sf.cam.x = 0; sf.cam.y = 0; sf.invalidate(); sf.draw();
+    const rect = sf.canvas.getBoundingClientRect();
+    const raw = (x, y, b) => ({ pointerId: 51, pointerType: 'pen', button: 0, buttons: b, pressure: b ? .5 : 0, clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, width: 1, height: 1, tiltX: 0, tiltY: 0 });
+    const ev = (x, y, b, ahead) => ({ ...raw(x, y, b), getPredictedEvents: () => (ahead || []).map(([px, py]) => raw(px, py, b)) });
+    const px = (x, y) => { const d = sf.dpr || 1; const p = sf.ctx.getImageData(Math.round(x * d), Math.round(y * d), 1, 1).data; return p[0] + p[1] + p[2]; };
+    a.settings.drawAhead = true;
+    it.action = null; it.pointers.clear();
+    it.onDown(ev(100, 200, 1)); sf.draw();
+    for (let k = 1; k <= 10; k++) { it.onMove(ev(100 + k * 10, 200, 1, [[100 + k * 10 + 6, 200], [100 + k * 10 + 12, 200]])); sf.draw(); }
+    r.tail = sf.wetTail ? sf.wetTail.points.map((q) => [Math.round(q.x), Math.round(q.y)]) : null;
+    r.inkAhead = px(209, 200);                 // 9 px past the last real sample, on the guessed line
+    // the pen turns sharply down: the old guess must not stay on screen
+    it.onMove(ev(200, 230, 1)); sf.draw();
+    r.oldGuessGone = px(209, 200);
+    r.tailAfterTurn = sf.wetTail;
+    // at a corner - the pen going down, the guess carrying on to the right - nothing is drawn ahead
+    it.onMove(ev(200, 235, 1, [[215, 236]])); sf.draw();
+    r.cornerTail = sf.wetTail;
+    // a wild guess far ahead is cut back to a short reach
+    it.onMove(ev(200, 240, 1, [[200, 400]])); sf.draw();
+    r.farTail = sf.wetTail ? sf.wetTail.points.map((q) => Math.round(q.y)) : null;
+    it.onUp(raw(200, 240, 0)); sf.draw();
+    const stroke = a.store.objects.find((o) => o.type === 'stroke');
+    r.saved = stroke ? { n: stroke.points.length, maxX: Math.max(...stroke.points.map((q) => q.x)), maxY: Math.max(...stroke.points.map((q) => q.y)) } : null;
+    r.tailAfterLift = !!(sf.wet && sf.wetTail);
+    // switched off: no tail at all
+    a.store.clear(); a.settings.drawAhead = false;
+    it.action = null; it.pointers.clear();
+    it.onDown(ev(100, 300, 1)); it.onMove(ev(120, 300, 1, [[130, 300]])); sf.draw();
+    r.offTail = sf.wetTail;
+    it.onUp(raw(120, 300, 0));
+    a.settings.drawAhead = predWas; a.settings.penColor = colorWas; a.settings.penWidth = widthWas;
+    a.penSeenThisSession = penSeenWas; it._penAt = 0; it._penSp = null; it._mouseSp = null;
+    a.store.clear(); it.action = null; it.pointers.clear(); a.syncUI();
+    return r;
+  `);
+  check('drawing ahead of the pen: a short guessed tail is drawn past the last real point while writing',
+    !!predict.tail && predict.tail.length === 2 && predict.tail[1][0] === 212 && predict.inkAhead < 300,
+    `tail ${JSON.stringify(predict.tail)} (wanted the two guesses, ending at 212,200); brightness 9 px ahead of the ink: ${predict.inkAhead} (wanted dark, under 300)`);
+  check('the guess never lingers: it goes when the pen turns, is not drawn round a corner, a wild one is cut short, and none of it is saved',
+    predict.oldGuessGone > 700 && predict.tailAfterTurn === null && !!predict.farTail && predict.farTail[0] <= 240 + 18 + 1
+      && predict.cornerTail === null && !!predict.saved && predict.saved.n === 14 && predict.saved.maxX <= 200 && predict.saved.maxY <= 240 && predict.tailAfterLift === false && predict.offTail === null,
+    `after the turn: brightness where the old guess was ${predict.oldGuessGone} (wanted white, over 700), tail ${JSON.stringify(predict.tailAfterTurn)}; `
+      + `wild guess cut to y ${JSON.stringify(predict.farTail)} (wanted at most 259); at a corner ${JSON.stringify(predict.cornerTail)} (wanted none drawn); saved ${JSON.stringify(predict.saved)} (wanted 14 real points, none past 200,240); `
+      + `tail after the lift ${predict.tailAfterLift}; with the switch off ${JSON.stringify(predict.offTail)} (wanted none)`);
+
+  /* ---- Settings: drawing ahead is off unless asked for, and the list can be searched ---- */
+  const setFind = await js(`
+    const a = window.app, r = {};
+    const { DEFAULT_SETTINGS } = await import('./js/app.js');
+    r.shippedDefault = DEFAULT_SETTINGS.drawAhead;
+    a.panels.close(); await new Promise((res) => setTimeout(res, 200));
+    a.panels.settings(); await new Promise((res) => setTimeout(res, 120));
+    const body = document.getElementById('panelBody');
+    const input = body.querySelector('.settings-search input');
+    const visible = (el) => !!el && el.offsetParent !== null;
+    const rowOf = (text) => [...body.querySelectorAll('.set-row')].find((e) => e.firstChild && e.firstChild.textContent.includes(text));
+    const shownRows = () => [...body.querySelectorAll('.set-row')].filter(visible).map((e) => e.firstChild.textContent.trim()).slice(0, 12);
+    const type = (v) => { input.value = v; input.dispatchEvent(new Event('input')); };
+    r.hasBox = !!input;
+    r.allRows = body.querySelectorAll('.set-row').length;
+    r.shownAtStart = shownRows().length;
+    const ahead = rowOf('Draw ahead of the pen');
+    r.aheadTicked = ahead ? ahead.querySelector('input[type=checkbox]').checked : null;
+    if (input) {
+      type('ahead pen');
+      r.aheadShown = visible(rowOf('Draw ahead of the pen'));
+      r.wheelShownForAhead = visible(rowOf('Mouse wheel zooms'));
+      r.shownForAhead = shownRows();
+      const aheadRow = rowOf('Draw ahead of the pen');
+      r.marksForAhead = aheadRow ? [...aheadRow.querySelectorAll('mark.set-mark')].map((m) => m.textContent) : null;
+      r.aheadLabel = aheadRow ? aheadRow.firstChild.textContent : null;
+      r.switchStillThere = !!(aheadRow && aheadRow.querySelector('input[type=checkbox]') === ahead.querySelector('input[type=checkbox]'));
+      type('pen');                          // a word's start, not any part of it: "Open folder" is not a match
+      r.openFolderForPen = [...body.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open folder' && visible(b));
+      r.penRowForPen = visible(rowOf('Pressure sensitivity')) || visible(rowOf('Pencil sound'));
+      type('INKING');                       // a section heading: the whole section shows
+      r.inkingWhole = visible(rowOf('Pressure sensitivity')) && visible(rowOf('Ruler snapping'));
+      r.themeForInking = visible(rowOf('Theme'));
+      type('zzqq nothing');
+      const none = body.querySelector('.settings-none');
+      r.noneShown = visible(none); r.rowsForNothing = shownRows().length;
+      type('wheel');
+      // a switch that redraws the panel keeps the search
+      a.panels.refreshStorage();
+      const input2 = body.querySelector('.settings-search input');
+      r.keptAfterRedraw = input2 ? input2.value : null;
+      r.wheelAfterRedraw = visible(rowOf('Mouse wheel zooms')) && !visible(rowOf('Theme'));
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+      input2 && input2.dispatchEvent(esc);
+      r.afterEscape = shownRows().length;
+      r.marksAfterEscape = body.querySelectorAll('mark.set-mark').length;
+      r.labelAfterEscape = (rowOf('Draw ahead of the pen') || {}).firstChild?.textContent;
+    }
+    a.panels.close(); await new Promise((res) => setTimeout(res, 200));
+    a.panels.settings(); await new Promise((res) => setTimeout(res, 60));
+    r.freshEmpty = (document.querySelector('#panelBody .settings-search input') || {}).value;
+    a.panels.close();
+    return r;
+  `);
+  check('Draw ahead of the pen ships off, and its switch shows off',
+    setFind.shippedDefault === false && setFind.aheadTicked === false,
+    `default ${JSON.stringify(setFind.shippedDefault)} (wanted false); switch ticked ${JSON.stringify(setFind.aheadTicked)} (wanted false)`);
+  check('Settings search: words narrow the list, a heading shows its whole section, nothing found says so, Escape clears',
+    setFind.hasBox && setFind.aheadShown === true && setFind.wheelShownForAhead === false && setFind.inkingWhole === true && setFind.themeForInking === false
+      && setFind.noneShown === true && setFind.rowsForNothing === 0 && setFind.afterEscape === setFind.shownAtStart && setFind.shownAtStart > 0
+      && setFind.openFolderForPen === false && setFind.penRowForPen === true,
+    `box ${setFind.hasBox}; rows ${setFind.allRows}, shown at start ${setFind.shownAtStart}; "ahead pen" -> ${JSON.stringify(setFind.shownForAhead)} (wheel shown ${setFind.wheelShownForAhead}); `
+      + `"INKING" whole section ${setFind.inkingWhole}, theme shown ${setFind.themeForInking}; nonsense: message ${setFind.noneShown}, rows ${setFind.rowsForNothing}; after Escape ${setFind.afterEscape}; `
+      + `"pen" shows Open folder ${setFind.openFolderForPen} (wanted false), shows a pen switch ${setFind.penRowForPen} (wanted true)`);
+  check('Settings search lights up the words it found, and takes the highlights off again cleanly',
+    Array.isArray(setFind.marksForAhead) && setFind.marksForAhead.map((w) => w.toLowerCase()).sort().join(',').includes('ahead') && setFind.marksForAhead.some((w) => w.toLowerCase() === 'pen')
+      && setFind.aheadLabel === 'Draw ahead of the pen' && setFind.switchStillThere && setFind.marksAfterEscape === 0 && setFind.labelAfterEscape === 'Draw ahead of the pen',
+    `lit up for "ahead pen": ${JSON.stringify(setFind.marksForAhead)} (wanted "ahead" and "pen"); label reads ${JSON.stringify(setFind.aheadLabel)}; same switch kept ${setFind.switchStillThere}; `
+      + `highlights left after Escape ${setFind.marksAfterEscape} (wanted 0); label then ${JSON.stringify(setFind.labelAfterEscape)}`);
+  check('Settings search survives a redraw of the panel and starts empty when Settings is opened again',
+    setFind.keptAfterRedraw === 'wheel' && setFind.wheelAfterRedraw === true && setFind.freshEmpty === '',
+    `after redraw the box holds ${JSON.stringify(setFind.keptAfterRedraw)} (wanted "wheel"), wheel row only: ${setFind.wheelAfterRedraw}; reopened box ${JSON.stringify(setFind.freshEmpty)} (wanted empty)`);
+
   /* ---- the neon pen: a glowing line, on dark pages and light ---- */
   const neon = await js(`
     const a = window.app, r = {};
@@ -3567,6 +3695,69 @@ async function run(win, app) {
   check('while a stylus on that same machine still gets its nib', finger.penNib === true);
   check('and a touchscreen PC can switch the nib back on for the finger',
     finger.optedInNib === true);
+
+  /* ---- the pen in screen recordings: a faint glow under the pen, the pointer left alone ---- */
+  const recGlow = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const glow = document.getElementById('penGlow'), nib = document.getElementById('inkNib');
+    const was = a.settings.recordPointer, penSeenWas = a.penSeenThisSession;
+    a.newBoard(true); sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.setTool('pen'); a.notePenSeen();
+    const rect = sf.canvas.getBoundingClientRect();
+    const mk = (x, y, type, buttons) => ({ pointerId: type === 'mouse' ? 1 : 61, pointerType: type,
+      button: buttons ? 0 : -1, buttons, clientX: rect.left + x, clientY: rect.top + y,
+      shiftKey: false, altKey: false, pressure: buttons ? 0.5 : 0, width: 1, height: 1, tiltX: 0, tiltY: 0 });
+    const frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const shown = () => !!glow && !glow.hidden && getComputedStyle(glow).display !== 'none';
+    // where the glow's centre is, on screen, relative to the board
+    const centre = () => { const b = glow.getBoundingClientRect(); return [Math.round(b.left + b.width / 2 - rect.left), Math.round(b.top + b.height / 2 - rect.top)]; };
+    const r = { layer: !!glow };
+    it.action = null; it.pointers.clear(); it.hideInkPointer(); it.hideGlow();
+    // off: nothing
+    a.settings.recordPointer = false;
+    it.onMove(mk(200, 200, 'pen', 0)); await frames();
+    r.offShown = shown(); r.offCursor = sf.canvas.style.cursor.slice(0, 12);
+    // on: the glow sits on the pen tip while hovering; the pointer is the same as with it off
+    a.settings.recordPointer = true;
+    it.onMove(mk(220, 210, 'pen', 0)); await frames();
+    r.onHover = shown(); r.onAt = shown() ? centre() : null; r.onCursor = sf.canvas.style.cursor.slice(0, 12);
+    r.nibWhileHover = !nib.hidden;
+    it.onDown(mk(220, 210, 'pen', 1)); it.onMove(mk(300, 240, 'pen', 1));
+    r.writing = shown(); r.writingAt = centre();
+    it.onUp(mk(300, 240, 'pen', 0)); it.action = null; it.pointers.clear(); await frames();
+    r.afterLift = shown();
+    // every pen report moves it, not just one a frame
+    sf.canvas.dispatchEvent(new PointerEvent('pointerrawupdate', { pointerId: 61, pointerType: 'pen', clientX: rect.left + 330, clientY: rect.top + 250, buttons: 0, bubbles: true }));
+    r.rawAt = centre();
+    // a pen turned over has the eraser ring instead
+    sf.canvas.dispatchEvent(new PointerEvent('pointerrawupdate', { pointerId: 61, pointerType: 'pen', clientX: rect.left + 340, clientY: rect.top + 250, buttons: 32, bubbles: true }));
+    r.tailShown = shown();
+    // the pen leaving the screen takes it away
+    it.onMove(mk(340, 260, 'pen', 0));
+    sf.canvas.dispatchEvent(new PointerEvent('pointerleave', { pointerId: 61, pointerType: 'pen' }));
+    r.afterLeave = shown();
+    // a mouse is recorded already: no glow for it
+    it.onMove(mk(360, 270, 'mouse', 0)); await frames();
+    r.mouseShown = shown();
+    // switching it off takes it away at once
+    it.onMove(mk(360, 270, 'pen', 0)); a.settings.recordPointer = false; it.hideGlow(); r.offAgain = shown();
+    a.settings.recordPointer = was; a.penSeenThisSession = penSeenWas;
+    it.hideInkPointer(); it.hideGlow(); it.action = null; it.pointers.clear(); it._penAt = 0; it._penSp = null; it._mouseSp = null;
+    a.store.clear(); a.setTool('select');
+    return r;
+  `);
+  const glowNear = (p, x, y) => !!p && Math.abs(p[0] - x) <= 1 && Math.abs(p[1] - y) <= 1;
+  check('pen glow for recordings: off by default shows nothing; on, it sits on the pen tip while hovering, and the pointer is left as it was',
+    recGlow.layer && recGlow.offShown === false && recGlow.onHover === true && glowNear(recGlow.onAt, 220, 210)
+      && recGlow.onCursor === recGlow.offCursor && recGlow.nibWhileHover === false,
+    `layer ${recGlow.layer}; off: shown ${recGlow.offShown}; on: shown ${recGlow.onHover} centred at ${JSON.stringify(recGlow.onAt)} (wanted 220,210); `
+      + `cursor on ${JSON.stringify(recGlow.onCursor)} vs off ${JSON.stringify(recGlow.offCursor)} (wanted the same); our nib while hovering ${recGlow.nibWhileHover} (wanted false)`);
+  check('pen glow: follows the pen while writing, stays after the lift, and rides every pen report',
+    recGlow.writing && glowNear(recGlow.writingAt, 300, 240) && recGlow.afterLift && glowNear(recGlow.rawAt, 330, 250),
+    `writing ${recGlow.writing} at ${JSON.stringify(recGlow.writingAt)} (wanted 300,240); after lift ${recGlow.afterLift}; raw report put it at ${JSON.stringify(recGlow.rawAt)} (wanted 330,250)`);
+  check('pen glow: steps aside for the pen\'s eraser end, goes when the pen leaves or the switch goes off, and is never drawn for a mouse',
+    recGlow.tailShown === false && recGlow.afterLeave === false && recGlow.mouseShown === false && recGlow.offAgain === false,
+    `eraser end ${recGlow.tailShown}; after the pen left ${recGlow.afterLeave}; for a mouse ${recGlow.mouseShown}; switched off ${recGlow.offAgain} (all wanted false)`);
 
   /* ---- a very full board is painted a slice at a time ---- */
   /*

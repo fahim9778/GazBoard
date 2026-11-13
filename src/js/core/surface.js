@@ -59,6 +59,7 @@ export class Surface {
     this.hoverId = null;
     this._raf = null;
     this._warming = null;      // handle of a queued idle rebuild, see warmFreeze()
+    this.wetTail = null;       // where the pen is about to be, drawn ahead of the live stroke - see Interaction.predictTail
     this._onFrame = this._onFrame.bind(this);
 
     const ro = new ResizeObserver(() => this.resize());
@@ -887,7 +888,11 @@ export class Surface {
      */
     if (only !== undefined) { one(only); return; }
     if (this.wetPieces) for (const piece of this.wetPieces) one(piece);
-    one(this.wet);
+    // the predicted tail (see Interaction.predictTail): only while it still belongs to these very points
+    const tail = this.wetTail;
+    if (this.wet && tail && tail.forPts === this.wet.points && tail.len === this.wet.points.length && tail.points.length) {
+      one({ ...this.wet, points: this.wet.points.concat(tail.points) });
+    } else one(this.wet);
   }
 
   /**

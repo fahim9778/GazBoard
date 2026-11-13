@@ -518,6 +518,8 @@
  "Rainbow": "Arcoíris",
  "Galaxy": "Galaxia",
  "Neon": "Neón",
+ "Draw ahead of the pen": "Dibujar por delante del lápiz",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "Desactivado por defecto. Activado: mientras escribes, se dibuja justo delante de la tinta una breve estimación de hacia dónde va el lápiz, para que la línea siga el ritmo de la punta. La estimación nunca se guarda: lo que se guarda es exactamente lo que escribiste. Desactívalo si alguna vez ves que la punta se adelanta de más.",
  "Erase shapes too": "Borrar también formas",
  "The eraser now also rubs out lines and shapes it crosses": "Ahora el borrador también borra las líneas y formas que toca",
  "The eraser leaves shapes alone": "El borrador no toca las formas",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "Mantener quieto el lápiz abre menús",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "Activado (predeterminado): mantener el lápiz quieto en la pizarra abre el menú y, sobre un objeto, lo levanta. Desactivado: el lápiz solo escribe, así que rellenar formas pequeñas nunca abre un menú. Usa el botón lateral del lápiz o la barra de selección para los menús. Con el dedo, mantener pulsado sigue funcionando.",
  "Insert & more…": "Insertar y más…",
- "Shortcuts": "Atajos"
+ "Shortcuts": "Atajos",
+ "Search settings…": "Buscar en ajustes…",
+ "Search settings": "Buscar en ajustes",
+ "No setting matches that.": "Ningún ajuste coincide.",
+ "Show the pen in screen recordings": "Mostrar el lápiz en grabaciones de pantalla",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "Desactivado por defecto. Zoom y otras grabadoras solo capturan el puntero del ratón, así que en el vídeo el lápiz escribe sin puntero y la flecha se queda donde estaba el ratón. Activado: un brillo suave sigue al lápiz cada vez que está cerca de la pantalla, flotando o escribiendo, para que las grabaciones muestren dónde estás. El lápiz y su puntero se sienten exactamente igual."
 }

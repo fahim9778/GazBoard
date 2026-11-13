@@ -85,7 +85,7 @@ export const DEFAULT_SETTINGS = {
   showGroupOutlines: true,
   // a Stoic line under "Happy Inking !!" on an empty board, never on the board itself (core/quotes.js)
   stoicQuotes: true,
-  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, pageStrip: false, laserColor: '#ff2d2d',
+  edgePan: true, importQuality: 2, lowLatencyInk: false, inkTrail: false, drawAhead: false, boardsPage: true, mathSize: 36, officeImport: false, slidesFinalLook: true, patternSpacing: 40, pageDate: true, pageStrip: false, laserColor: '#ff2d2d',
   // My boards' folders: a catalogue on this device, never inside a board (core/folders.js)
   folders: [], boardFolders: {},
   /*
@@ -114,6 +114,8 @@ export const DEFAULT_SETTINGS = {
   // and a phone has no hover for it to belong to. On is for a touchscreen PC
   // whose owner wants it anyway. See showInkPointer() in tools.js.
   nibOnTouch: false,
+  // Draw our own nib under a hovering pen too, so screen recordings show where the pen is.
+  recordPointer: false,
   // Holding the pen still opens the menu (on bare board) or picks up what is
   // under it. Off: a pen only ever writes - for anyone who fills in small
   // shapes, or uses the pen's side button for menus. A finger keeps the hold.
@@ -3228,6 +3230,8 @@ class App {
       // Escape in the My boards search clears the words first; only an empty search lets it close the page
       const el = e.target;
       if (el instanceof Element && el.closest('.board-search, .search-results') && document.querySelector('#boardList .board-search-input')?.value) return;
+      // and the Settings search the same way
+      if (el instanceof Element && el.closest('.settings-search') && el.value) return;
       if (this.panels.open) { this.panels.close(); e.preventDefault(); e.stopPropagation(); }
     }, true);
 

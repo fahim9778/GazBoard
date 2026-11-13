@@ -517,6 +517,8 @@
  "Rainbow": "Regenbogen",
  "Galaxy": "Galaxie",
  "Neon": "Neon",
+ "Draw ahead of the pen": "Vor dem Stift zeichnen",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "Standardmäßig aus. Wenn an: beim Schreiben wird eine kurze Schätzung, wohin der Stift geht, direkt vor die Tinte gezeichnet, damit die Linie mit der Spitze mithält. Die Schätzung wird nie gespeichert: Gespeichert wird genau das, was Sie geschrieben haben. Schalten Sie es aus, falls die Spitze einmal übers Ziel hinausschießt.",
  "Erase shapes too": "Auch Formen radieren",
  "The eraser now also rubs out lines and shapes it crosses": "Der Radierer entfernt jetzt auch Linien und Formen, die er berührt",
  "The eraser leaves shapes alone": "Der Radierer lässt Formen in Ruhe",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "Stift still halten öffnet Menüs",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "An (Standard): Den Stift still auf dem Whiteboard halten öffnet das Menü, auf einem Objekt hebt es dieses auf. Aus: Der Stift schreibt nur, beim Ausmalen kleiner Formen öffnet sich nie ein Menü. Für Menüs dann die Seitentaste des Stifts oder die Auswahlleiste nutzen. Mit dem Finger funktioniert Gedrückthalten weiterhin.",
  "Insert & more…": "Einfügen und mehr…",
- "Shortcuts": "Schnellzugriff"
+ "Shortcuts": "Schnellzugriff",
+ "Search settings…": "Einstellungen durchsuchen…",
+ "Search settings": "Einstellungen durchsuchen",
+ "No setting matches that.": "Keine Einstellung passt dazu.",
+ "Show the pen in screen recordings": "Stift in Bildschirmaufnahmen zeigen",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "Standardmäßig aus. Zoom und andere Rekorder erfassen nur den Mauszeiger, also schreibt ein Stift im Video ohne Zeiger, und der Pfeil bleibt dort stehen, wo die Maus zuletzt war. An: Ein schwaches Leuchten folgt dem Stift, sobald er nah am Bildschirm ist – beim Schweben wie beim Schreiben –, sodass Aufnahmen zeigen, wo du bist. Stift und Zeiger fühlen sich genau gleich an."
 }

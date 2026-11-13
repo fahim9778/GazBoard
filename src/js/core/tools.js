@@ -125,6 +125,8 @@ export class Interaction {
     c.addEventListener('pointermove', (e) => this.onMove(e));
     c.addEventListener('pointerup', (e) => this.onUp(e));
     c.addEventListener('pointercancel', (e) => this.onUp(e));
+    // the pen leaving the screen always takes its glow along, mid-gesture or not
+    c.addEventListener('pointerleave', (e) => { if (e.pointerType === 'pen') this.hideGlow(); });
     c.addEventListener('pointerleave', () => {
       if (this.action) return;
       this.surface.hoverId = null;
@@ -134,6 +136,7 @@ export class Interaction {
       this.hideInkPointer();
       this.eraserCursor = null;
       this.hideRing();
+      this.hideGlow();
       this.surface.invalidate();
     });
     /*
@@ -144,6 +147,8 @@ export class Interaction {
     c.addEventListener('pointerrawupdate', (e) => {
       if (e.pointerType === 'touch') return;
       const a = this.action;
+      // the recording glow rides on every pen report, so it keeps up with the hand
+      if (e.pointerType === 'pen') this.followGlow(e);
       // the eraser in hand, or a pen's tail (hovering or rubbing): the ring rides along
       if (this.tool !== 'eraser' && !(a && a.type === 'erase') && !(e.pointerType === 'pen' && (e.buttons & 32))) return;
       const el = this._ringEl;
@@ -746,7 +751,7 @@ export class Interaction {
     if (this.moveRightPan(e)) return;
     if (e.pointerType === 'pen' && e.buttons) this.app.notePenSeen();
     const sp = this.surface.screenPoint(e);
-    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = sp; this._mouseSp = null; }
+    if (e.pointerType === 'pen') { this._penAt = performance.now(); this._penSp = sp; this._mouseSp = null; this.followGlow(e, sp); }
     const wp = this.surface.cam.toWorld(sp.x, sp.y);
     if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { sp, wp, type: e.pointerType });
     this.app.boardPoint = { x: wp.x, y: wp.y, at: performance.now() };
@@ -969,6 +974,7 @@ export class Interaction {
           if (lying > 0.05) a.obj.tilt = +lying.toFixed(2); else delete a.obj.tilt;
         }
         this.sendInkTrail(e, a, wp, pressure);
+        this.surface.wetTail = this.predictTail(e, a);
         break;
       }
       case 'erase': {
@@ -1617,6 +1623,54 @@ export class Interaction {
     if (g) return g;
     for (const px of steps.slice(1)) { const h = pick(this.store, wp, px / z); if (h) return h; }
     return null;
+  }
+
+  /**
+   * Where the pen is about to be: a short tail drawn ahead of the ink, never kept.
+   *
+   * Every bit of ink reaches the screen a frame or two after the pen made it - the relay of
+   * Windows, the browser and the canvas. Native ink apps hide that by drawing a little way ahead of
+   * the last real sample, along the line the pen is moving. The browser offers the same guess
+   * (getPredictedEvents), and this draws it: at most three predicted samples, never more than a short
+   * reach ahead, in the stroke's own colour and pressure. It is never part of the stroke. The next
+   * real sample replaces it, lifting the pen drops it, and what is saved is exactly what was drawn.
+   *
+   * Left out where a guess would be wrong: a straight line (it is going where the line goes, not
+   * where the pen wanders), a stroke held to the ruler, and ink past the edge of the sheet or screen.
+   */
+  predictTail(e, a) {
+    if (this.app.settings.drawAhead !== true || !e || typeof e.getPredictedEvents !== 'function') return null;
+    if (!a || a.type !== 'draw' || a.straight || a.ruled || a.edgePending || a.blocked || a.offView) return null;
+    const pts = a.obj && a.obj.points;
+    const last = pts && pts[pts.length - 1];
+    if (!last) return null;
+    let preds;
+    try { preds = e.getPredictedEvents(); } catch { return null; }
+    if (!preds || !preds.length) return null;
+    const z = this.surface.cam.z, reach = Interaction.PREDICT_REACH / z;
+    const tail = [];
+    for (const pe of preds.slice(0, 3)) {
+      const sp = this.surface.screenPoint(pe);
+      const q = this.surface.cam.toWorld(sp.x, sp.y);
+      const d = Math.hypot(q.x - last.x, q.y - last.y);
+      if (d > reach) {
+        // a guess further out than a nib-length is cut back to that length, along the same direction
+        if (d > 0) tail.push({ x: last.x + (q.x - last.x) * reach / d, y: last.y + (q.y - last.y) * reach / d, p: last.p });
+        break;
+      }
+      tail.push({ x: q.x, y: q.y, p: last.p });
+    }
+    if (!tail.length) return null;
+    // Only on a line the pen is already following. At a sharp corner the guess would carry on past
+    // it for a frame and blunt the look of the corner, so there the ink simply waits for the pen.
+    const prev = pts[pts.length - 2];
+    if (!prev) return null;
+    const ux = last.x - prev.x, uy = last.y - prev.y, vx = tail[tail.length - 1].x - last.x, vy = tail[tail.length - 1].y - last.y;
+    const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+    if (!lu || !lv || (ux * vx + uy * vy) / (lu * lv) < 0.85) return null;
+    if (a.sheet && !tail.every((q) => inRect(a.sheet, q.x, q.y))) return null;
+    if (a.view && !tail.every((q) => this.onScreen(a.view, q))) return null;
+    return { forPts: pts, len: pts.length, points: tail };
   }
 
   /** Is `wp` on the current selection's box, give or take `pad`? */
@@ -2999,6 +3053,7 @@ export class Interaction {
     if (this.action && this.lastMotion) this.applyMotion(this.lastMotion.sp, this.lastMotion.mods, null);
   }
 
+  static PREDICT_REACH = 18;            // screen pixels the predicted tail may run ahead of the ink, at most
   static ERASER_MAX_GROWTH = 1.8;      // up to 2.8x the chosen size
   static ERASER_GROWTH_SPAN = 900;     // world units of scrubbing to reach it
   static ON_COVER = 0.85;              // share of a stroke that must lie on a cover to be written ON it
@@ -3796,6 +3851,53 @@ export class Interaction {
 
   hideRing() {
     const el = this._ringEl;
+    if (el && !el.hidden) el.hidden = true;
+  }
+
+  /*
+   * The pen glow, for screen recordings.
+   *
+   * Zoom and other recorders capture the screen and the MOUSE pointer, drawn
+   * where the mouse last was. A pen never moves that, and the pointer Windows
+   * shows under a hovering pen is not recorded - so a recording shows ink
+   * appearing out of nowhere. A soft light under the pen is part of the page,
+   * so every recorder sees it. It is a blur, not a sharp mark: nothing about a
+   * faint halo looks late when it trails the hand by a frame, where a nib does.
+   * The system pointer is left exactly as it is, so the pen feels the same.
+   *
+   * It moves on every pen report (pointerrawupdate) and costs only a
+   * transform on its own layer - the board is never repainted for it. The
+   * eraser - the tool, or a pen turned over - already has its ring, so the
+   * glow steps aside for that.
+   */
+  glowEl() {
+    if (this._glowEl === undefined) {
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (!doc || typeof doc.getElementById !== 'function' || typeof doc.createElement !== 'function') { this._glowEl = null; return null; }
+      let el = doc.getElementById('penGlow');
+      if (!el && this.canvas && this.canvas.parentElement && typeof this.canvas.parentElement.appendChild === 'function') {
+        el = doc.createElement('div');
+        el.id = 'penGlow';
+        el.hidden = true;
+        this.canvas.parentElement.appendChild(el);
+      }
+      this._glowEl = el || null;
+    }
+    return this._glowEl;
+  }
+
+  followGlow(e, sp = null) {
+    if (this.app.settings.recordPointer !== true) { this.hideGlow(); return; }
+    if ((e.buttons & 32) || this.tool === 'eraser') { this.hideGlow(); return; }
+    const el = this.glowEl();
+    if (!el) return;
+    const p = sp || this.surface.screenPoint(e);
+    el.style.transform = 'translate3d(' + Math.round(p.x) + 'px,' + Math.round(p.y) + 'px,0)';
+    if (el.hidden) el.hidden = false;
+  }
+
+  hideGlow() {
+    const el = this._glowEl;
     if (el && !el.hidden) el.hidden = true;
   }
 

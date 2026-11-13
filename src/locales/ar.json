@@ -518,6 +518,8 @@
  "Rainbow": "قوس قزح",
  "Galaxy": "مجرّة",
  "Neon": "نيون",
+ "Draw ahead of the pen": "ارسم أمام القلم",
+ "Off (default). On: while you write, a short guess of where the pen is going is drawn just ahead of the ink, so the line keeps up with the nib. The guess is never kept: what is saved is exactly what you wrote. Leave it off if you ever see the tip overshoot.": "معطّل افتراضيًا. عند تشغيله: أثناء الكتابة يُرسم تخمين قصير لمكان القلم التالي أمام الحبر مباشرة، فيبقى الخط ملاصقًا لرأس القلم. لا يُحفظ التخمين أبدًا: ما يُحفظ هو ما كتبته بالضبط. أوقفه إن رأيت الطرف يتجاوز القلم.",
  "Erase shapes too": "امسح الأشكال أيضًا",
  "The eraser now also rubs out lines and shapes it crosses": "الممحاة تمسح الآن أيضًا الخطوط والأشكال التي تمر عليها",
  "The eraser leaves shapes alone": "الممحاة لا تلمس الأشكال",
@@ -1279,5 +1281,10 @@
  "Hold the pen still for menus": "إبقاء القلم ثابتًا يفتح القوائم",
  "On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen's side button or the selection bar for menus instead. A finger keeps press-and-hold either way.": "مفعّل (افتراضي): إبقاء القلم ثابتًا على اللوحة يفتح القائمة، وعلى عنصر يلتقطه. معطّل: القلم يكتب فقط، فلا تُفتح قائمة أبدًا عند تلوين الأشكال الصغيرة. استخدم الزر الجانبي للقلم أو شريط التحديد للقوائم بدلًا من ذلك. يبقى الضغط المطوّل بالإصبع كما هو في الحالتين.",
  "Insert & more…": "إدراج والمزيد…",
- "Shortcuts": "اختصارات"
+ "Shortcuts": "اختصارات",
+ "Search settings…": "ابحث في الإعدادات…",
+ "Search settings": "البحث في الإعدادات",
+ "No setting matches that.": "لا يوجد إعداد مطابق.",
+ "Show the pen in screen recordings": "إظهار القلم في تسجيلات الشاشة",
+ "Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.": "معطّل افتراضيًا. يلتقط Zoom وبرامج التسجيل الأخرى مؤشر الفأرة فقط، فيكتب القلم في الفيديو دون أي مؤشر ويبقى السهم ثابتًا حيث كانت الفأرة. عند التشغيل: يتبع توهّج خفيف القلم كلما اقترب من الشاشة، أثناء التحويم أو الكتابة، فتُظهر التسجيلات مكانك. يبقى إحساس القلم ومؤشره كما هو تمامًا."
 }
