@@ -4221,10 +4221,10 @@ class App {
     return this._appInfo;
   }
 
-  /** The app store this copy came from and that updates it ("Google Play", "F-Droid"), or null for a download from GitHub. */
+  /** The app store this copy came from and that updates it ("Google Play", "F-Droid", "Microsoft Store"), or null for a download from GitHub. */
   storeName(info = this._appInfo) {
     const store = info && info.store;
-    return store === 'play' ? 'Google Play' : store === 'fdroid' ? 'F-Droid' : null;
+    return store === 'play' ? 'Google Play' : store === 'fdroid' ? 'F-Droid' : store === 'msstore' ? 'Microsoft Store' : null;
   }
 
   showShortcuts() {

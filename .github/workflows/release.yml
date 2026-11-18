@@ -58,6 +58,27 @@ jobs:
         # package.json asks for - which is why no release before 2.4.2 has one.
         run: npx electron-builder --win nsis portable --x64 --publish never
 
+      # The Microsoft Store copy: an MSIX package (.appx) stamped with the identity
+      # Partner Center reserved for GazBoard. It is built into its own folder so it
+      # can never touch dist/latest.yml, which the in-app updater reads. It is left
+      # unsigned on purpose: the Store signs it when it is published. Copies from
+      # the Store never look at GitHub for updates (process.windowsStore in main.js).
+      - name: Build the Microsoft Store package
+        shell: bash
+        run: |
+          npx electron-builder --win appx --x64 --publish never \
+            -c.directories.output=dist-store \
+            -c.appx.identityName=theBoringCodes.GazBoard \
+            "-c.appx.publisher=CN=07E47D0E-FCDB-44F0-B4E0-77F3DB27DAC5" \
+            -c.appx.publisherDisplayName=theBoringCodes \
+            -c.appx.displayName=GazBoard \
+            -c.appx.applicationId=GazBoard \
+            -c.appx.backgroundColor=transparent \
+            '-c.appx.artifactName=GazBoard-${version}-store.${ext}'
+          ls -la dist-store
+          V="$(node -p "require('./package.json').version")"
+          test -s "dist-store/GazBoard-${V}-store.appx" || { echo "::error::no Store package for ${V}"; exit 1; }
+
       # The in-app updater (updater.js) reads latest.yml for the installer's
       # SHA-512, and the .blockmap files to fetch only the parts that changed.
       # Without them an installed GazBoard cannot update itself, so their
@@ -82,6 +103,7 @@ jobs:
             dist/*.exe
             dist/latest.yml
             dist/*.exe.blockmap
+            dist-store/*.appx
           if-no-files-found: error
 
       # The notes come from release-notes/<version>.md, written alongside the
@@ -115,6 +137,7 @@ jobs:
             dist/*.exe
             dist/latest.yml
             dist/GazBoard-Setup-*.exe.blockmap
+            dist-store/*.appx
           fail_on_unmatched_files: true
           name: GazBoard ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}

@@ -355,9 +355,11 @@ class MainActivity : ComponentActivity() {
         Configuration.UI_MODE_NIGHT_YES
     }
     app.main.post {
+      // The bars themselves are see-through (the theme says so) and the page is
+      // padded clear of them, so what shows behind the bars is this window
+      // background. Painting it is all it takes - no Window.setStatusBarColor,
+      // which Android 15 ignores and later versions drop.
       val bar = if (dark) 0xFF1B1A19.toInt() else 0xFFF5F5F8.toInt()
-      window.statusBarColor = bar
-      window.navigationBarColor = bar
       window.decorView.setBackgroundColor(bar)
       val bars = WindowCompat.getInsetsController(window, window.decorView)
       // light BARS means dark icons on them - the opposite of the theme name

@@ -929,6 +929,8 @@ function buildMenu() {
 let updaterInstance;
 function updater() {
   if (updaterInstance !== undefined) return updaterInstance;
+  // A Microsoft Store copy is updated by the Store and nothing else.
+  if (process.windowsStore) { updaterInstance = null; return null; }
   try {
     const { createUpdater } = require('./updater.js');
     updaterInstance = createUpdater({ app, net, notePath: path.join(app.getPath('userData'), 'update-note.json') });
@@ -1160,7 +1162,9 @@ function ipc() {
     // its own choosing, or its guess will land on top of what was asked for.
     // Answered from the main process because it knows before the window exists,
     // which is the only way to settle this without a race.
-    pendingBoardFile: openedFromFile
+    pendingBoardFile: openedFromFile,
+    // installed from the Microsoft Store (an MSIX package): the Store updates it, GitHub is never asked
+    store: process.windowsStore ? 'msstore' : null
   }));
 
   ipcMain.handle('storage:get', () => storageInfo({ count: true }));
@@ -1270,6 +1274,7 @@ function ipc() {
    * and a URL; deciding what to do with them belongs to the renderer.
    */
   ipcMain.handle('updates:check', async () => {
+    if (process.windowsStore) return { ok: false, error: 'The Microsoft Store keeps this copy up to date' };
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 8000);
     try {

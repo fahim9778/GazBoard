@@ -21,8 +21,13 @@
     <item name="android:fontFamily">sans</item>
     <item name="android:windowLightStatusBar">false</item>
     <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
-    <item name="android:statusBarColor">#1B1A19</item>
-    <item name="android:navigationBarColor">#1B1A19</item>
+    <!-- The bars are see-through: the window background behind them is the colour
+         (MainActivity.applyChromeTheme repaints it when GazBoard's theme overrides
+         the phone's). No scrim either, or 3-button navigation gets a grey veil. -->
+    <item name="android:statusBarColor">@android:color/transparent</item>
+    <item name="android:navigationBarColor">@android:color/transparent</item>
+    <item name="android:enforceStatusBarContrast" tools:targetApi="29">false</item>
+    <item name="android:enforceNavigationBarContrast" tools:targetApi="29">false</item>
     <item name="android:windowActionModeOverlay">true</item>
     <item name="android:colorAccent">#A6A8E0</item>
     <item name="android:windowBackground">#1B1A19</item>

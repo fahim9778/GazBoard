@@ -4,3 +4,4 @@ dist-web/
 test/out/
 sync-inbox/
 dist-sync/
+dist-store/

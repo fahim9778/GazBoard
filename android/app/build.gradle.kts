@@ -105,6 +105,8 @@ android {
   buildTypes {
     release {
       isMinifyEnabled = true
+      // Leaves out pictures and strings nothing refers to: a smaller download from Play.
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.findByName("release")
     }

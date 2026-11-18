@@ -11287,6 +11287,25 @@ async function run(win, app) {
     storeCopy.asked === 0 && storeCopy.r === null && /Google Play keeps GazBoard up to date/.test(storeCopy.toasts.join('|'))
       && storeCopy.saysPlay && storeCopy.noToggle && storeCopy.githubIsNotAStore,
     JSON.stringify(storeCopy));
+  // The same for a copy from the Microsoft Store: the Store updates it, GitHub is never asked
+  const msStore = await js(`
+    const a = window.app, real = a._appInfo, fetchWas = a.fetchUpdate, toasts = [], toastWas = a.toast;
+    let asked = 0;
+    a.fetchUpdate = async () => { asked++; return { ok: true, version: '99.0.0', url: 'x' }; };
+    a.toast = (m) => { toasts.push(String(m)); };
+    try {
+      a._appInfo = { ...(real || {}), store: 'msstore' };
+      const was = a.settings.updateCheck; a.settings.updateCheck = true;
+      const r = await a.checkForUpdates({ force: true });
+      a.settings.updateCheck = was;
+      const info = await window.board.info();
+      return { asked, r, toasts, named: a.storeName(), thisCopy: info.store };
+    } finally { a._appInfo = real; a.fetchUpdate = fetchWas; a.toast = toastWas; }
+  `);
+  check('a copy from the Microsoft Store never looks at GitHub either, and this unpackaged copy is not taken for one',
+    msStore.asked === 0 && msStore.r === null && msStore.named === 'Microsoft Store'
+      && /Microsoft Store keeps GazBoard up to date/.test(msStore.toasts.join('|')) && msStore.thisCopy === null,
+    JSON.stringify(msStore));
   check('and the next launch tries again instead of sitting out the gap',
     upd.failureRetriesNextTime === true,
     `second attempt went out: ${upd.failureRetriesNextTime}`);
