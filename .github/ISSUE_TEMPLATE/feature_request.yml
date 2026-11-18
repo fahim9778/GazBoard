@@ -1,0 +1,26 @@
+name: 💡 An idea for GazBoard
+description: Suggest something new, or a way to make something better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like GazBoard to do?
+      placeholder: I'd love to be able to…
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: What would you use it for?
+      description: Your class, your notes, your drawing… knowing the real use helps decide how it should work.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Seen it somewhere else?
+      description: An app that does this, or a picture of what you mean.
+  - type: markdown
+    attributes:
+      value: GazBoard stays offline, free and without sign-in, and keeps your ink exactly as you drew it. Ideas that fit those are the quickest to land.

@@ -1,0 +1,54 @@
+name: 🐞 Something is not working
+description: Tell us what went wrong in GazBoard
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time! A screenshot or a short screen recording helps more than anything else.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, and what did GazBoard do instead?
+      placeholder: I drew a circle with the pen, and the menu popped up…
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can I make it happen too?
+      placeholder: |
+        1. Open a new board
+        2. Pick the pen
+        3. …
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where are you using GazBoard?
+      options:
+        - Windows
+        - Mac
+        - Linux
+        - Android (Google Play)
+        - Android (APK from GitHub)
+        - Web browser
+        - Microsoft Store
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: GazBoard version
+      description: Settings → About shows it (for example 5.1.4)
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and pen
+      placeholder: e.g. Surface Pro 7 with Surface Pen, Galaxy Tab S9 with S Pen, laptop with mouse
+  - type: textarea
+    id: shots
+    attributes:
+      label: Screenshots or a recording
+      description: Drag files in here.
