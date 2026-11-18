@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="207" height="80" viewBox="0 0 207 80" role="img" aria-label="Try it in your browser">
+  <title>Try it in your browser</title>
+  <rect x="13.5" y="13.5" width="180" height="53" rx="8" fill="#000" stroke="#a6a6a6"/>
+  <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round">
+    <circle cx="38" cy="40" r="12"/>
+    <ellipse cx="38" cy="40" rx="5.5" ry="12"/>
+    <path d="M26 40h24M28 33.5h20M28 46.5h20"/>
+  </g>
+  <text x="60" y="35" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="9" letter-spacing=".4">TRY IT IN YOUR</text>
+  <text x="60" y="55" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="19">Browser</text>
+</svg>

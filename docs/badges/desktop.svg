@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="207" height="80" viewBox="0 0 207 80" role="img" aria-label="Download for Windows, Mac and Linux">
+  <title>Download for Windows, Mac and Linux</title>
+  <rect x="13.5" y="13.5" width="180" height="53" rx="8" fill="#000" stroke="#a6a6a6"/>
+  <g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="25" y="25" width="26" height="19" rx="2.5"/>
+    <path d="M33 52h10M38 44v8"/>
+    <path d="M38 29v9M34.5 34.5 38 38l3.5-3.5"/>
+  </g>
+  <text x="60" y="35" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="9" letter-spacing=".4">DOWNLOAD FOR</text>
+  <text x="60" y="54" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="15.5">Win · Mac · Linux</text>
+</svg>
