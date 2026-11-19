@@ -162,6 +162,11 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
     // The page paints itself; the status bar and the navigation bar are
     // Android's and have to be told which theme is on screen.
     setTheme: (want) => call('theme:set', want),
+    // "Convert to text": Google's ML Kit reads the ink on the phone. The language pack comes from
+    // Google once; recognizeInk answers { code: 'needs-model' } until it is here, and the page asks
+    // before downloadInkModel fetches anything.
+    recognizeInk: (request) => guarded('ink:recognize', request),
+    downloadInkModel: (request) => guarded('ink:download', request),
     background: () => call('app:background'),
     boards: {
       list: () => call('boards:list'),

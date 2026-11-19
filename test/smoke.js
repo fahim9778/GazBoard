@@ -3759,6 +3759,103 @@ async function run(win, app) {
     recGlow.tailShown === false && recGlow.afterLeave === false && recGlow.mouseShown === false && recGlow.offAgain === false,
     `eraser end ${recGlow.tailShown}; after the pen left ${recGlow.afterLeave}; for a mouse ${recGlow.mouseShown}; switched off ${recGlow.offAgain} (all wanted false)`);
 
+  /* ---- handwriting to text: lasso, Convert to text, one Undo brings the ink back ---- */
+  const hw = await js(`
+    const a = window.app, st = a.store, r = {};
+    const CM = await import('app://board/js/ui/contextmenu.js');
+    const HW = await import('app://board/js/handwriting.js');
+    const confirmWas = a.confirm, langWas = a.settings.handwritingLang;
+    a.newBoard(true); st.doc.pages = [];
+    let n = 0;
+    const word = (x0, y0, w, h, color, tool = 'pen') => {
+      const pts = []; for (let i = 0; i <= 20; i++) pts.push({ x: x0 + w * i / 20, y: y0 + h / 2 + Math.sin(i / 2) * h / 2, p: .5 });
+      return { id: 'hw' + (n++), type: 'stroke', tool, color, width: 4, opacity: 1, rotation: 0, effect: 'none', points: pts,
+        bbox: { x: x0, y: y0, w, h } };
+    };
+    // two lines of writing, a dot over the first, a highlighter swipe that must be left alone
+    const ink = [word(100, 100, 80, 40, '#0063b1'), word(200, 104, 90, 36, '#0063b1'), word(120, 200, 70, 40, '#e81123'), word(210, 196, 60, 44, '#0063b1'),
+      { ...word(150, 84, 4, 4, '#0063b1') }];
+    const hl = word(90, 120, 220, 20, '#ffff00', 'highlighter');
+    st.addMany([...ink, hl], 'test');
+    const ids = [...ink, hl].map((o) => o.id);
+    a.setSelection(ids);
+    // no recognizer on this machine: nothing is offered
+    a._inkReader = false;            // as on a machine with no recognizer (the suite also runs on Windows, which has one)
+    r.offeredWithout = HW.inkReaderAvailable(a);
+    const reader = a._inkReader = {};
+    // the menu and the bar both offer it once a recognizer is there
+    CM.showContextMenu(a, { clientX: 300, clientY: 300 }, true);
+    r.inMenu = [...document.querySelectorAll('.menu-item')].some((b) => /Convert to text/.test(b.textContent));
+    (await import('app://board/js/ui/popover.js')).closePopover();
+    a.setSelection(ids);
+    CM.updateSelectionBar(a);
+    r.inBar = [...document.querySelectorAll('button')].some((b) => b.title === 'Convert to text');
+    // Android flow: the pack is missing, the person is asked, it downloads, then reads
+    const asked = [];
+    let calls = 0, downloads = 0;
+    reader.recognizeInk = async (req) => {
+      calls++; r.request = { lines: req.lines.length, perLine: req.lines.map((l) => l.length), lang: req.lang, match: req.match,
+        maxY: Math.round(Math.max(...req.lines.flat(2).map((q) => q[1]))) };
+      if (calls === 1) return { ok: false, code: 'needs-model', language: 'en-US' };
+      return { ok: true, lines: ['hello there', 'two lines'] };
+    };
+    reader.downloadInkModel = async (req) => { downloads++; r.downloadLang = req.lang; return { ok: true }; };
+    a.confirm = async (title) => { asked.push(title); return true; };
+    a.settings.handwritingLang = 'en';
+    const before = st.objects.length;
+    a.setSelection(ids);
+    const o = await a.command('edit.inkToText');
+    r.asked = asked; r.calls = calls; r.downloads = downloads;
+    r.text = o && o.text; r.color = o && o.color; r.fontSize = o && Math.round(o.fontSize);
+    r.wideEnough = !!o && o.w >= 'hello there'.length * o.fontSize * 0.6;
+    r.place = o && [Math.round(o.x), Math.round(o.y)];
+    r.left = st.objects.map((x) => x.type === 'stroke' ? x.tool : x.type).sort();
+    r.selected = [...a.surface.selection];
+    r.newId = o && o.id;
+    // one Undo: the ink is back exactly as it was, and the text is gone
+    st.undo();
+    r.afterUndo = { count: st.objects.length, before, sameInk: ink.every((s) => JSON.stringify(st.get(s.id)?.points) === JSON.stringify(s.points)), textGone: !st.get(o && o.id) };
+    // Windows without a recognizer for the language: says how to add one, nothing changes
+    reader.recognizeInk = async () => ({ ok: false, code: 'no-recognizer', installed: ['Microsoft English (US) Handwriting Recognizer'] });
+    const toasts = []; const toastWas = a.toast; a.toast = (m) => toasts.push(String(m));
+    a.setSelection(ink.map((s) => s.id));
+    const none = await a.command('edit.inkToText');
+    r.noRecognizer = { result: none, toast: toasts.join('|'), count: st.objects.length };
+    // a selection with only highlighter in it is not handwriting
+    a.setSelection([hl.id]);
+    r.highlighterOnly = HW.readableInk(a.selected).length;
+    a.toast = toastWas;
+    a.confirm = confirmWas;
+    a.settings.handwritingLang = langWas; a._inkReader = null;
+    a.setSelection([]); st.clear();
+    // leave nothing behind for the tests that follow: no menu, no selection bar, no dialog
+    (await import('app://board/js/ui/popover.js')).closePopover();
+    CM.updateSelectionBar(a);
+    document.getElementById('overlay')?.classList.remove('show');
+    r.leftovers = { bar: document.getElementById('ctxbar')?.classList.contains('show'), overlay: document.getElementById('overlay')?.classList.contains('show'),
+      popover: !!document.querySelector('.popover.show, .popover:not([hidden])') };
+    return r;
+  `);
+  check('handwriting to text: only offered where a recognizer exists, and then in both the menu and the selection bar',
+    hw.offeredWithout === false && hw.inMenu === true && hw.inBar === true,
+    `offered with no recognizer ${hw.offeredWithout} (wanted false); in the menu ${hw.inMenu}; in the bar ${hw.inBar}`);
+  check('handwriting to text: read line by line, scaled to about 100 high, highlighter left out; Android asks before downloading its pack',
+    !!hw.request && hw.request.lines === 2 && hw.request.lang === 'en-US' && hw.request.match.includes('English') && hw.request.maxY <= 140
+      && hw.asked.length === 1 && /Download handwriting/.test(hw.asked[0]) && hw.downloads === 1 && hw.downloadLang === 'en-US' && hw.calls === 2,
+    `request ${JSON.stringify(hw.request)}; asked ${JSON.stringify(hw.asked)}; downloads ${hw.downloads} (${hw.downloadLang}); reads ${hw.calls}`);
+  check('handwriting to text: the ink becomes one text box where it was, in its main colour, with the line break kept',
+    hw.text === 'hello there\ntwo lines' && hw.color === '#0063b1' && hw.place && hw.place[0] >= 94 && hw.place[0] <= 100 && hw.place[1] <= 84
+      && JSON.stringify(hw.left) === JSON.stringify(['highlighter', 'text']) && hw.selected.length === 1 && hw.selected[0] === hw.newId && hw.fontSize > 10 && hw.wideEnough,
+    `text ${JSON.stringify(hw.text)}, colour ${hw.color}, at ${JSON.stringify(hw.place)}, size ${hw.fontSize}, wide enough for its longest line ${hw.wideEnough}; left on the board ${JSON.stringify(hw.left)}; selected ${JSON.stringify(hw.selected)}`);
+  check('handwriting to text: one Undo brings every stroke back exactly and takes the text away',
+    hw.afterUndo.count === hw.afterUndo.before && hw.afterUndo.sameInk && hw.afterUndo.textGone,
+    JSON.stringify(hw.afterUndo));
+  check('handwriting to text: no recognizer for the language changes nothing and says how to add one; highlighter alone is not handwriting',
+    hw.noRecognizer.result === null && /Handwriting/.test(hw.noRecognizer.toast) && hw.noRecognizer.count === hw.afterUndo.count && hw.highlighterOnly === 0,
+    `${JSON.stringify(hw.noRecognizer)}; highlighter-only readable strokes ${hw.highlighterOnly}`);
+  check('handwriting to text: leaves no menu, selection bar or dialog behind',
+    !hw.leftovers.bar && !hw.leftovers.overlay, JSON.stringify(hw.leftovers));
+
   /* ---- a very full board is painted a slice at a time ---- */
   /*
    * An ink-wash painting of 15,000 strokes froze the Android app on opening:

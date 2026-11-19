@@ -1,5 +1,6 @@
 // Right-click menu and the floating selection toolbar.
 
+import { inkReaderAvailable, readableInk } from '../handwriting.js';
 import { h, openPopover, closePopover } from './popover.js';
 import { icon } from './icons.js';
 import { t } from '../i18n.js';
@@ -57,6 +58,9 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item(t('Copy as picture'), 'image', () => app.command('edit.copyPicture')));
     if (app.selected.some((o) => ['text', 'note', 'shape', 'table'].includes(o.type) && (o.text || (o.cells && Object.keys(o.cells).length))))
       menu.appendChild(item(t('Copy text'), 'text', () => app.command('edit.copyText')));
+    // lassoed handwriting can be read into a text box, on a device that has a recognizer
+    if (inkReaderAvailable(app) && readableInk(app.selected).length)
+      menu.appendChild(item(t('Convert to text'), 'text', () => app.command('edit.inkToText')));
     menu.appendChild(item(t('Duplicate'), 'duplicate', () => app.command('edit.duplicate'), { key: 'Ctrl+D' }));
     menu.appendChild(h('div', { class: 'menu-sep' }));
     const grouped = app.selectedGroups().size > 0;
@@ -228,6 +232,7 @@ export function updateSelectionBar(app) {
   }
   if (grouped) bar.appendChild(mk(t('Ungroup (Ctrl+Shift+G)'), 'ungroup', () => app.command('edit.ungroup')));
   else if (sel.length > 1) bar.appendChild(mk(t('Group (Ctrl+G)'), 'group', () => app.command('edit.group')));
+  if (inkReaderAvailable(app) && readableInk(sel).length) bar.appendChild(mk(t('Convert to text'), 'text', () => app.command('edit.inkToText')));
   bar.appendChild(mk(t('Duplicate (Ctrl+D)'), 'duplicate', () => app.command('edit.duplicate')));
   bar.appendChild(mk(t('Bring to front'), 'front', () => app.command('order.front')));
   bar.appendChild(mk(sel.every((o) => o.locked) ? t('Unlock') : t('Lock'), sel.every((o) => o.locked) ? 'unlock' : 'lock', () => app.command('edit.lock')));

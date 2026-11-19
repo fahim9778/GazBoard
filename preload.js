@@ -267,6 +267,9 @@ contextBridge.exposeInMainWorld('board', {
     answer: (ticket, outcome) => ipcRenderer.invoke('sync:answer', { ticket, outcome })
   },
 
+  // "Convert to text": read lassoed handwriting with Windows' own recognizer (main.js answers
+  // 'unsupported' elsewhere, and the page only offers it on Windows)
+  recognizeInk: (request) => ipcRenderer.invoke('ink:recognize', request),
   importToPdf: (filePath, opts) => ipcRenderer.invoke('import:toPdf', filePath, opts || {}),
   // this importer takes a fixed-up copy of a deck as bytes, and can be asked to use Microsoft Office
   importTakesBytes: true,

@@ -9,6 +9,7 @@ import { PAPER, paperForPage } from './pdfdialog.js';
 import { exportBoards } from '../board-export.js';
 import { BOARD_COLORS, PATTERNS } from './palettes.js';
 import { inkTrailSupported } from '../core/inktrail.js';
+import { inkReaderAvailable, INK_LANGS } from '../handwriting.js';
 import { PATTERN_SPACINGS, staffLayout } from '../core/render.js';
 import { todayStamp } from '../core/pages.js';
 import * as F from '../core/folders.js';
@@ -1032,6 +1033,19 @@ export function createPanels(app) {
    * one language, and building them all again is exactly what a reload does.
    * The board is saved first, so nothing is lost on the way.
    */
+  /** The language handwriting is read in by "Convert to text". Auto follows the app's own language. */
+  function handwritingPicker() {
+    const sel = h('select', { class: 'lang-select', 'aria-label': t('Handwriting language') });
+    const now = app.settings.handwritingLang || 'auto';
+    const opts = [['auto', t('Same as the app')], ...LANGUAGES.filter((l) => INK_LANGS[l.code]).map((l) => [l.code, l.name])];
+    for (const [code, name] of opts) {
+      const o = h('option', { value: code }, name);
+      if (code === now) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', () => { app.settings.handwritingLang = sel.value; app.saveSettings(); });
+    return sel;
+  }
   function languagePicker() {
     const sel = h('select', { class: 'lang-select', 'aria-label': t('Language') });
     const now = app.settings.language || 'auto';
@@ -1332,6 +1346,8 @@ export function createPanels(app) {
             t('Off (default). Zoom and other recorders only capture the mouse pointer, so a pen writes with no pointer in the video and the arrow stays parked wherever the mouse was. On: a faint glow follows the pen whenever it is near the screen, hovering or writing, so recordings show where you are. Your pen and its pointer feel exactly the same.')),
           row(t('Hold the pen still for menus'), mkToggle(() => s.penHold !== false, (v) => { s.penHold = v; app.interaction.cancelHold(); }),
             t('On (default): holding the pen still on the board opens the menu, and on an object picks it up. Off: the pen only ever writes, so filling in small shapes never opens a menu. Use the pen\'s side button or the selection bar for menus instead. A finger keeps press-and-hold either way.')),
+          inkReaderAvailable(app) ? row(t('Handwriting language'), handwritingPicker(),
+            t('The language "Convert to text" reads your handwriting in. Lasso some ink, then choose Convert to text from its menu. Your writing is read on this device and never sent anywhere.')) : null,
           row(t('Ruler snapping'), mkToggle(() => app.ruler.snap, (v) => (app.ruler.snap = v)))
         ),
         storage ? h('div', { class: 'section' }, h('h5', {}, t('Storage')), storage) : null,

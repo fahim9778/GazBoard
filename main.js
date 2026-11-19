@@ -89,6 +89,113 @@ function newestRelease(payload) {
 }
 module.exports.newestRelease = newestRelease;
 
+/*
+ * Reading handwriting on Windows ("Convert to text").
+ *
+ * Windows has a handwriting recognizer of its own - the one behind the pen
+ * keyboard - and PowerShell can reach it through the Windows Runtime, so
+ * nothing is installed and nothing is bundled. The ink goes in as a small JSON
+ * file of points, one list per line of writing; the words come back the same
+ * way. It never leaves the computer.
+ *
+ * Answers: { ok: true, lines: [...], recognizer } or { ok: false, code }, where
+ * code is 'no-recognizer' (none for that language - the list of those that are
+ * installed comes along), 'unsupported' (not Windows, or a Windows without the
+ * inking runtime), 'timeout' or 'failed'.
+ */
+const INK_SCRIPT = String.raw`
+param([string]$In, [string]$Out)
+$ErrorActionPreference = 'Stop'
+function Done($o) { [IO.File]::WriteAllText($Out, ($o | ConvertTo-Json -Depth 6 -Compress), (New-Object Text.UTF8Encoding $false)) }
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  try { Add-Type -AssemblyName System.Numerics.Vectors } catch {}
+  $null = [Windows.UI.Input.Inking.InkRecognizerContainer, Windows.UI.Input.Inking, ContentType = WindowsRuntime]
+  $null = [Windows.UI.Input.Inking.InkStrokeContainer, Windows.UI.Input.Inking, ContentType = WindowsRuntime]
+  $null = [Windows.UI.Input.Inking.InkStrokeBuilder, Windows.UI.Input.Inking, ContentType = WindowsRuntime]
+  $null = [Windows.UI.Input.Inking.InkPoint, Windows.UI.Input.Inking, ContentType = WindowsRuntime]
+} catch { Done @{ ok = $false; code = 'unsupported'; error = $_.Exception.Message }; exit 0 }
+try {
+  $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation` + '`' + String.raw`1' } | Select-Object -First 1
+  function Await($op, [Type]$type) {
+    $task = $asTask.MakeGenericMethod($type).Invoke($null, @($op))
+    if (-not $task.Wait(30000)) { throw 'timeout' }
+    $task.Result
+  }
+  $req = [IO.File]::ReadAllText($In, [Text.Encoding]::UTF8) | ConvertFrom-Json
+  $rc = New-Object Windows.UI.Input.Inking.InkRecognizerContainer
+  $all = @($rc.GetRecognizers())
+  $names = @($all | ForEach-Object { $_.Name })
+  $pick = $null
+  foreach ($m in @($req.match)) {
+    foreach ($r in $all) { if ($r.Name -like ('*' + $m + '*')) { $pick = $r; break } }
+    if ($pick) { break }
+  }
+  if (-not $pick) { Done @{ ok = $false; code = 'no-recognizer'; installed = $names }; exit 0 }
+  $rc.SetDefaultRecognizer($pick)
+  $builder = New-Object Windows.UI.Input.Inking.InkStrokeBuilder
+  $identity = [System.Numerics.Matrix3x2]::Identity
+  $listType = [System.Collections.Generic.IReadOnlyList[Windows.UI.Input.Inking.InkRecognitionResult]]
+  $lines = New-Object System.Collections.Generic.List[string]
+  foreach ($line in @($req.lines)) {
+    $sc = New-Object Windows.UI.Input.Inking.InkStrokeContainer
+    foreach ($s in @($line)) {
+      $pts = New-Object 'System.Collections.Generic.List[Windows.UI.Input.Inking.InkPoint]'
+      foreach ($p in @($s)) {
+        $pt = New-Object Windows.Foundation.Point([double]$p[0], [double]$p[1])
+        $pts.Add((New-Object Windows.UI.Input.Inking.InkPoint($pt, [single]0.5)))
+      }
+      if ($pts.Count -eq 1) { $pts.Add((New-Object Windows.UI.Input.Inking.InkPoint((New-Object Windows.Foundation.Point(([double]$s[0][0] + 1), [double]$s[0][1])), [single]0.5))) }
+      $sc.AddStroke($builder.CreateStrokeFromInkPoints($pts, $identity))
+    }
+    $res = Await ($rc.RecognizeAsync($sc, [Windows.UI.Input.Inking.InkRecognitionTarget]::All)) $listType
+    $words = New-Object System.Collections.Generic.List[string]
+    # The candidates come back as a read-only list, which PowerShell cannot index: [0] on it hands back the
+    # WHOLE list, and adding that as text joins every guess with spaces ("ov on our ou or"). Walking it and
+    # stopping at the first gives the best guess alone.
+    foreach ($r in $res) { foreach ($cand in $r.GetTextCandidates()) { $words.Add([string]$cand); break } }
+    $lines.Add(($words -join ' '))
+  }
+  Done @{ ok = $true; recognizer = $pick.Name; lines = $lines.ToArray() }
+} catch {
+  Done @{ ok = $false; code = 'failed'; error = $_.Exception.Message }
+}
+`;
+module.exports.INK_SCRIPT = INK_SCRIPT;
+
+async function readHandwriting(request, { platform = process.platform, run = spawn, timeoutMs = 45000 } = {}) {
+  if (platform !== 'win32') return { ok: false, code: 'unsupported', error: 'Handwriting is read on Windows only' };
+  const lines = Array.isArray(request && request.lines) ? request.lines : [];
+  if (!lines.length) return { ok: false, code: 'failed', error: 'No ink' };
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'gazboard-ink-'));
+  const script = path.join(dir, 'read.ps1'), input = path.join(dir, 'in.json'), output = path.join(dir, 'out.json');
+  try {
+    // the BOM tells Windows PowerShell 5 the script is UTF-8
+    await fsp.writeFile(script, '﻿' + INK_SCRIPT, 'utf8');
+    await fsp.writeFile(input, JSON.stringify({ match: [].concat(request.match || ['English']).map(String), lines }), 'utf8');
+    const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, '-In', input, '-Out', output];
+    const exit = await new Promise((resolve) => {
+      let child;
+      try { child = run('powershell.exe', args, { windowsHide: true }); } catch (e) { resolve({ error: e.message }); return; }
+      let err = '';
+      const timer = setTimeout(() => { try { child.kill(); } catch {} resolve({ timeout: true }); }, timeoutMs);
+      child.stderr?.on('data', (d) => { err += d.toString(); });
+      child.on('error', (e) => { clearTimeout(timer); resolve({ error: e.message }); });
+      child.on('close', (c) => { clearTimeout(timer); resolve({ code: c, err }); });
+    });
+    if (exit.timeout) return { ok: false, code: 'timeout', error: 'Reading the handwriting took too long' };
+    let answer = null;
+    try { answer = JSON.parse((await fsp.readFile(output, 'utf8')).replace(/^﻿/, '')); } catch {}
+    if (!answer) return { ok: false, code: 'failed', error: (exit.err || exit.error || 'no answer from Windows').trim().slice(0, 300) };
+    if (answer.ok && !Array.isArray(answer.lines)) answer.lines = answer.lines == null ? [] : [answer.lines];
+    return answer;
+  } finally {
+    fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+module.exports.readHandwriting = readHandwriting;
+
 // Smoke runs use a throwaway profile so tests never see (or clobber) real boards.
 // GAZBOARD_USER_DATA points the whole profile somewhere else and is kept between
 // runs - the restart tests need two launches to share one profile, and it doubles
@@ -1639,6 +1746,12 @@ function ipc() {
       console.warn('[export] PDF failed:', e.message);
       return { ok: false, error: e.message };
     }
+  });
+
+  // "Convert to text": the ink is read by Windows' own handwriting recognizer (see readHandwriting)
+  ipcMain.handle('ink:recognize', async (_e, request) => {
+    try { return await readHandwriting(request || {}); }
+    catch (e) { return { ok: false, code: 'failed', error: e.message }; }
   });
 
   ipcMain.handle('import:toPdf', async (_e, filePath, opts = {}) => {

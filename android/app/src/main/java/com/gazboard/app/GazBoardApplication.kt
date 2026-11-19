@@ -15,6 +15,7 @@ class GazBoardApplication : Application() {
   val storage by lazy { BoardStorage(this).also { it.listener = mirror } }
   val files by lazy { BridgeFiles(this) }
   val identity by lazy { DeviceIdentity(this) }
+  val handwriting by lazy { HandwritingReader() }
   @Volatile var events: ((String, JsonElement) -> Unit)? = null
   @Volatile var visible = false
   private data class Question(val message: JsonObject, val answer: CompletableFuture<String?>)

@@ -9,6 +9,7 @@ import { setBoardDirectory, setCurrentBoard, lookupBoard, onDirectoryChange, ref
 import { exportBoards } from './board-export.js';
 import { backupAllBoards, restoreBackup } from './backup.js';
 import { openReplay, closeReplay } from './replay.js';
+import { convertInkToText } from './handwriting.js';
 import { openBoardPicker } from './ui/boardpicker.js';
 import { scaleObject, translateObject } from './core/transform.js';
 import { Surface } from './core/surface.js';
@@ -116,6 +117,8 @@ export const DEFAULT_SETTINGS = {
   nibOnTouch: false,
   // Draw our own nib under a hovering pen too, so screen recordings show where the pen is.
   recordPointer: false,
+  // the language handwriting is read in when converted to text; 'auto' follows the app's own language
+  handwritingLang: 'auto',
   // Holding the pen still opens the menu (on bare board) or picks up what is
   // under it. Off: a pen only ever writes - for anyone who fills in small
   // shapes, or uses the pen's side button for menus. A finger keeps the hold.
@@ -2553,6 +2556,7 @@ class App {
       case 'export.pngSelection': exportPng(this, { scale: 2, selectionOnly: true }); break;
       case 'edit.copyPicture': this.copyAsPicture(); break;
       case 'edit.copyText': this.copyText(); break;
+      case 'edit.inkToText': return convertInkToText(this, { uid });
       case 'export.svg': this.exportSvgWithLinks(); break;
       case 'export.pdf': this.exportPdfWithSetup(); break;
       case 'view.fitPage': this.fitToPage(this.currentPageIndex()); break;

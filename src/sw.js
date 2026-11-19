@@ -43,6 +43,7 @@ const PRECACHE_ASSETS = [
   './js/board-export.js',
   './js/gif.js',
   './js/replay.js',
+  './js/handwriting.js',
   './js/videomux.js',
   './js/insert.js',
   './locales/ar.json',

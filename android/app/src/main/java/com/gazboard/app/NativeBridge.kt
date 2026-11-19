@@ -114,6 +114,9 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
       // but the status bar, the navigation bar and the window behind the
       // WebView are Android's - they have to be told.
       "theme:set" -> activity.applyChromeTheme(str())
+      // "Convert to text": lassoed handwriting read on the phone by ML Kit (HandwritingReader)
+      "ink:recognize" -> app.handwriting.recognize(obj())
+      "ink:download" -> app.handwriting.download(obj().str("lang"))
       "boards:list" -> s.list()
       "boards:load" -> s.load(str())
       "boards:save" -> s.save(obj())
