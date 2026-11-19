@@ -110,6 +110,27 @@ test('a tagged release goes to Play as a draft on the closed test, keeping what 
   } finally { await g.close(); }
 });
 
+test('with PLAY_STATUS completed, the release takes the production track over and is sent for review', async () => {
+  const g = await fakeGoogle({
+    bundleCode: 5020001,
+    existing: [
+      { name: '5.1.4 (5010401)', versionCodes: ['5010401'], status: 'completed' },
+      { name: '5.1.5 (5010501)', versionCodes: ['5010501'], status: 'draft' }
+    ]
+  });
+  try {
+    const aab = scratchBundle();
+    const done = await upload({ key: g.key, aab, version: '5.2.0', code: 5020001, track: 'production', notes: 'n', status: 'completed', api: g.api });
+    const put = g.state.put;
+    const rel = put && put.body.releases;
+    assert.ok(put && put.track === 'production', `track written: ${JSON.stringify(put)}`);
+    assert.deepEqual(rel.map((r) => `${r.versionCodes[0]}:${r.status}`), ['5020001:completed'],
+      `releases on the track afterwards: ${JSON.stringify(rel)} (wanted only the new release, completed)`);
+    assert.equal(g.state.committed, done.edit, `committed edit ${g.state.committed}, made ${done.edit}`);
+    assert.equal(done.status, 'completed', `status reported: ${done.status}`);
+  } finally { await g.close(); }
+});
+
 test('if Play reads a different version from the bundle, nothing is committed and the edit is let go', async () => {
   const g = await fakeGoogle({ bundleCode: 4120001 });
   try {
@@ -167,8 +188,9 @@ test('the whole script, end to end, against the stand-in Google', async () => {
 test('the workflow sends the bundle only for tags, after the GitHub release, with the key from a secret', () => {
   const yml = read('.github/workflows/android-release.yml');
   const at = (s) => yml.indexOf(s);
-  const step = yml.slice(at('- name: Send the bundle to Google Play as a draft'));
-  assert.ok(at('- name: Send the bundle to Google Play as a draft') > at('- name: Publish the release'), 'the Play step must come after the GitHub release');
+  const step = yml.slice(at('- name: Send the bundle to Google Play'));
+  assert.ok(at('- name: Send the bundle to Google Play') > at('- name: Publish the release'), 'the Play step must come after the GitHub release');
+  assert.match(step, /PLAY_STATUS: \$\{\{ vars\.PLAY_STATUS \}\}/, `the step does not pass PLAY_STATUS:\n${step.slice(0, 600)}`);
   assert.match(step, /if: github\.ref_type == 'tag'/, `the Play step runs on manual runs too:\n${step.slice(0, 400)}`);
   assert.match(step, /PLAY_SERVICE_ACCOUNT_JSON: \$\{\{ secrets\.PLAY_SERVICE_ACCOUNT_JSON \}\}/, `the key is not taken from the secret:\n${step.slice(0, 600)}`);
   assert.match(step, /node scripts\/play-upload\.js "play\/\$AAB_NAME" "\$VERSION" "\$CODE"/, `the step does not run the script on the Play bundle:\n${step.slice(0, 800)}`);

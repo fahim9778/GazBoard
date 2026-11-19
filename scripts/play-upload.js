@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * Hands a release's Play bundle (.aab) to Google Play as a DRAFT.
+ * Hands a release's Play bundle (.aab) to Google Play: as a DRAFT by default, or - with the
+ * repository variable PLAY_STATUS set to "completed" - straight into Google's review, going out
+ * by itself once approved.
  *
  *   node scripts/play-upload.js <bundle.aab> <version> <versionCode>
  *
@@ -66,7 +68,7 @@ async function accessToken(key, now = Math.floor(Date.now() / 1000)) {
 }
 
 /** Upload, set the track's draft, commit. Returns what was done, for the log. */
-async function upload({ key, aab, version, code, track, notes, api = 'https://androidpublisher.googleapis.com' }) {
+async function upload({ key, aab, version, code, track, notes, status = 'draft', api = 'https://androidpublisher.googleapis.com' }) {
   const token = await accessToken(key);
   const base = `${api}/androidpublisher/v3/applications/${PACKAGE}`;
   const call = async (method, url, body, type = 'application/json') => {
@@ -87,13 +89,15 @@ async function upload({ key, aab, version, code, track, notes, api = 'https://an
     const bundle = await call('POST', `${api}/upload/androidpublisher/v3/applications/${PACKAGE}/edits/${edit.id}/bundles?uploadType=media`,
       fs.readFileSync(aab), 'application/octet-stream');
     if (String(bundle.versionCode) !== String(code)) throw new Error(`Play read version code ${bundle.versionCode} from the bundle, not ${code}`);
-    // keep the track's other releases (the one testers have now); only an older draft is replaced
     const current = await call('GET', `${base}/edits/${edit.id}/tracks/${track}`);
-    const kept = (current.releases || []).filter((r) => r.status !== 'draft');
-    const draft = { name: `${version} (${code})`, versionCodes: [String(code)], status: 'draft', releaseNotes: [{ language: 'en-US', text: notes }] };
-    await call('PUT', `${base}/edits/${edit.id}/tracks/${track}`, { track, releases: [...kept, draft] });
+    const release = { name: `${version} (${code})`, versionCodes: [String(code)], status, releaseNotes: [{ language: 'en-US', text: notes }] };
+    // draft: keep the track's other releases (the one people have now) and replace only an older draft.
+    // completed: this release takes the track over, and committing sends it straight to Google's review;
+    // once approved it goes out by itself (unless managed publishing is switched on in Play Console).
+    const kept = status === 'completed' ? [] : (current.releases || []).filter((r) => r.status !== 'draft');
+    await call('PUT', `${base}/edits/${edit.id}/tracks/${track}`, { track, releases: [...kept, release] });
     await call('POST', `${base}/edits/${edit.id}:commit`);
-    return { edit: edit.id, track, versionCode: bundle.versionCode, replacedDrafts: (current.releases || []).length - kept.length };
+    return { edit: edit.id, track, status, versionCode: bundle.versionCode, replacedDrafts: (current.releases || []).filter((r) => r.status === 'draft').length };
   } catch (e) {
     // an edit left open blocks the next one: let it go
     await call('DELETE', `${base}/edits/${edit.id}`).catch(() => {});
@@ -111,12 +115,15 @@ async function main() {
   try { key = JSON.parse(raw); } catch { throw new Error('PLAY_SERVICE_ACCOUNT_JSON is not valid JSON - paste the whole .json key file into the secret'); }
   if (!key.client_email || !key.private_key) throw new Error('PLAY_SERVICE_ACCOUNT_JSON has no client_email or private_key - is it the service account key file?');
   const track = (process.env.PLAY_TRACK || 'alpha').trim();
+  // PLAY_STATUS "completed" sends the release for review by itself; anything else leaves a draft for a person
+  const status = (process.env.PLAY_STATUS || '').trim() === 'completed' ? 'completed' : 'draft';
   const notesFile = path.join(__dirname, '..', 'release-notes', `${version}.md`);
   const notes = playNotes(fs.existsSync(notesFile) ? fs.readFileSync(notesFile, 'utf8') : '', version);
-  console.log(`Uploading ${path.basename(aab)} (version code ${code}) to the Play track "${track}" as a draft`);
+  console.log(`Uploading ${path.basename(aab)} (version code ${code}) to the Play track "${track}" ${status === 'completed' ? 'and sending it for review' : 'as a draft'}`);
   console.log(`Play notes (${notes.length} characters): ${notes}`);
-  const done = await upload({ key, aab, version, code, track, notes, api: process.env.PLAY_API_BASE || undefined });
-  console.log(`Done: version code ${done.versionCode} is waiting as a draft on "${done.track}"${done.replacedDrafts ? ` (it replaced ${done.replacedDrafts} older draft)` : ''}. Send it for review in Play Console → Publishing overview.`);
+  const done = await upload({ key, aab, version, code, track, notes, status, api: process.env.PLAY_API_BASE || undefined });
+  if (done.status === 'completed') console.log(`Done: version code ${done.versionCode} is on "${done.track}" and sent to Google for review. It goes out by itself once approved.`);
+  else console.log(`Done: version code ${done.versionCode} is waiting as a draft on "${done.track}"${done.replacedDrafts ? ` (it replaced ${done.replacedDrafts} older draft)` : ''}. Send it for review in Play Console → Publishing overview.`);
 }
 
 if (require.main === module) main().catch((e) => { console.error(`::error::Google Play upload: ${e.message}`); process.exit(1); });
