@@ -169,6 +169,10 @@ dependencies {
   implementation("androidx.webkit:webkit:1.14.0")
   // "Convert to text": handwriting read on the phone; its language pack is downloaded from Google once
   implementation("com.google.mlkit:digital-ink-recognition:18.1.0")
+  // ML Kit brings in Google Play services, which ask for a very old Fragment library. The activity's
+  // file pickers (registerForActivityResult) need 1.3.0 or newer, and lint rightly stops a release
+  // build without it, so the newer one is named here and wins.
+  implementation("androidx.fragment:fragment-ktx:1.8.5")
   androidTestImplementation("androidx.test:runner:1.6.2")
   androidTestImplementation("androidx.test:rules:1.6.1")
   androidTestImplementation("androidx.test.ext:junit:1.2.1")

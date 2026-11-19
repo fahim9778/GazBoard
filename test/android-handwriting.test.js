@@ -17,9 +17,11 @@ test('Android: the page reaches ML Kit through ink:recognize and ink:download, a
     bridgeRecognize: /"ink:recognize" -> app\.handwriting\.recognize\(obj\(\)\)/.test(bridge),
     bridgeDownload: /"ink:download" -> app\.handwriting\.download\(obj\(\)\.str\("lang"\)\)/.test(bridge),
     dependency: /com\.google\.mlkit:digital-ink-recognition:/.test(gradle),
+    // ML Kit drags in Fragment 1.0; the activity result pickers need 1.3+ (lint fails a release otherwise)
+    newFragment: /androidx\.fragment:fragment(-ktx)?:1\.([3-9]|\d\d)\./.test(gradle),
     asksBeforeDownloading: /"needs-model"/.test(reader) && /isModelDownloaded/.test(reader)
   };
-  assert.deepEqual(got, { adapterRecognize: true, adapterDownload: true, bridgeRecognize: true, bridgeDownload: true, dependency: true, asksBeforeDownloading: true },
+  assert.deepEqual(got, { adapterRecognize: true, adapterDownload: true, bridgeRecognize: true, bridgeDownload: true, dependency: true, newFragment: true, asksBeforeDownloading: true },
     JSON.stringify(got));
 });
 
