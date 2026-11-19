@@ -15,7 +15,7 @@ Everything runs locally. On top of the original feature set, it can **import Wor
 <a href="https://github.com/fahim9778/GazBoard/releases/latest"><img src="docs/badges/desktop.svg" height="80" alt="Download for Windows, Mac and Linux"></a>
 <a href="https://gazboard.fahim9778.workers.dev/"><img src="docs/badges/web.svg" height="80" alt="Try it in your browser"></a>
 <a href="https://play.google.com/store/apps/details?id=com.gazboard.app"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" height="80" alt="Get it on Google Play"></a>
-<img src="docs/badges/msstore-soon.svg" height="80" alt="Coming soon to the Microsoft Store">
+<a href="https://apps.microsoft.com/detail/9NXDZL9B284W"><img src="docs/badges/msstore.svg" height="80" alt="Download from the Microsoft Store"></a>
 
 [![Downloads](https://img.shields.io/github/downloads/fahim9778/GazBoard/total?label=downloads&color=0078d4)](https://github.com/fahim9778/GazBoard/releases)
 [![Stars](https://img.shields.io/github/stars/fahim9778/GazBoard?style=flat)](https://github.com/fahim9778/GazBoard/stargazers)
