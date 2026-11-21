@@ -83,6 +83,12 @@ test('the Play notes are the release\'s feature names, under Play\'s 500-charact
   assert.ok(none.length <= 500 && none.includes('9.9.9'), `with no notes file it still says the version: ${none}`);
 });
 
+test('feature names that end in a full stop do not leave doubled punctuation in the Play notes', () => {
+  const md = '## What\'s new\n\n**Handwriting to text.** Lasso it.\n\n**Read on your own device.** Offline.\n';
+  const notes = playNotes(md, '5.2.0');
+  assert.equal(notes, "What's new in 5.2.0: Handwriting to text, Read on your own device.", `notes: ${notes}`);
+});
+
 test('a tagged release goes to Play as a draft on the closed test, keeping what testers have now and replacing an older draft', async () => {
   const g = await fakeGoogle({
     bundleCode: 4120003,

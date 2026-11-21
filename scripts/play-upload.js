@@ -35,7 +35,8 @@ function playNotes(md, version) {
   const names = [];
   for (const line of (md || '').split(/\r?\n/)) {
     const m = line.match(/^\*\*(.+?)[:：]?\*\*/);
-    if (m) names.push(m[1].replace(/[:：]\s*$/, '').trim());
+    // "Handwriting to text." and "Handwriting to text:" both become "Handwriting to text" - the list adds its own punctuation
+    if (m) names.push(m[1].replace(/[:：.。!?]+\s*$/, '').trim());
   }
   const head = `What's new in ${version}: `;
   if (!names.length) return `GazBoard ${version}. Full notes: https://github.com/fahim9778/GazBoard/releases`;

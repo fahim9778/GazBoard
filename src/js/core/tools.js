@@ -507,6 +507,15 @@ export class Interaction {
         this.surface.invalidate();
         return;
       }
+      // the stretch handle: the left end stays put, the right end follows the pointer along the ruler
+      if (zone === 'stretch') {
+        const r = this.ruler, cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+        this.action = { type: 'rulerStretch', start: wp, len0: r.length,
+          left: { x: r.x - (cos * r.length) / 2, y: r.y - (sin * r.length) / 2 } };
+        this.actionId = e.pointerId;
+        this.surface.invalidate();
+        return;
+      }
       if (zone === 'rotate') {
         const d = Math.atan2(wp.y - this.ruler.y, wp.x - this.ruler.x) - this.ruler.angle;
         const flip = Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > Math.PI / 2;
@@ -1152,6 +1161,16 @@ export class Interaction {
         this.ruler.y = a.y0 + (wp.y - a.start.y);
         break;
       }
+      case 'rulerStretch': {
+        const r = this.ruler, cos = Math.cos(r.angle), sin = Math.sin(r.angle);
+        const pulled = (wp.x - a.start.x) * cos + (wp.y - a.start.y) * sin;
+        const min = Interaction.RULER_MIN_PX / this.surface.cam.z;
+        const len = Math.min(Interaction.RULER_MAX, Math.max(min, a.len0 + pulled));
+        r.length = len;
+        r.x = a.left.x + (cos * len) / 2;
+        r.y = a.left.y + (sin * len) / 2;
+        break;
+      }
       case 'protArm': this.aimProtArm(wp, mods.shift); break;
       case 'rulerRotate': {
         // Grabbing the far end turns it the same way round, not upside down.
@@ -1210,6 +1229,11 @@ export class Interaction {
 
     switch (a.type) {
       case 'laser': break;            // the trail fades on its own
+      // the length it was stretched to is remembered, as it looked on screen, for next time it comes out
+      case 'rulerStretch':
+        this.app.settings.rulerLengthPx = Math.round(this.ruler.length * this.surface.cam.z);
+        this.app.saveSettings?.();
+        break;
       case 'draw':
         PencilSound.stop();
         // A tap can dismiss a selection, or pick something up with a finger.
@@ -2941,6 +2965,7 @@ export class Interaction {
       // draws, and a "move" cursor over it would be the same old lie.
       if (zone === 'rotate' || zone === 'arm') cursor = 'grab';
       else if (zone === 'menu' || zone === 'close') cursor = 'pointer';
+      else if (zone === 'stretch') cursor = 'ew-resize';
       else if (zone === 'move') cursor = 'move';
       else if (zone === 'body' && (deviceType === 'touch' || t === 'select' || t === 'pan')) cursor = 'move';
     }
@@ -3213,6 +3238,27 @@ export class Interaction {
    */
   static ROTATE_KNOB = { inset: 14, r: 9 };
 
+  /*
+   * The stretch handle: a white dot with a two-way arrow, near the RIGHT end only,
+   * just inside the turning knob - the mirror of the ⋯ button at the left end.
+   * Dragging it along the ruler makes the ruler longer or shorter; the left end
+   * stays exactly where it is. The blue knobs at both ends still only turn it.
+   * (Issue #50: on a classroom smart board the ruler ran out halfway across.)
+   * Straight ruler only: a set square or protractor has to keep its shape.
+   */
+  static stretchAt(coarse) { return coarse ? 52 : 44; }
+  /*
+   * How far from the handle's centre a press still takes hold of it - wider than the dot that is
+   * drawn, on purpose. The class timer's resize corner was once a target so small that a pen or
+   * finger slid off it and the drag stopped short; a handle you have to hunt for is a handle that
+   * does not work. Once it is held, it stays held however far or fast the pointer goes, until it lifts.
+   */
+  static stretchReach(coarse) { return coarse ? 30 : 22; }
+  /** Shortest the ruler can be squeezed to, on screen: room for every control on it with none overlapping. */
+  static RULER_MIN_PX = 300;
+  /** Longest it can be stretched to, in board units: long, but never a runaway number. */
+  static RULER_MAX = 20000;
+
   /** Finger-sized targets on a touchscreen, mouse-sized under a mouse. */
   get coarsePointer() {
     return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -3327,10 +3373,14 @@ export class Interaction {
      */
     const kb = Interaction.ROTATE_KNOB;
     const reach = this.coarsePointer ? 24 : 15;
+    // the stretch handle sits close to the right-hand knob: a press between the two goes to the nearer one
+    const dStretch = Math.hypot(along - (len / 2 - Interaction.stretchAt(this.coarsePointer)), perp - thick / 2);
     for (const end of [1, -1]) {
       const kx = end * (len / 2 - kb.inset);
-      if (Math.hypot(along - kx, perp - thick / 2) < reach) return 'rotate';
+      const d = Math.hypot(along - kx, perp - thick / 2);
+      if (d < reach && !(end === 1 && dStretch < d)) return 'rotate';
     }
+    if (dStretch < Interaction.stretchReach(this.coarsePointer)) return 'stretch';
     // the little settings button (shape, which way 0° points, how see-through) and the ✕ beside it
     const mx = -len / 2 + Interaction.MENU_AT, cx = mx + Interaction.closeGap(this.coarsePointer);
     const btn = this.menuOrClose(Math.hypot(along - mx, perp - thick / 2), Math.hypot(along - cx, perp - thick / 2), reach);
@@ -3942,16 +3992,39 @@ export class Interaction {
     ctx.textAlign = 'center';
     const stepWorld = 10;
     const stepPx = stepWorld * z;
+    this.rulerTicks = null;
     if (stepPx > 3) {
       const n = Math.floor(len / 2 / stepPx);
-      for (let i = -n; i <= n; i++) {
+      /*
+       * Marks all the way along, however far it was stretched - but only the ones on the
+       * screen are drawn. A ruler stretched across a whole smart board, zoomed in, has
+       * thousands of marks, and drawing them all every frame would cost the pen its
+       * smoothness for marks nobody can see. Where the screen's corners land along the
+       * ruler gives the range to draw, plus one mark either side.
+       */
+      let lo = -n, hi = n;
+      const W = this.surface.width, H = this.surface.height;
+      if (W > 0 && H > 0) {
+        const ca = Math.cos(angle), sa = Math.sin(angle);
+        const al = [[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => (x - c.x) * ca + (y - c.y) * sa);
+        lo = Math.max(-n, Math.floor(Math.min(...al) / stepPx) - 1);
+        hi = Math.min(n, Math.ceil(Math.max(...al) / stepPx) + 1);
+      }
+      this.rulerTicks = { lo, hi, n, stepPx };
+      const cg = this.coarsePointer, kbi = Interaction.ROTATE_KNOB.inset;
+      const busy = [-len / 2 + kbi, -len / 2 + Interaction.MENU_AT, -len / 2 + Interaction.MENU_AT + Interaction.closeGap(cg),
+        len / 2 - Interaction.stretchAt(cg), len / 2 - kbi];
+      const crowded = thick / 2 - (cg ? 15 : 12) < 26;   // the top of a button reaches the numbers' line
+      for (let i = lo; i <= hi; i++) {
         const x = i * stepPx;
         const major = i % 10 === 0, mid = i % 5 === 0;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, major ? 13 : mid ? 9 : 5);
         ctx.stroke();
-        if (major && stepPx > 6) ctx.fillText(String(Math.abs(i * stepWorld)), x, 24);
+        // zoomed out, the ruler gets thinner and its buttons climb up into the numbers: a number
+        // that would sit under a button or a knob is then left off (the mark itself stays)
+        if (major && stepPx > 6 && !(crowded && busy.some((b) => Math.abs(x - b) < 20))) ctx.fillText(String(Math.abs(i * stepWorld)), x, 24);
       }
     }
     // The angle sits in the middle, where the eye already is when lining the
@@ -3975,6 +4048,7 @@ export class Interaction {
       ctx.lineWidth = 1.6;
       ctx.stroke();
     }
+    drawStretchHandle(ctx, len / 2 - Interaction.stretchAt(this.coarsePointer), thick / 2, kr + 2);
 
     // The move grip. Three lines, the way every drag handle has looked for
     // thirty years, so nobody has to be told what it is.
@@ -4158,6 +4232,27 @@ export class Interaction {
 }
 
 function drawGhostShape(ctx, o) { drawShape(ctx, o); }
+
+/** The ruler's stretch handle: a white dot ringed in blue with a two-way arrow, so it never reads as one of the solid blue turning knobs. */
+function drawStretchHandle(ctx, x, y, r) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = '#0078d4';
+  ctx.lineWidth = 1.6;
+  ctx.stroke();
+  const w = r * 0.62, hd = r * 0.32;
+  ctx.beginPath();
+  ctx.moveTo(x - w, y); ctx.lineTo(x + w, y);
+  ctx.moveTo(x - w + hd, y - hd); ctx.lineTo(x - w, y); ctx.lineTo(x - w + hd, y + hd);
+  ctx.moveTo(x + w - hd, y - hd); ctx.lineTo(x + w, y); ctx.lineTo(x + w - hd, y + hd);
+  ctx.lineWidth = 1.5;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.restore();
+}
 
 /** How solid the ruler's plastic is: 0.3 (mostly see-through) to 1, from Settings; 0.92 as it always was. */
 function rulerOpacity(settings) {

@@ -5217,6 +5217,160 @@ async function run(win, app) {
     knob.leftDeg === 315, `${knob.leftDeg}°`);
 
   /*
+   * Stretching it (issue #50).
+   *
+   * On a classroom smart board the ruler ran out halfway across. A white dot
+   * with a two-way arrow near the right end now stretches it along its own
+   * length: the left end stays where it was, the angle never changes, and the
+   * blue knobs at both ends still only turn it. Squeezing it stops at a length
+   * that keeps every control on it apart. The length is remembered (as it
+   * looked on screen), and the set squares keep the size they always had.
+   */
+  const stretch = await js(`
+    const a = window.app, it = a.interaction, sf = a.surface;
+    const had = new Set(a.store.objects.map((o) => o.id));
+    const camWas = { x: sf.cam.x, y: sf.cam.y, z: sf.cam.z };
+    const pxWas = a.settings.rulerLengthPx, kindWas = a.settings.rulerKind;
+    sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+    a.ruler.visible = true; a.ruler.kind = 'ruler';
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0; a.ruler.length = 1200;
+    const TH = a.ruler.thickness, INSET = 14;
+    const SA = it.constructor.stretchAt(it.coarsePointer);
+    a.setTool('pen');
+    it.action = null; it.actionId = null; it.pointers.clear();
+    const rect = sf.canvas.getBoundingClientRect();
+    const at = (x, y) => { const p = sf.cam.toScreen(x, y);
+      return { x: rect.left + p.x, y: rect.top + p.y }; };
+    const mk = (p, buttons, type) => ({ pointerId: 1, pointerType: type || 'pen', button: 0, buttons,
+      clientX: p.x, clientY: p.y, shiftKey: false, altKey: false, pressure: 0.5 });
+    const zoneAt = (x, y) => it.rulerZone(sf.cam.toScreen(x, y));
+    const leftEnd = () => ({ x: Math.round(a.ruler.x - Math.cos(a.ruler.angle) * a.ruler.length / 2),
+      y: Math.round(a.ruler.y - Math.sin(a.ruler.angle) * a.ruler.length / 2) });
+    const drag = (fx, fy, tx, ty, type) => {
+      it.action = null; it.actionId = null; it.pointers.clear();
+      it.onDown(mk(at(fx, fy), 1, type));
+      for (let i = 1; i <= 12; i++) it.onMove(mk(at(fx + (tx - fx) * i / 12, fy + (ty - fy) * i / 12), 1, type));
+      it.onUp(mk(at(tx, ty), 0, type));
+    };
+    const out = {};
+    out.zones = { stretch: zoneAt(600 - SA, TH / 2), rightKnob: zoneAt(600 - INSET, TH / 2),
+      leftKnob: zoneAt(-600 + INSET, TH / 2), middle: zoneAt(0, TH / 2) };
+
+    // pull the handle 400 to the right: 1600 long, left end still at -600
+    drag(600 - SA, TH / 2, 1000 - SA, TH / 2 + 30);
+    out.longer = { len: Math.round(a.ruler.length), left: leftEnd(), angle: a.ruler.angle, saved: a.settings.rulerLengthPx };
+
+    // tilted 30°: the handle is pulled along the tilt, the angle and left end hold
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.length = 1200; a.ruler.angle = Math.PI / 6;
+    const c = Math.cos(a.ruler.angle), s2 = Math.sin(a.ruler.angle);
+    const hx = (600 - SA) * c - (TH / 2) * s2, hy = (600 - SA) * s2 + (TH / 2) * c;
+    const leftBefore = leftEnd();
+    out.tiltZone = it.rulerZone(sf.cam.toScreen(hx, hy));
+    drag(hx, hy, hx + 300 * c, hy + 300 * s2);
+    out.tilt = { len: Math.round(a.ruler.length), left: leftEnd(), leftBefore, deg: Math.round(a.ruler.angle * 180 / Math.PI) };
+
+    // a generous target: a press off the dot by a fingertip's slip still takes hold, and a pen
+    // that races off the handle and right off the ruler in one jump still pulls it the full way
+    const RE = it.constructor.stretchReach(it.coarsePointer);
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.length = 1200; a.ruler.angle = 0;
+    out.slip = { below: zoneAt(600 - SA, TH / 2 + RE - 3), above: zoneAt(600 - SA, TH / 2 - (RE - 3)),
+      inward: zoneAt(600 - SA - (RE - 3), TH / 2), reach: RE };
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.length = 1200; a.ruler.angle = 0;
+    it.action = null; it.actionId = null; it.pointers.clear();
+    it.onDown(mk(at(600 - SA, TH / 2 + RE - 3), 1));
+    it.onMove(mk(at(2600 - SA, 700), 1));
+    it.onUp(mk(at(2600 - SA, 700), 0));
+    out.oneJump = Math.round(a.ruler.length);
+    // the marks run the whole stretched length: draw it with its right end on screen, then its left
+    const marks = (camX) => {
+      sf.cam.x = camX; it.drawRuler(document.createElement('canvas').getContext('2d'));
+      const tk = it.rulerTicks, left = a.ruler.x - a.ruler.length / 2, right = a.ruler.x + a.ruler.length / 2;
+      const scrL = sf.cam.toWorld(0, 0).x, scrR = sf.cam.toWorld(sf.width, 0).x;
+      return { lo: tk && Math.round(a.ruler.x + tk.lo * 10), hi: tk && Math.round(a.ruler.x + tk.hi * 10),
+        want: { lo: Math.round(Math.max(left, scrL)), hi: Math.round(Math.min(right, scrR)) }, n: tk && tk.n };
+    };
+    out.marksRight = marks(sf.width - 2700);
+    out.marksLeft = marks(700);
+    sf.cam.x = 0;
+
+    // squeezed far past its shortest: stops at 300 on screen
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.length = 1200; a.ruler.angle = 0;
+    a.ruler.x = 0; a.ruler.y = 0; a.ruler.length = 1200; a.ruler.angle = 0;
+    drag(600 - SA, TH / 2, -2000, TH / 2);
+    out.shortest = Math.round(a.ruler.length);
+
+    // a finger on the handle stretches too, and nothing anywhere was drawn on the board
+    a.ruler.length = 1200; a.ruler.x = 0;
+    drag(600 - SA, TH / 2, 800 - SA, TH / 2, 'touch');
+    out.touchLen = Math.round(a.ruler.length);
+    out.leftBehind = a.store.objects.filter((o) => !had.has(o.id)).length;
+
+    // the knobs still turn it after all that, and the grip still moves it
+    a.ruler.length = 1200; a.ruler.x = 0; a.ruler.y = 0; a.ruler.angle = 0;
+    drag(600 - INSET, TH / 2, 600, 600);
+    out.knobDeg = Math.round(a.ruler.angle * 180 / Math.PI);
+    out.knobLen = Math.round(a.ruler.length);
+    a.ruler.angle = 0;
+    drag(0, TH / 2, 0, TH / 2 + 90);
+    out.moved = { y: Math.round(a.ruler.y), len: Math.round(a.ruler.length) };
+
+    // remembered: put it away and take it out again at a different zoom - same length on screen
+    a.settings.rulerLengthPx = 1700; a.settings.rulerKind = 'ruler';
+    a.ruler.visible = false; sf.cam.z = 2;
+    a.toggleRuler();
+    out.remembered = Math.round(a.ruler.length * sf.cam.z);
+    a.ruler.visible = false;
+
+    // the set squares keep their size however long the straight ruler was
+    sf.cam.z = 1;
+    a.ruler.kind = 'set45'; a.ruler.length = 1200; a.fitTriangle(); const triNormal = Math.round(a.ruler.triBase);
+    a.ruler.length = 9000; a.fitTriangle(); const triAfter = Math.round(a.ruler.triBase);
+    out.tri = { triNormal, triAfter };
+
+    if (pxWas === undefined) delete a.settings.rulerLengthPx; else a.settings.rulerLengthPx = pxWas;
+    if (kindWas === undefined) delete a.settings.rulerKind; else a.settings.rulerKind = kindWas;
+    a.ruler.visible = false; a.ruler.kind = 'ruler'; a.ruler.angle = 0; a.ruler.length = 1200; a.ruler.x = 0; a.ruler.y = 0;
+    sf.cam.x = camWas.x; sf.cam.y = camWas.y; sf.cam.z = camWas.z;
+    it.action = null; it.actionId = null; it.pointers.clear();
+    return out;
+  `);
+  check('the stretch handle answers where it is drawn, and the knobs, grip and ends are unchanged',
+    stretch.zones.stretch === 'stretch' && stretch.zones.rightKnob === 'rotate'
+      && stretch.zones.leftKnob === 'rotate' && stretch.zones.middle === 'move',
+    JSON.stringify(stretch.zones));
+  check('pulling the handle stretches the ruler, the left end stays put and it does not turn',
+    stretch.longer.len === 1600 && stretch.longer.left.x === -600 && stretch.longer.left.y === 0 && stretch.longer.angle === 0,
+    JSON.stringify(stretch.longer));
+  check('the stretched length is remembered for next time',
+    stretch.longer.saved === 1600, `saved ${stretch.longer.saved}`);
+  check('on a tilted ruler it stretches along the tilt, keeping the angle and the left end',
+    stretch.tiltZone === 'stretch' && stretch.tilt.len === 1500 && stretch.tilt.deg === 30
+      && Math.abs(stretch.tilt.left.x - stretch.tilt.leftBefore.x) <= 1 && Math.abs(stretch.tilt.left.y - stretch.tilt.leftBefore.y) <= 1,
+    `zone ${stretch.tiltZone}, ${JSON.stringify(stretch.tilt)}`);
+  check('the handle takes hold from a little off the dot, on every side',
+    stretch.slip.below === 'stretch' && stretch.slip.above === 'stretch' && stretch.slip.inward === 'stretch',
+    JSON.stringify(stretch.slip));
+  check('once held it stretches the full way, even when the pointer races off the handle in one jump',
+    stretch.oneJump === 3200, `length ${stretch.oneJump} (wanted 3200)`);
+  const covers = (m) => m.lo != null && m.lo <= m.want.lo + 10 && m.hi >= m.want.hi - 10;
+  check('a stretched ruler has its marks all the way along, wherever it is looked at',
+    covers(stretch.marksRight) && covers(stretch.marksLeft) && stretch.marksRight.n === 160,
+    `right end in view: marks ${stretch.marksRight.lo}..${stretch.marksRight.hi} for ${JSON.stringify(stretch.marksRight.want)}; left end in view: ${stretch.marksLeft.lo}..${stretch.marksLeft.hi} for ${JSON.stringify(stretch.marksLeft.want)}; ${stretch.marksRight.n} marks each side of the middle (wanted 160)`);
+  check('squeezing stops at a length that keeps its controls apart',
+    stretch.shortest === 300, `length ${stretch.shortest}`);
+  check('a finger on the handle stretches it too',
+    stretch.touchLen === 1400, `length ${stretch.touchLen}`);
+  check('stretching leaves nothing drawn on the board',
+    stretch.leftBehind === 0, `${stretch.leftBehind} stray object(s)`);
+  check('after stretching, the knob still only turns it and the grip still only moves it',
+    stretch.knobDeg === 45 && stretch.knobLen === 1200 && stretch.moved.y === 90 && stretch.moved.len === 1200,
+    `knob ${stretch.knobDeg}° len ${stretch.knobLen}, grip ${JSON.stringify(stretch.moved)}`);
+  check('a remembered length comes back the same size on screen at another zoom',
+    stretch.remembered === 1700, `${stretch.remembered}px on screen`);
+  check('the set squares keep their size however long the ruler was stretched',
+    stretch.tri.triNormal === stretch.tri.triAfter, JSON.stringify(stretch.tri));
+
+  /*
    * Nothing is drawn UNDER the plastic.
    *
    * A stroke that crosses the ruler is deliberately not held to an edge - you

@@ -2665,7 +2665,7 @@ class App {
     }
     if (r.kind !== 'set45' && r.kind !== 'set60') return;
     const tall = r.kind === 'set60' ? Math.tan(Math.PI / 6) : 1;
-    r.triBase = Math.max(120 / this.surface.cam.z, Math.min(r.length * 0.55, (v.h * 0.6) / tall, v.w * 0.6));
+    r.triBase = Math.max(120 / this.surface.cam.z, Math.min(Math.min(r.length, 1200, v.w * 0.7) * 0.55, (v.h * 0.6) / tall, v.w * 0.6));
     // hang it from a little above the middle, so the whole triangle is in view
     if (r.y + r.triBase * tall > v.y + v.h * 0.92) r.y = Math.max(v.y + v.h * 0.12, v.y + v.h * 0.92 - r.triBase * tall);
   }
@@ -2685,6 +2685,9 @@ class App {
       r.x = v.x + v.w / 2;
       r.y = v.y + v.h / 2;
       r.length = Math.min(1200, v.w * 0.7);
+      // a ruler that was stretched comes back at the length it was left at (as it looked on screen)
+      const px = Number(this.settings.rulerLengthPx);
+      if (Number.isFinite(px) && px >= 300) r.length = Math.min(20000, px / this.surface.cam.z);
       r.thickness = 78 / this.surface.cam.z;
       this.fitTriangle();
       const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
