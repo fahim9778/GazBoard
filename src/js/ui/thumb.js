@@ -22,7 +22,12 @@ import { boundsOf } from '../core/store.js';
 // picture is made from the first slice; at this size nobody can tell.
 const MAX_OBJECTS = 3000;
 
-function paint(objects, w, h, onload, { bg = '#ffffff', dpr = 2, type } = {}) {
+/*
+ * Everything a picture needs before the first object is drawn: the canvas, the
+ * paper, the objects that go in it, and where they sit. Shared by paint() and
+ * paintGently(), so both make exactly the same picture.
+ */
+function prepare(objects, w, h, { bg = '#ffffff', dpr = 2, type } = {}) {
   const c = document.createElement('canvas');
   c.width = w * dpr; c.height = h * dpr;
   const ctx = c.getContext('2d');
@@ -33,7 +38,7 @@ function paint(objects, w, h, onload, { bg = '#ffffff', dpr = 2, type } = {}) {
   const list = (Array.isArray(objects) ? objects : [])
     .filter((o) => o && !o.hidden)
     .slice(0, MAX_OBJECTS);
-  if (!list.length) return out();
+  if (!list.length) return { out, list: [] };
 
   let box = null;
   for (const o of list) {
@@ -46,7 +51,7 @@ function paint(objects, w, h, onload, { bg = '#ffffff', dpr = 2, type } = {}) {
       h: Math.max(box.y + box.h, b.y + b.h) - Math.min(box.y, b.y)
     } : { ...b };
   }
-  if (!box || box.w <= 0 || box.h <= 0) return out();
+  if (!box || box.w <= 0 || box.h <= 0) return { out, list: [] };
 
   const pad = 8 * dpr;
   // Capped at 1: a single small scribble is shown at the size it was drawn,
@@ -54,9 +59,16 @@ function paint(objects, w, h, onload, { bg = '#ffffff', dpr = 2, type } = {}) {
   // about it - rather than magnified until it fills the frame and looks like
   // a finished piece of work.
   const s = Math.min(1, (c.width - pad * 2) / box.w, (c.height - pad * 2) / box.h);
-  ctx.setTransform(s, 0, 0, s,
+  const place = () => ctx.setTransform(s, 0, 0, s,
     (c.width - box.w * s) / 2 - box.x * s,
     (c.height - box.h * s) / 2 - box.y * s);
+  return { out, list, ctx, place };
+}
+
+function paint(objects, w, h, onload, opts) {
+  const { out, list, ctx, place } = prepare(objects, w, h, opts);
+  if (!list.length) return out();
+  place();
   for (const o of list) {
     try { drawObject(ctx, o, onload); } catch { /* one bad object is not a broken dialog */ }
   }
@@ -107,4 +119,53 @@ export function boardPicture(objects, background, w = 240, h = 150) {
     return paint(objects, w, h, () => {}, { bg: background && background.color, dpr: 1.5, type: 'image/webp' });
   } catch { return null; }
   finally { setDarkBoard(was); }
+}
+
+/**
+ * The same picture as boardPicture(), drawn a few objects at a time.
+ *
+ * The autosave asks for it while somebody may be writing. Drawing a busy board
+ * in one go holds the page for tens of milliseconds, and a pen put down in that
+ * moment feels it. Here the drawing stops every few milliseconds and lets
+ * anything waiting - the pen above all - go first.
+ *
+ * The board's paper colour is a setting every drawing reads (setDarkBoard), and
+ * the screen draws in between these pieces, so it is switched to "paper" only
+ * for each piece and put straight back: the screen never sees it changed.
+ *
+ * @param {() => Promise<void>} pause  how to step aside between pieces
+ * @param {number} sliceMs  how long one piece may take
+ * @returns {Promise<string|null>}
+ */
+export async function boardPictureGently(objects, background, pause, sliceMs = 6, w = 240, h = 150) {
+  const opts = { bg: background && background.color, dpr: 1.5, type: 'image/webp' };
+  const was = isDarkBoard();
+  try {
+    setDarkBoard(false);
+    let job;
+    try { job = prepare(objects, w, h, opts); } finally { setDarkBoard(was); }
+    const { out, list, ctx, place } = job;
+    if (!list.length) return out();
+    let i = 0;
+    while (i < list.length) {
+      const t0 = performance.now();
+      const dark = isDarkBoard();
+      setDarkBoard(false);
+      try {
+        place();
+        do {
+          // a canvas only collects the drawing and does the real work later, all at once, when the
+          // picture is read out; reading one pixel after every few objects makes it do that work
+          // here, in this piece, where it is counted
+          const end = Math.min(list.length, i + 40);
+          for (; i < end; i++) {
+            try { drawObject(ctx, list[i], () => {}); } catch { /* one bad object is not a lost picture */ }
+          }
+          try { ctx.getImageData(0, 0, 1, 1); } catch { /* the picture still comes out, just in one go */ }
+        } while (i < list.length && performance.now() - t0 < sliceMs);
+      } finally { setDarkBoard(dark); }
+      if (i < list.length) await pause();
+    }
+    return out();
+  } catch { return null; }
 }

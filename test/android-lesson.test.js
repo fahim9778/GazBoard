@@ -34,14 +34,15 @@ test('the page gets the microphone only: only for GazBoard itself, and only afte
     JSON.stringify(got));
 });
 
-test('the recorder is offered on Android, sized for a phone, and pauses itself when the app is left', () => {
+test('the recorder is offered on Android, sized for a phone (half-hour parts), and pauses itself when the app is left', () => {
   const lesson = read('src/js/lesson.js');
   const avail = lesson.slice(lesson.indexOf('export function lessonAvailable'), lesson.indexOf('export function lessonBitrate'));
   const got = {
     notHiddenOnAndroid: !/platform === 'android'\) return false/.test(avail),
     stillNeedsEncoder: /typeof VideoEncoder === 'function'/.test(avail) && /getUserMedia/.test(avail),
     phoneSizes: /onAndroid\(\) \? \[1920, 1280\]/.test(lesson),
-    halfHour: /PHONE_MAX_MS = 30 \* 60 \* 1000/.test(lesson) && /at >= lessonMaxMs\(\)/.test(lesson),
+    halfHour: /PHONE_PART_MS = 30 \* 60 \* 1000/.test(lesson) && /onAndroid\(\) \? PHONE_PART_MS : LESSON_PART_MS/.test(lesson)
+      && /at >= \(this\.limitMs \|\| lessonMaxMs\(\)\)/.test(lesson),
     fitsTheBridge: /PHONE_FILE_MAX = 1000 \* 1024 \* 1024/.test(lesson),
     pausesWhenHidden: /visibilitychange/.test(lesson) && /document\.hidden && onAndroid\(\) && this\.state === 'recording'\) this\.pause\(\)/.test(lesson),
     listenerRemoved: /removeEventListener\('visibilitychange', this\.onHide\)/.test(lesson)

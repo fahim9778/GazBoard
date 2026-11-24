@@ -383,6 +383,28 @@ function decodeDataUrl(url) {
   } catch { return null; }
 }
 
+/**
+ * writeAtomic() for a board handed over in pieces (boards:savePart / boards:saveParts). The pieces
+ * are written one after another into the same temporary file, so they are never joined into one
+ * big string here: the main process stays free to pass the pen's events on to the page.
+ */
+async function writeAtomicParts(file, parts) {
+  const tmp = file + '.' + process.pid + '.tmp';
+  const writeAll = async (target) => {
+    const fh = await fsp.open(target, 'w');
+    try { for (const p of parts) await fh.writeFile(p); }
+    finally { await fh.close(); }
+  };
+  await writeAll(tmp);
+  try {
+    await fsp.rename(tmp, file);
+  } catch (e) {
+    // rename across a lock (Windows AV, a synced folder) - fall back to a plain write
+    await writeAll(file);
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+  }
+}
+
 async function writeAtomic(file, text) {
   const tmp = file + '.' + process.pid + '.tmp';
   await fsp.writeFile(tmp, text);
@@ -1504,8 +1526,28 @@ function ipc() {
       return StorageLocation.isBoardFile(raw) ? raw : null;
     } catch { return null; }
   });
-  ipcMain.handle('boards:save', async (_e, payload) => withStorageWrite(async () => {
+  /*
+   * Writing a board out. The renderer sends { id, json } (boards:save), or - for a big board saved
+   * while somebody is drawing - the same text in pieces (boards:savePart, then boards:saveParts),
+   * so handing it over never holds up the pen. Either way the file written is the same.
+   */
+  async function saveBoardFile(id, write, moveLast) {
     await ensureDataDir();
+    // a board's id is its file name: one that could reach outside the boards folder is never written
+    if (!safeBoardId(id)) return false;
+    // the board and the "last open" pointer are two separate files; there is no
+    // ordering between them, so they go out together rather than one after the
+    // other
+    const dir = dataDir();
+    // what the index knew about this board is out of date the moment it is written
+    if (boardIndexes.has(dir)) delete boardIndexes.get(dir)[id + '.json'];
+    await Promise.all([
+      write(path.join(dir, id + '.json')),
+      moveLast ? setLastBoard(id, dir) : Promise.resolve()
+    ]);
+    return true;
+  }
+  ipcMain.handle('boards:save', async (_e, payload) => withStorageWrite(async () => {
     // The renderer sends { id, json }. An older shape - the board object itself -
     // is still accepted so nothing breaks if the two sides are ever out of step.
     const board = (payload && typeof payload.json === 'string')
@@ -1521,21 +1563,39 @@ function ipc() {
      * accepting a student's doodle in the background would quietly replace
      * what the teacher was working on.
      */
-    // a board's id is its file name: one that could reach outside the boards folder is never written
-    if (!safeBoardId(board.id)) return false;
     const moveLast = !(payload && payload.setLast === false);
-    // the board and the "last open" pointer are two separate files; there is no
-    // ordering between them, so they go out together rather than one after the
-    // other
-    const dir = dataDir();
-    // what the index knew about this board is out of date the moment it is written
-    if (boardIndexes.has(dir)) delete boardIndexes.get(dir)[board.id + '.json'];
-    await Promise.all([
-      writeAtomic(path.join(dir, board.id + '.json'), board.json),
-      moveLast ? setLastBoard(board.id, dir) : Promise.resolve()
-    ]);
-    return true;
+    return saveBoardFile(board.id, (file) => writeAtomic(file, board.json), moveLast);
   }));
+  /*
+   * The pieces of a board on their way in. Kept only until the last one arrives, and thrown away if
+   * the rest never come (the page was closed half way): nothing is written until the board is whole,
+   * so a save cut short leaves the board file exactly as it was.
+   */
+  const partSaves = new Map();   // token -> { parts, chars, at }
+  const PART_LIMIT = 1 << 29;    // characters; a board bigger than this goes the ordinary way
+  const dropStaleParts = () => { const now = Date.now(); for (const [k, v] of partSaves) if (now - v.at > 120000) partSaves.delete(k); };
+  ipcMain.handle('boards:savePart', (_e, token, text) => {
+    if (typeof token !== 'string' || !token || token.length > 80 || typeof text !== 'string') return false;
+    dropStaleParts();
+    let job = partSaves.get(token);
+    if (!job) {
+      if (partSaves.size >= 8) return false;
+      job = { parts: [], chars: 0, at: Date.now() };
+      partSaves.set(token, job);
+    }
+    if (job.chars + text.length > PART_LIMIT) { partSaves.delete(token); return false; }
+    job.parts.push(text); job.chars += text.length; job.at = Date.now();
+    return true;
+  });
+  ipcMain.handle('boards:saveParts', async (_e, payload) => {
+    const token = payload && payload.token;
+    const job = typeof token === 'string' ? partSaves.get(token) : null;
+    partSaves.delete(token);
+    // every piece must have arrived, in order, or nothing is written
+    if (!job || !payload || job.parts.length !== payload.count || !payload.id) return false;
+    const moveLast = payload.setLast !== false;
+    return withStorageWrite(() => saveBoardFile(payload.id, (file) => writeAtomicParts(file, job.parts), moveLast));
+  });
   /**
    * Store one picture and return the name the board should remember. Returns
    * null if it cannot - the caller then keeps the picture inline, exactly as

@@ -212,6 +212,9 @@ contextBridge.exposeInMainWorld('board', {
     list: () => ipcRenderer.invoke('boards:list'),
     load: (id) => ipcRenderer.invoke('boards:load', id),
     save: (b) => ipcRenderer.invoke('boards:save', b),
+    // a big board handed over in pieces, then written whole (see boards:saveParts in main.js)
+    savePart: (token, text) => ipcRenderer.invoke('boards:savePart', token, text),
+    saveParts: (b) => ipcRenderer.invoke('boards:saveParts', b),
     remove: (id) => ipcRenderer.invoke('boards:delete', id),
     last: () => ipcRenderer.invoke('boards:last'),
     setLast: (id) => ipcRenderer.invoke('boards:setLast', id),

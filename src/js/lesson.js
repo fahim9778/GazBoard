@@ -42,16 +42,30 @@ import { progressToast } from './backup.js';
 import { h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 
-/** An hour. A lesson longer than that is two lessons, and the video file would get unwieldy. */
-export const LESSON_MAX_MS = 60 * 60 * 1000;
-/**
- * On a phone: half an hour, at 1920 across. A phone has less memory to hold the
- * finished video in, and a file the app saves for the page can be at most 1 GB.
+/*
+ * How long one video is, and how long a lesson can go on.
+ *
+ * A finished video is put together in memory before it is saved, so one video is
+ * kept to an hour (half an hour on a phone, which has less memory, and whose app
+ * can hand the page at most 1 GB per file). A lesson that goes on longer does not
+ * stop: the recording carries straight on, and when it is saved it comes out as
+ * part 1, part 2, ... - each its own video, made one after the other once the
+ * lesson is over, like the "converting" step of a meeting recorder. Nothing extra
+ * happens while teaching; the parts are only cut when the video is made.
+ *
+ * The limit is a guard, not a goal: notes and voice for four hours are about
+ * 250 MB, which a computer holds easily.
  */
-export const PHONE_MAX_MS = 30 * 60 * 1000;
+export const LESSON_PART_MS = 60 * 60 * 1000;
+export const PHONE_PART_MS = 30 * 60 * 1000;
+export const LESSON_LIMIT_MS = 4 * 60 * 60 * 1000;
+export const PHONE_LIMIT_MS = 2 * 60 * 60 * 1000;
 const PHONE_FILE_MAX = 1000 * 1024 * 1024;
 export const onAndroid = () => typeof document !== 'undefined' && document.documentElement?.dataset.platform === 'android';
-export const lessonMaxMs = () => (onAndroid() ? PHONE_MAX_MS : LESSON_MAX_MS);
+export const lessonPartMs = () => (onAndroid() ? PHONE_PART_MS : LESSON_PART_MS);
+export const lessonMaxMs = () => (onAndroid() ? PHONE_LIMIT_MS : LESSON_LIMIT_MS);
+/** A last part shorter than this is not worth a file of its own: it goes on the end of the one before. */
+const TAIL_MS = 2000;
 /** How often the notes are taken. Twenty a second is smooth for a pan and costs nothing. */
 export const SAMPLE_MS = 50;
 export const FPS = 30;
@@ -148,9 +162,13 @@ export class LessonRecorder {
    * @param {boolean} [o.silent]      no sound at all
    * @param {number[]} [o.sizes]      video sizes to try, longest side first
    * @param {string} [o.prefer]       'webm' to skip MP4 (the suite)
+   * @param {number} [o.partMs]       how long one part is (the suite uses seconds, not an hour)
+   * @param {number} [o.limitMs]      when the recording stops by itself (the suite)
    */
   async start(o = {}) {
     if (this.state !== 'idle') return false;
+    this.partMs = o.partMs || null;
+    this.limitMs = o.limitMs || null;
     if (!lessonAvailable()) {
       this.app.toast(t('Recording a lesson needs the GazBoard app on a computer'), 'help', 5000);
       return false;
@@ -236,7 +254,9 @@ export class LessonRecorder {
     const d = store.doc;
     this.lesson = {
       start: { order: d.order.slice(), objects: clone(d.objects), background: clone(d.background || {}), pages: clone(d.pages || []) },
-      events: [], cams: [], laser: [], boardName: d.name || ''
+      events: [], cams: [], laser: [], boardName: d.name || '',
+      // when each part began, on the wall clock: the parts' file names say so
+      partMs: this.partMs || lessonPartMs(), partStarts: [Date.now()]
     };
     this.t0 = performance.now();
     this.pausedTotal = 0;
@@ -309,11 +329,17 @@ export class LessonRecorder {
       if (pts.length) this.lastLaser = Math.max(this.lastLaser, pts[pts.length - 1].t);
       this.lesson.laserColor = surf.laserColor || null;
     }
+    // a new part begins: nothing is cut now, only noted (the parts are made when the video is)
+    const L = this.lesson, k = Math.floor(at / L.partMs);
+    if (k >= L.partStarts.length) {
+      L.partStarts.push(Date.now() - (at - k * L.partMs));
+      this.syncBar();
+    }
     if (this.timeEl) {
       const s = clock(at);
       if (this.timeEl.textContent !== s) this.timeEl.textContent = s;
     }
-    if (at >= lessonMaxMs()) this.stop({ why: 'long' });
+    if (at >= (this.limitMs || lessonMaxMs())) this.stop({ why: 'long' });
   }
 
   pause() {
@@ -373,7 +399,7 @@ export class LessonRecorder {
     this.state = 'saving';
     this.app.syncUI?.();
     if (o.why === 'board') this.app.toast(t('Recording stopped: another board was opened'), 'help', 4000);
-    if (o.why === 'long') this.app.toast(t('Recording stopped after {minutes} minutes', { minutes: Math.round(lessonMaxMs() / 60000) }), 'help', 5000);
+    if (o.why === 'long') this.app.toast(t('Recording stopped after {hours} hours', { hours: Math.round((this.limitMs || lessonMaxMs()) / 3600000) }), 'help', 5000);
     const voice = await this.closeTap();
     const lesson = { ...this.lesson, duration, format: this.format, voice };
     this.lesson = null;
@@ -410,49 +436,84 @@ export class LessonRecorder {
     };
   }
 
-  /** Make the video of the last lesson and save it. Cancelling keeps the lesson so it can be saved later. */
-  async saveLast() {
+  /**
+   * Make the video of the last lesson and save it. Cancelling keeps the lesson so it can be saved later.
+   *
+   * A lesson longer than one part comes out as several videos, made one after the other. On a
+   * computer the first asks where to save and the rest go into the same folder by themselves;
+   * on a phone or in a browser, where the app cannot pick a file name next to another, each part
+   * asks. A part that is saved stays saved: "Save it now" after a cancel carries on from the next.
+   *
+   * @param {object} [io]  { saveDialog, writeFile } in place of the app's own (the suite answers the dialog itself)
+   */
+  async saveLast(io = {}) {
+    const ask = io.saveDialog || ((o) => window.board.saveDialog(o));
+    const write = io.writeFile || ((p, b) => window.board.writeFile(p, b));
     const lesson = this.last;
     if (!lesson) return null;
-    const ctrl = new AbortController();
-    const toast = progressToast(t('Making the lesson video…'), { onCancel: () => ctrl.abort() });
-    let res = null;
-    const hands = this.watchHands();
-    try {
-      res = await makeLessonVideo(lesson, { signal: ctrl.signal, yieldTo: hands.busy, onProgress: (p) => toast.set(null, p) });
-    } catch (e) {
+    const parts = lessonParts(lesson);
+    const many = parts.length > 1;
+    const base = String(lesson.boardName || 'board').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80).trim() || 'board';
+    // the desktop app writes real files, so the parts after the first can go beside it
+    const beside = !onAndroid() && typeof location !== 'undefined' && location.protocol === 'app:';
+    const saved = lesson.savedPaths || (lesson.savedPaths = []);
+    for (let k = lesson.savedParts || 0; k < parts.length; k++) {
+      const part = parts[k];
+      const ctrl = new AbortController();
+      const label = many ? t('Making part {n} of {total}…', { n: k + 1, total: parts.length }) : t('Making the lesson video…');
+      const toast = progressToast(label, { onCancel: () => ctrl.abort() });
+      let res = null;
+      const hands = this.watchHands();
+      try {
+        res = await makeLessonVideo(many ? lessonPart(lesson, part.from, part.to) : lesson,
+          { signal: ctrl.signal, yieldTo: hands.busy, onProgress: (p) => toast.set(null, p) });
+      } catch (e) {
+        hands.off();
+        toast.done();
+        this.app.toast(t('Could not make the lesson video: {error}', { error: e.message || String(e) }), 'help', 7000,
+          { label: t('Try again'), onClick: () => this.saveLast() });
+        return null;
+      }
       hands.off();
       toast.done();
-      this.app.toast(t('Could not make the lesson video: {error}', { error: e.message || String(e) }), 'help', 7000,
-        { label: t('Try again'), onClick: () => this.saveLast() });
-      return null;
-    }
-    hands.off();
-    toast.done();
-    if (!res) {
-      this.app.toast(t('The lesson is kept until you record another one'), 'help', 7000, { label: t('Save it now'), onClick: () => this.saveLast() });
-      return null;
-    }
-    if (onAndroid() && res.bytes.length > PHONE_FILE_MAX) {
-      this.app.toast(t('This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.', { size: Math.round(res.bytes.length / 1048576) }), 'help', 8000);
-      return null;
-    }
-    const base = String(lesson.boardName || 'board').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 80).trim() || 'board';
-    for (;;) {
-      const path = await window.board.saveDialog({
-        title: t('Save the lesson video'),
-        defaultPath: `${base} lesson.${res.ext}`,
-        filters: [{ name: res.ext.toUpperCase(), extensions: [res.ext] }]
-      });
-      if (path) {
-        await window.board.writeFile(path, res.bytes);
-        this.app.toast(t('Saved {name}', { name: String(path).split(/[\\/]/).pop() }));
-        this.last = null;
-        return path;
+      if (!res) {
+        this.app.toast(t('The lesson is kept until you record another one'), 'help', 7000, { label: t('Save it now'), onClick: () => this.saveLast() });
+        return null;
       }
-      const drop = await this.app.confirm(t('Throw this lesson away?'), t('The video has not been saved anywhere yet.'), t('Throw it away'));
-      if (drop) { this.last = null; return null; }
+      if (onAndroid() && res.bytes.length > PHONE_FILE_MAX) {
+        this.app.toast(t('This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.', { size: Math.round(res.bytes.length / 1048576) }), 'help', 8000);
+        lesson.savedParts = k + 1;
+        continue;
+      }
+      const name = lessonFileName(base, part.wall, many ? k + 1 : 0, res.ext);
+      const dir = beside && saved.length ? folderOf(saved[0]) : null;
+      let path = null;
+      if (dir) {
+        path = dir + name;
+        try { await write(path, res.bytes); } catch {
+          // the folder went away (a USB stick pulled out): ask instead
+          path = null;
+        }
+      }
+      while (!path) {
+        path = await ask({
+          title: many ? t('Save part {n} of {total}', { n: k + 1, total: parts.length }) : t('Save the lesson video'),
+          defaultPath: name,
+          filters: [{ name: res.ext.toUpperCase(), extensions: [res.ext] }]
+        });
+        if (path) { await write(path, res.bytes); break; }
+        const drop = await this.app.confirm(t('Throw this lesson away?'), t('The video has not been saved anywhere yet.'), t('Throw it away'));
+        if (drop) { this.last = null; return null; }
+      }
+      saved.push(path);
+      lesson.savedParts = k + 1;
+      res = null;   // this part's video is written: let it go before the next is made
     }
+    this.last = null;
+    if (!saved.length) return null;
+    if (many) this.app.toast(t('Saved {count} parts of the lesson', { count: saved.length }));
+    else this.app.toast(t('Saved {name}', { name: String(saved[0]).split(/[\\/]/).pop() }));
+    return many ? saved : saved[0];
   }
 
   /* ---------------- the bar ---------------- */
@@ -476,7 +537,9 @@ export class LessonRecorder {
     if (!this.bar) return;
     const paused = this.state === 'paused';
     this.bar.classList.toggle('paused', paused);
-    this.bar.querySelector('.lesson-label').textContent = paused ? t('Paused') : t('Recording');
+    const part = this.lesson ? this.lesson.partStarts.length : 1;
+    this.bar.querySelector('.lesson-label').textContent = paused ? t('Paused')
+      : part > 1 ? t('Recording · part {n}', { n: part }) : t('Recording');
     this.pauseBtn.textContent = paused ? t('Resume') : t('Pause');
   }
 
@@ -542,6 +605,86 @@ export function pointsBy(draw, t, total) {
   const k = b.t > a.t ? (t - a.t) / (b.t - a.t) : 1;
   const n = a.n + (b.n - a.n) * k;
   return Math.max(1, Math.min(total, Math.round((n / Math.max(1, draw.len)) * total)));
+}
+
+/**
+ * The parts a lesson comes out as: [{ from, to, wall }], lesson-clock milliseconds, and when on
+ * the wall clock each part began (for its file name). One part for anything up to the part length;
+ * a few seconds left over at the very end join the last part instead of making a file of their own.
+ */
+export function lessonParts(lesson) {
+  const len = Math.max(0, lesson.duration || 0);
+  const partMs = lesson.partMs || lessonPartMs();
+  const n = Math.max(1, Math.ceil((len - Math.min(TAIL_MS, partMs / 10)) / partMs));
+  const starts = lesson.partStarts || [];
+  const began = starts[0] || lesson.startedAt || Date.now();
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    out.push({ from: k * partMs, to: k === n - 1 ? Infinity : (k + 1) * partMs, wall: starts[k] || began + k * partMs });
+  }
+  return out;
+}
+
+/**
+ * One part of a lesson, as a lesson of its own: the board as it stood when the part began, and
+ * from there the same notes - changes, view, laser, voice - with the part's start as time zero.
+ * Nothing is copied that does not need to be: the voice's pieces are shared, not duplicated.
+ */
+export function lessonPart(lesson, from, to) {
+  const store = new Store();
+  store.doc.order = lesson.start.order.slice();
+  store.doc.objects = clone(lesson.start.objects);
+  store.doc.background = clone(lesson.start.background);
+  store.doc.pages = clone(lesson.start.pages);
+  const events = [];
+  for (const ev of lesson.events) {
+    if (ev.t < from) {
+      // a change that happened before this part: it is simply on the board when the part begins
+      store._apply(clone(ev.op));
+      continue;
+    }
+    if (ev.t >= to) break;
+    const moved = { ...ev, t: ev.t - from };
+    if (ev.draw) moved.draw = { ...ev.draw, samples: ev.draw.samples.map((p) => ({ ...p, t: p.t - from })) };
+    events.push(moved);
+  }
+  // the view: where it stood as the part began, then every move during it
+  const cams = [];
+  let before = null;
+  for (const c of lesson.cams) {
+    if (c.t <= from) { before = c; continue; }
+    if (c.t >= to) break;
+    cams.push({ ...c, t: c.t - from });
+  }
+  if (before) cams.unshift({ ...before, t: 0 });
+  const laser = lesson.laser.filter((p) => p.t >= from && p.t < to).map((p) => ({ ...p, t: p.t - from }));
+  let voice = null;
+  if (lesson.voice) {
+    const a = from * 1000, b = to * 1000;
+    const chunks = lesson.voice.chunks.filter((c) => c.timestamp >= a && c.timestamp < b).map((c) => ({ ...c, timestamp: c.timestamp - a }));
+    if (chunks.length) voice = { ...lesson.voice, chunks };
+  }
+  const end = Math.min(to, lesson.duration);
+  return {
+    ...lesson,
+    start: { order: store.doc.order.slice(), objects: store.doc.objects, background: store.doc.background, pages: store.doc.pages },
+    events, cams, laser, voice, duration: Math.max(0, end - from)
+  };
+}
+
+/** "Chapter 4 2026-11-24 18-14-33.mp4", or "... part 2.mp4": the moment it began makes every name its own. */
+export function lessonFileName(base, wall, part, ext) {
+  const d = new Date(wall || Date.now());
+  const two = (n) => String(n).padStart(2, '0');
+  const when = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`;
+  return `${base} ${when}${part ? ' ' + t('part {n}', { n: part }) : ''}.${ext}`;
+}
+
+/** The folder part of a saved file's path, with its separator. */
+function folderOf(p) {
+  const s = String(p || '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(0, i + 1) : '';
 }
 
 /** Pictures decode in the background; the video waits for them so none is missing from a frame. */

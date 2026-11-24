@@ -21678,6 +21678,394 @@ module.exports.run = async (win, app) => {
       JSON.stringify(aac));
   }
 
+  /*
+   * A long lesson comes out in parts.
+   *
+   * Nothing is cut while teaching: the recording carries on past the part length,
+   * and the bar says which part it is in. When it is saved, each part is its own
+   * video, starting from the board as it stood at that moment, with its own stretch
+   * of the voice - the first asks where to save, the rest land beside it, every
+   * name carrying the moment its part began. Here a part is 1.5 seconds, not an hour.
+   */
+  {
+    const partsDir = path.join(OUT, 'lesson-parts');
+    await fs.rm(partsDir, { recursive: true, force: true });
+    await fs.mkdir(partsDir, { recursive: true });
+    const lp = await js(`
+      const a = window.app, it = a.interaction, sf = a.surface;
+      const { lessonParts, lessonPart, lessonFileName } = await import('app://board/js/lesson.js');
+      a.newBoard(true);
+      a.store.doc.name = 'Chapter 4';
+      sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ac = new AudioContext();
+      const osc = ac.createOscillator(); osc.frequency.value = 440;
+      const dest = ac.createMediaStreamDestination(); osc.connect(dest); osc.start();
+      const started = await a.lessonRec.start({ stream: dest.stream, partMs: 1500, limitMs: 60000 });
+      const L = () => a.lessonRec.now();
+      const label = () => document.querySelector('[data-lesson-bar] .lesson-label')?.textContent || '';
+      const rect = sf.canvas.getBoundingClientRect();
+      const mk = (x, y, b) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons: b, clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0.6 });
+      a.setTool('pen');
+      const line = async (y) => {
+        it.onDown(mk(240, y, 1));
+        for (let i = 1; i <= 15; i++) { it.onMove(mk(240 + i * 32, y, 1)); await wait(20); }
+        it.onUp(mk(720, y, 0));
+      };
+      await wait(200);
+      await line(300);                                   // part 1
+      const labelInPart1 = label();
+      while (L() < 1750) await wait(25);
+      const labelInPart2 = label();
+      await line(460);                                   // part 2
+      while (L() < 2700) await wait(25);
+      const res = await a.lessonRec.stop({ save: false });
+      osc.stop(); ac.close();
+      const lesson = a.lessonRec.last;
+      const parts = lessonParts(lesson);
+      const expectParts = Math.max(1, Math.ceil((lesson.duration - 150) / 1500));
+      const p1 = lessonPart(lesson, parts[0].from, parts[0].to), p2 = lessonPart(lesson, parts[1].from, parts[1].to);
+      const ids = (o) => Object.keys(o.start.objects).length;
+      const voiceMs = (p) => p.voice ? p.voice.chunks.reduce((n, c) => n + c.duration, 0) / p.voice.sampleRate * 1000 : 0;
+      const split = {
+        started, labelInPart1, labelInPart2, partStarts: lesson.partStarts.length,
+        gap: lesson.partStarts.length > 1 ? Math.round(lesson.partStarts[1] - lesson.partStarts[0]) : null,
+        duration: Math.round(lesson.duration), parts: parts.length, expectParts,
+        joined: parts.every((p, i) => i === 0 || p.from === parts[i - 1].to),
+        p1Start: ids(p1), p2Start: ids(p2), p1Events: p1.events.filter((e) => e.draw).length, p2Events: p2.events.filter((e) => e.draw).length,
+        p2FirstEvent: p2.events.length ? Math.round(p2.events[0].t) : null,
+        p2Cam0: p2.cams.length ? p2.cams[0].t : null,
+        voice: { whole: lesson.voice ? lesson.voice.chunks.length : 0, p1: p1.voice ? p1.voice.chunks.length : 0, p2: p2.voice ? p2.voice.chunks.length : 0,
+          p1Ms: Math.round(voiceMs(p1)), p2Ms: Math.round(voiceMs(p2)), p2FirstTs: p2.voice ? Math.round(p2.voice.chunks[0].timestamp / 1000) : null,
+          wholeUntouched: lesson.voice ? Math.round(lesson.voice.chunks[0].timestamp) : null },
+        wholeVideo: !!(res && res.bytes && res.bytes.length)
+      };
+      // the names
+      const wall = new Date(2026, 10, 24, 18, 14, 33).getTime();
+      const names = { one: lessonFileName('Chapter 4', wall, 0, 'mp4'), two: lessonFileName('Chapter 4', wall + 3600000, 2, 'mp4') };
+
+      // saved: the first asks, the rest go beside it by themselves
+      const asked = [];
+      const dir = ${JSON.stringify(partsDir + path.sep)};
+      const saved = await a.lessonRec.saveLast({ saveDialog: async (o) => { asked.push(o.defaultPath); return dir + o.defaultPath; } });
+      const files = [];
+      for (const p of (Array.isArray(saved) ? saved : [saved])) {
+        let size = 0; try { size = (await window.board.readFile(p)).byteLength; } catch { size = -1; }
+        files.push({ name: String(p).split(/[\\\\/]/).pop(), size });
+      }
+      return { split, names, asked, files, lastCleared: a.lessonRec.last === null, fmtExt: a.lessonRec.format && a.lessonRec.format.video.ext };
+    `);
+    const s = lp.split;
+    check('a lesson past the part length carries on recording, and the bar says it is in part 2',
+      s.started && s.labelInPart1 === 'Recording' && /part 2/.test(s.labelInPart2) && s.partStarts >= 2 && Math.abs(s.gap - 1500) < 400,
+      JSON.stringify(s));
+    check('it is cut into parts that follow on from each other, as many as its length needs',
+      s.parts === s.expectParts && s.parts >= 2 && s.joined, JSON.stringify(s));
+    check('part 2 starts with the board as it stood (the line from part 1 already there) and its own line written in it',
+      s.p1Start === 0 && s.p2Start >= 1 && s.p1Events === 1 && s.p2Events === 1 && s.p2FirstEvent >= 0 && s.p2FirstEvent < 1500 && s.p2Cam0 === 0,
+      JSON.stringify(s));
+    check('each part takes its own stretch of the voice, from its own start, and the whole lesson keeps all of it',
+      s.voice.whole > 0 && s.voice.p1 > 0 && s.voice.p2 > 0 && s.voice.p1 + s.voice.p2 <= s.voice.whole && s.voice.p2FirstTs >= 0 && s.voice.p2FirstTs < 120
+        && Math.abs(s.voice.p1Ms - 1500) < 200 && s.voice.wholeUntouched !== null,
+      JSON.stringify(s.voice));
+    check('every part is named after the board and the moment it began - no two alike, and no ":" Windows would refuse',
+      lp.names.one === 'Chapter 4 2026-11-24 18-14-33.mp4' && lp.names.two === 'Chapter 4 2026-11-24 19-14-33 part 2.mp4',
+      JSON.stringify(lp.names));
+    check('saving asks once, and every part lands in that folder as its own video',
+      lp.asked.length === 1 && lp.files.length === s.parts && lp.files.every((f) => f.size > 1000)
+        && lp.files.every((f, i) => new RegExp('^Chapter 4 \\d{4}-\\d\\d-\\d\\d \\d\\d-\\d\\d-\\d\\d part ' + (i + 1) + '\\.' + lp.fmtExt + '$').test(f.name))
+        && new Set(lp.files.map((f) => f.name)).size === lp.files.length && lp.lastCleared,
+      JSON.stringify({ asked: lp.asked, files: lp.files }));
+
+    // part 2, opened as a player opens it: it begins with line 1 on the board and ends with both
+    const two = lp.files[1] ? path.join(partsDir, lp.files[1].name) : null;
+    const look = two ? await js(`
+      const bytes = await window.board.readFile(${JSON.stringify(two)});
+      const url = URL.createObjectURL(new Blob([bytes], { type: ${JSON.stringify(lp.fmtExt === 'mp4' ? 'video/mp4' : 'video/webm')} }));
+      const v = document.createElement('video'); v.muted = true; v.src = url;
+      await new Promise((r) => { v.onloadedmetadata = r; v.onerror = r; setTimeout(r, 5000); });
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const grab = async (time) => {
+        let g = null, info = null;
+        for (let tries = 1; tries <= 6; tries++) {
+          await new Promise((r) => { v.onseeked = () => r(); v.currentTime = time; setTimeout(r, 3000); });
+          await new Promise((r) => { if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(() => r()); setTimeout(r, 500); } else setTimeout(r, 150); });
+          const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+          g = c.getContext('2d'); g.drawImage(v, 0, 0);
+          const px = g.getImageData(0, 0, c.width, Math.min(c.height, 40)).data;
+          let opaque = 0, light = 0;
+          for (let i = 3; i < px.length; i += 4) { if (px[i] === 255) opaque++; if (px[i - 3] > 200) light++; }
+          const blank = !(opaque > 0 && light > (px.length / 4) * 0.5);
+          info = { at: +time.toFixed(3), tries, blank };
+          if (!blank) break;
+          await wait(150);
+        }
+        g.info = info;
+        return g;
+      };
+      const k = v.videoWidth / window.app.surface.width;
+      const inkAt = (g, y) => [...g.getImageData(Math.round(480 * k), Math.round(y * k) - 20, 1, 40).data].filter((x, i) => i % 4 === 0 && x < 120).length;
+      const first = await grab(0.05);
+      const last = await grab(Math.max(0, v.duration - 0.1));
+      const out = { dur: +(v.duration || 0).toFixed(2), w: v.videoWidth, first: { line1: inkAt(first, 300), line2: inkAt(first, 460), info: first.info },
+        last: { line1: inkAt(last, 300), line2: inkAt(last, 460), info: last.info } };
+      URL.revokeObjectURL(url);
+      return out;
+    `) : null;
+    const p2Len = (s.duration - 1500) / 1000;
+    check('part 2 opens on its own: it begins with the first line already there, and ends with both',
+      look && look.first.line1 > 0 && look.first.line2 === 0 && look.last.line1 > 0 && look.last.line2 > 0
+        && (s.parts > 2 || Math.abs(look.dur - (p2Len + 0.5)) < 0.4),
+      JSON.stringify({ look, p2Len }));
+  }
+
+  /*
+   * The gentle autosave.
+   *
+   * The save that runs while somebody may be writing does its work in small
+   * pieces and lets the pen in between, and the desktop app takes a big board
+   * in pieces too. None of that may change WHAT is saved: the text must be the
+   * very text JSON.stringify writes, the file must open as the same board, and
+   * a board that changed during the save must not be called saved.
+   */
+  {
+    const same = await js(`
+      const { stringifyGently } = await import('app://board/js/core/gentle.js');
+      const step = () => new Promise((r) => setTimeout(r, 0));
+      const tricky = { id: 'g1', name: 'Größe "ü" \\\\ 🎉 \\u2028 ["objects"]', schema: 2, pages: [{ w: 1, h: 2 }], page: null,
+        camera: { x: 1.5, y: -2, z: 1 }, quote: undefined, objects: [
+          { id: 'a', type: 'text', text: 'objects: ["x"] \\n tab\\t', runs: [{ t: 'hi', b: true }], nothing: undefined, f: () => 1 },
+          null, undefined,
+          { id: 'b', type: 'stroke', points: [{ x: 1e-7, y: -0, p: 0.5 }], n: NaN, inf: Infinity, d: new Date(0) }],
+        thumb: 'data:image/webp;base64,AAAA', extra: [undefined, () => 2] };
+      const out = {};
+      const r1 = await stringifyGently(tricky, { step, sliceMs: 0 });
+      out.small = r1.json === JSON.stringify(tricky);
+      const r1c = await stringifyGently(tricky, { step, sliceMs: 0, chunked: true });
+      out.smallPieces = r1c.chunks.join('') === JSON.stringify(tricky);
+      out.empty = (await stringifyGently({ id: 'e', objects: [] }, { step })).json === JSON.stringify({ id: 'e', objects: [] });
+      out.noList = (await stringifyGently({ id: 'n' }, { step })).json === JSON.stringify({ id: 'n' });
+      // big enough for several pieces and many pauses
+      const big = { id: 'g2', name: 'big', objects: [] };
+      for (let k = 0; k < 6000; k++) {
+        const pts = []; for (let i = 0; i < 40; i++) pts.push({ x: k + i * 0.37, y: Math.sin(i) * 9.13, p: 0.55 });
+        big.objects.push({ id: 's' + k, type: 'stroke', color: '#201f1e', width: 4, points: pts });
+      }
+      const want = JSON.stringify(big);
+      const r2 = await stringifyGently(big, { step });
+      const r2c = await stringifyGently(big, { step, chunked: true });
+      out.big = r2.json === want;
+      out.bigPieces = r2c.chunks.join('') === want;
+      out.pieces = r2c.chunks.length; out.pauses = r2.pieces; out.chars = want.length;
+      out.firstDiff = out.big ? -1 : [...want].findIndex((c, i) => c !== r2.json[i]);
+      return out;
+    `);
+    check('the gentle save writes exactly the text an ordinary save writes, small boards and big, whole or in pieces',
+      same.small && same.smallPieces && same.empty && same.noList && same.big && same.bigPieces && same.pieces > 1 && same.pauses > 1,
+      JSON.stringify(same));
+
+    const pic = await js(`
+      const a = window.app;
+      const { boardPicture, boardPictureGently } = await import('app://board/js/ui/thumb.js');
+      const { isDarkBoard, setDarkBoard } = await import('app://board/js/core/render.js');
+      const objs = [];
+      for (let k = 0; k < 400; k++) objs.push({ id: 'q' + k, type: 'stroke', tool: 'pen', color: k % 2 ? '#c50f1f' : '#201f1e', width: 4, effect: 'none', rotation: 0,
+        points: [{ x: k * 3, y: (k % 20) * 9, p: .5 }, { x: k * 3 + 20, y: (k % 20) * 9 + 15, p: .5 }], bbox: { x: k * 3, y: (k % 20) * 9, w: 20, h: 15 } });
+      const bg = { color: '#fffbe6', pattern: 'dots' };
+      const was = isDarkBoard();
+      setDarkBoard(true);                         // the screen showing a dark board while the picture is drawn
+      let flips = 0, darkDuring = true;
+      const pause = () => new Promise((r) => { flips++; darkDuring = darkDuring && isDarkBoard(); setTimeout(r, 0); });
+      const gentle = await boardPictureGently(objs, bg, pause, 0);
+      const darkAfter = isDarkBoard();
+      const plain = boardPicture(objs, bg);
+      setDarkBoard(was);
+      /*
+       * Compared by what they show, not byte for byte. Reading a pixel between pieces can move a canvas from the
+       * graphics card to the processor part way through (Chrome does that for canvases that are read from), and the
+       * two draw the soft edge of a line a shade differently - invisible in a picture this small, but enough to change
+       * the file. So: the same size, the same paper, the ink in the same places, at most a sliver of edge pixels off.
+       */
+      const pixels = (url) => new Promise((res) => {
+        const im = new Image();
+        im.onload = () => {
+          const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+          const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+          res({ w: im.width, h: im.height, d: g.getImageData(0, 0, im.width, im.height).data });
+        };
+        im.onerror = () => res(null);
+        im.src = url;
+      });
+      const A = await pixels(gentle), B = await pixels(plain);
+      let off = 0, inkA = 0, inkB = 0, worst = 0;
+      if (A && B && A.w === B.w && A.h === B.h) {
+        for (let i = 0; i < A.d.length; i += 4) {
+          const dv = Math.max(Math.abs(A.d[i] - B.d[i]), Math.abs(A.d[i + 1] - B.d[i + 1]), Math.abs(A.d[i + 2] - B.d[i + 2]));
+          worst = Math.max(worst, dv);
+          if (dv > 48) off++;
+          if (A.d[i] < 128) inkA++;
+          if (B.d[i] < 128) inkB++;
+        }
+      }
+      const total = A ? A.w * A.h : 0;
+      return { identical: gentle === plain, size: A && B ? [A.w, A.h, B.w, B.h] : null, offShare: total ? +(off / total).toFixed(4) : null, worst,
+        inkA, inkB, paper: A ? [A.d[0], A.d[1], A.d[2]] : null, flips, darkDuring, darkAfter, len: (gentle || '').length };
+    `);
+    check('the board picture drawn in pieces is the same picture, and the screen never sees its paper colour switched',
+      pic.size && pic.size[0] === pic.size[2] && pic.size[1] === pic.size[3] && pic.offShare <= 0.01
+        && pic.inkA > 100 && Math.abs(pic.inkA - pic.inkB) <= Math.max(20, pic.inkB * 0.05)
+        && pic.paper && pic.paper[0] > 240 && pic.paper[2] > 200
+        && pic.flips > 1 && pic.darkDuring && pic.darkAfter, JSON.stringify(pic));
+
+    const disk = await js(`
+      const a = window.app, st = a.store, sf = a.surface;
+      a.newBoard(true); a.settings.autosave = true;
+      sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+      const objs = [];
+      for (let k = 0; k < 9000; k++) {
+        const pts = []; const x0 = (k % 100) * 30, y0 = Math.floor(k / 100) * 40;
+        for (let i = 0; i < 50; i++) pts.push({ x: +(x0 + i * 0.7).toFixed(2), y: +(y0 + Math.cos(i / 3) * 9).toFixed(2), p: 0.55 });
+        objs.push({ id: 'gs' + k, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: pts, bbox: { x: x0, y: y0 - 9, w: 35, h: 18 } });
+      }
+      objs.push({ id: 'gt', type: 'text', x: 10, y: -80, w: 300, h: 40, text: 'Größe 🎉 "quoted"', fontSize: 24, color: '#201f1e', align: 'left', valign: 'top', rotation: 0 });
+      st.addMany(objs, 'bulk');
+      clearTimeout(a._saveTimer);
+      const id = st.doc.id;
+      // how a plain save would write it, for comparison
+      const plainDoc = await a.externaliseAssets(st.toJSON());
+      let parts = 0, whole = 0;
+      const t0 = performance.now();
+      await a.runSave();
+      const took = performance.now() - t0;
+      const back = await window.board.boards.load(id);
+      const plainObjs = JSON.stringify(plainDoc.objects), backObjs = back && JSON.stringify(back.objects);
+      const out = { saved: !a._unsaved, badge: document.getElementById('savedBadge').textContent,
+        sameObjects: plainObjs === backObjs, count: back && back.objects.length, name: back && back.name === st.doc.name,
+        thumb: !!(back && back.thumb), work: Math.round(a._saveCost), took: Math.round(took),
+        piecesWay: typeof window.board.boards.savePart === 'function' };
+      // nothing happening afterwards: no second save comes round on its own
+      let again = 0;
+      const realPersist = a.persist.bind(a);
+      a.persist = async (...x) => { again++; return realPersist(...x); };
+      await new Promise((r) => setTimeout(r, 1500));
+      a.persist = realPersist;
+      out.quietAfter = again === 0;
+      return out;
+    `);
+    check('a big board saved gently opens as exactly the same board, says Saved, and the board then rests',
+      disk.saved && disk.sameObjects && disk.count === 9001 && disk.name && disk.thumb && disk.quietAfter && disk.piecesWay,
+      JSON.stringify(disk));
+
+    const still = await js(`
+      const a = window.app;
+      // the longest the page is held up at any one moment, during an ordinary save and during a gentle one
+      const worstDuring = async (save) => {
+        let last = performance.now(), worst = 0, on = true;
+        const tick = () => { const n = performance.now(); worst = Math.max(worst, n - last); last = n; if (on) setTimeout(tick, 0); };
+        setTimeout(tick, 0);
+        await new Promise((r) => setTimeout(r, 40)); worst = 0; last = performance.now();
+        await save();
+        await new Promise((r) => setTimeout(r, 20)); on = false;
+        return Math.round(worst);
+      };
+      clearTimeout(a._saveTimer);
+      const plain = [], gentle = [];
+      for (let i = 0; i < 2; i++) {
+        a._pic = null; plain.push(await worstDuring(() => a.persist()));
+        a._pic = null; gentle.push(await worstDuring(() => a.runSave()));
+      }
+      return { plain, gentle, best: Math.min(...plain), worstGentle: Math.max(...gentle) };
+    `);
+    check('saving a big board while somebody may be writing holds the page up for a fraction of the time it used to',
+      still.worstGentle < still.best * 0.6, JSON.stringify(still));
+
+    const moved = await js(`
+      const a = window.app, st = a.store, it = a.interaction;
+      const id = st.doc.id;
+      clearTimeout(a._saveTimer);
+      // (1) a stroke added while the save is still working
+      let n = 0;
+      const saving = a.runSave();
+      for (let i = 0; i < 200 && !n; i++) { await new Promise((r) => setTimeout(r, 0)); n++; }
+      st.add({ id: 'g-late', type: 'stroke', tool: 'pen', color: '#c50f1f', width: 4, effect: 'none', rotation: 0, points: [{ x: 5, y: 5, p: .5 }, { x: 25, y: 25, p: .5 }], bbox: { x: 5, y: 5, w: 20, h: 20 } });
+      await saving;
+      const notCalledSaved = a._unsaved === true;
+      clearTimeout(a._saveTimer);
+      await a.runSave();
+      const late = (await window.board.boards.load(id)).objects.some((o) => o.id === 'g-late');
+      const thenSaved = !a._unsaved;
+
+      // (2) a drag under way while the save works, then let go of (put back): the file ends up with the stroke where it was
+      const target = st.get('gs0');
+      const x0 = target.points[0].x;
+      const snap = st.snapshot(['gs0']);
+      const { translateObject } = await import('app://board/js/core/transform.js');
+      const saving2 = a.runSave();
+      await new Promise((r) => setTimeout(r, 0));
+      it.action = { type: 'move', snap };              // somebody is dragging
+      translateObject(target, 500, 0);                 // ...and it has moved, on screen only
+      await saving2;
+      const notCalledSaved2 = a._unsaved === true;
+      st.restoreSnapshot(snap);                        // the drag is abandoned
+      it.action = null;
+      clearTimeout(a._saveTimer);
+      await a.runSave();
+      const after = (await window.board.boards.load(id)).objects.find((o) => o.id === 'gs0');
+      const finalSaved = !a._unsaved;
+      // (3) deleting the board while a save of it is under way: it must not come back
+      a.newBoard(true);
+      st.add({ id: 'gd1', type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: [{ x: 5, y: 5, p: .5 }, { x: 25, y: 25, p: .5 }], bbox: { x: 5, y: 5, w: 20, h: 20 } });
+      const big = []; for (let k = 0; k < 4000; k++) big.push({ id: 'gdb' + k, type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: [{ x: k, y: 5, p: .5 }, { x: k + 9, y: 25, p: .5 }, { x: k + 3, y: 40, p: .5 }], bbox: { x: k, y: 5, w: 9, h: 35 } });
+      st.addMany(big, 'bulk');
+      clearTimeout(a._saveTimer);
+      await a.runSave();
+      const doomed = st.doc.id;
+      const saving3 = a.runSave();
+      await new Promise((r) => setTimeout(r, 0));
+      st.add({ id: 'gd2', type: 'stroke', tool: 'pen', color: '#201f1e', width: 4, effect: 'none', rotation: 0, points: [{ x: 50, y: 5, p: .5 }, { x: 70, y: 25, p: .5 }], bbox: { x: 50, y: 5, w: 20, h: 20 } });
+      const deleting = a.deleteBoard(doomed);
+      await saving3; await deleting;
+      await new Promise((r) => setTimeout(r, 2500));
+      if (a.saveBeforeLeaving) await a.saveBeforeLeaving();
+      const resurrected = !!(await window.board.boards.load(doomed));
+      return { notCalledSaved, late, thenSaved, notCalledSaved2, putBack: after && after.points[0].x === x0, x0, xOnDisk: after && after.points[0].x, finalSaved, resurrected };
+    `);
+    check('a board that changes while it is being saved is not called saved, and the next save writes the change',
+      moved.notCalledSaved && moved.late && moved.thenSaved, JSON.stringify(moved));
+    check('a drag let go of during a save leaves the file with everything back where it was',
+      moved.notCalledSaved2 && moved.putBack && moved.finalSaved, JSON.stringify(moved));
+    check('a board deleted while it is being saved stays deleted', moved.resurrected === false, JSON.stringify(moved));
+
+    const pieces = await js(`
+      const b = window.board.boards;
+      // the pieces way, used for real, with the pieces in order
+      const tok3 = 'ptest3' + Date.now();
+      const doc = { id: 'pieces-board', name: 'Pieces', schema: 2, objects: [{ id: 'o1', type: 'text', text: 'one' }, { id: 'o2', type: 'text', text: 'two' }] };
+      const text = JSON.stringify(doc);
+      await b.savePart(tok3, text.slice(0, 20)); await b.savePart(tok3, text.slice(20, 41)); await b.savePart(tok3, text.slice(41));
+      const ok = await b.saveParts({ id: 'pieces-board', token: tok3, count: 3, setLast: false });
+      const read = await b.load('pieces-board');
+      const same = JSON.stringify(read) === text;
+      // pieces that never all arrive: nothing is written, the board on disk is untouched
+      const tok = 'ptest' + Date.now();
+      const p1 = await b.savePart(tok, '{"id":"pieces-board","objects":[');
+      const short = await b.saveParts({ id: 'pieces-board', token: tok, count: 2, setLast: false });
+      const untouched = JSON.stringify(await b.load('pieces-board')) === text;
+      // a token nobody sent pieces for
+      const unknown = await b.saveParts({ id: 'pieces-board', token: 'never-sent', count: 1, setLast: false });
+      // a name that reaches outside the boards folder is never written
+      const tok2 = 'ptest2' + Date.now();
+      await b.savePart(tok2, '{}');
+      const escape = await b.saveParts({ id: '../outside', token: tok2, count: 1, setLast: false });
+      try { await b.remove('pieces-board'); } catch {}
+      return { ok, same, p1, short, untouched, unknown, escape };
+    `);
+    check('a board sent in pieces is written only when every piece has arrived, and then exactly as sent',
+      pieces.p1 === true && pieces.short === false && pieces.untouched && pieces.unknown === false && pieces.escape === false && pieces.ok === true && pieces.same,
+      JSON.stringify(pieces));
+    await js(`window.app.newBoard(true);`);
+  }
+
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);
   check('no uncaught renderer errors', errs.length === 0, errs.slice(0, 3).join(' | '));

@@ -46,7 +46,8 @@ import { closePopover, popoverOpen, openPopover, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
 import { PENS, penById, rememberPen, heldPenId, FONTS } from './ui/palettes.js';
 import { exportPng, exportSvg, exportPdf, saveBoardFile, openBoardFile, exportable } from './export.js';
-import { boardThumb, boardPicture } from './ui/thumb.js';
+import { boardThumb, boardPicture, boardPictureGently } from './ui/thumb.js';
+import { stringifyGently, pause as gentlePause, SLICE_MS } from './core/gentle.js';
 import {
   pickAndInsertDocument, pickAndInsertImage, insertDocument,
   insertImagesFromPaths, insertImageFiles, clipboardFileName, dropOrigin, isImagePath, isDocPath
@@ -533,12 +534,19 @@ class App {
   /** True while a pointer gesture is mid-flight. Reads one flag; never the board. */
   gestureInFlight() { return !!(this.interaction && this.interaction.action); }
 
-  /** Write now, and remember what it cost so the next pause can be sized to it. */
+  /**
+   * Write now, and remember what it cost so the next pause can be sized to it.
+   *
+   * This is the save that happens while somebody may be writing (after a pause, or as a stroke
+   * ends), so it is a gentle one: the work is done in small pieces with the pen let in between
+   * (see core/gentle.js). The cost remembered is the work itself, not the time spent stepping aside.
+   */
   runSave() {
     clearTimeout(this._saveTimer);
     const t = performance.now();
-    return Promise.resolve(this.persist()).finally(() => {
-      this._saveCost = performance.now() - t;
+    this._saveWork = null;
+    return Promise.resolve(this.persist({ gentle: true })).finally(() => {
+      this._saveCost = this._saveWork != null ? this._saveWork : performance.now() - t;
       this._lastSaveAt = performance.now();
     });
   }
@@ -582,8 +590,19 @@ class App {
     return write.finally(() => { if (this._persistInFlight === write) this._persistInFlight = null; });
   }
 
-  async _persistNow({ force = false } = {}) {
+  async _persistNow({ force = false, gentle = false } = {}) {
     if (!force && this.unsavedNew && !this.store.objects.length) return;
+    /*
+     * A gentle save steps aside while it works, so the board can change under it - a stroke
+     * finished, a drag started and then let go. Whatever it wrote is still a whole, sound board,
+     * but it may not be the board as it is when the save ends. So it notes where the board was
+     * when it started and whether anybody was mid-gesture at any point, and if either says the
+     * board moved on, it does not call the board saved: the next save comes round for the rest.
+     * (Every change to the board moves store.rev on - a drag let go is put back with rev moved on
+     * too - and a drag still being made when the save ends is caught by gestureInFlight.)
+     */
+    const revAtStart = this.store.rev;
+    const step = gentlePause;
     // The board being saved. Everything below the first await may run after another board has
     // been opened; what this save then says about "the open board" would be about the wrong one.
     const savingId = this.store.doc.id;
@@ -606,10 +625,43 @@ class App {
     // a link to a board made since the list was last read would show as missing in the picture
     if (linkedRefs(this.store.objects).some((r) => !lookupBoard(r))) await this.refreshBoardDirectory();
     // the picture is of what is on screen, so only while that is still this board
-    const pic = this.store.doc.id === savingId ? this.boardPictureFor(force) : null;
-    if (pic) doc.thumb = pic;
-    await window.board.boards.save({ id: doc.id, json: JSON.stringify(doc) });
+    let pic = null, json, chunks = null;
+    if (gentle) {
+      let work = 0;
+      if (this.store.doc.id === savingId) {
+        const t = performance.now();
+        pic = await this.boardPictureGently(step);
+        work += this._picWork != null ? this._picWork : performance.now() - t;
+      }
+      if (pic) doc.thumb = pic;
+      // the desktop app takes a big board in pieces (see boards:saveParts in main.js); elsewhere it goes whole
+      const inPieces = typeof window.board.boards.savePart === 'function' && typeof window.board.boards.saveParts === 'function';
+      const r = await stringifyGently(doc, { step, chunked: inPieces });
+      if (inPieces && r.chunks.length > 1) chunks = r.chunks;
+      else json = inPieces ? r.chunks.join('') : r.json;
+      this._saveWork = work + r.work;
+    } else {
+      pic = this.store.doc.id === savingId ? this.boardPictureFor(force) : null;
+      if (pic) doc.thumb = pic;
+      json = JSON.stringify(doc);
+    }
+    if (chunks) await this.savePieces(doc.id, chunks, step);
+    else await window.board.boards.save({ id: doc.id, json });
     if (this.store.doc.id !== savingId) return;   // saved; the board now open is not this one
+    if (gentle && (this.gestureInFlight() || this.store.rev !== revAtStart)) {
+      /*
+       * Written, but the board has moved on since: it is NOT marked saved, so the next save -
+       * already on its way for the change, or the one a lifted pen or leaving the board brings -
+       * writes the rest. (Deleting the board while this save was under way clears this again
+       * once the save is done - see deleteBoard.)
+       */
+      this.joinRecentOnceUsed();
+      this.unsavedNew = false;
+      try { localStorage.setItem('gazboard.lastBoard', this.store.doc.id); } catch {}
+      this._unsaved = true;
+      if (this.settings.autosave) this.autosave();
+      return;
+    }
     this.joinRecentOnceUsed();
     this.unsavedNew = false;
     this._unsaved = false;
@@ -628,6 +680,44 @@ class App {
    * is a different one. In between, the last picture is saved again as it is,
    * so a save never drops it.
    */
+  /**
+   * Hand a board to the desktop app a piece at a time, stepping aside between pieces, then have it
+   * written whole. If the pieces cannot go across for any reason, the board is sent in one go
+   * instead, exactly as before - a save is never skipped because of this.
+   */
+  async savePieces(id, chunks, step) {
+    const token = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2);
+    let ok = true;
+    try {
+      for (let i = 0; i < chunks.length && ok; i++) {
+        ok = (await window.board.boards.savePart(token, chunks[i])) === true;
+        if (ok && i + 1 < chunks.length) await step();
+      }
+      if (ok) ok = (await window.board.boards.saveParts({ id, token, count: chunks.length })) === true;
+    } catch { ok = false; }
+    if (!ok) await window.board.boards.save({ id, json: chunks.join('') });
+  }
+
+  /**
+   * boardPictureFor() for the gentle save: the same rules for when the picture is redrawn, but the
+   * drawing itself is done a few objects at a time (see boardPictureGently in ui/thumb.js).
+   */
+  async boardPictureGently(step) {
+    this._picWork = null;
+    const id = this.store.doc.id, rev = this.store.rev, now = Date.now();
+    const p = this._pic;
+    if (p && p.id === id && (p.rev === rev || now - p.at < 15000)) return p.url;
+    let work = 0, t0 = performance.now();
+    const timed = async () => { work += performance.now() - t0; await step(); t0 = performance.now(); };
+    const url = await boardPictureGently(this.store.objects, this.store.doc.background, timed, SLICE_MS);
+    work += performance.now() - t0;
+    this._picWork = work;
+    if (this.store.doc.id !== id) return null;            // another board was opened meanwhile
+    if (!url) return p && p.id === id ? p.url : null;
+    this._pic = { id, rev, at: now, url };
+    return url;
+  }
+
   boardPictureFor(force = false) {
     const id = this.store.doc.id, rev = this.store.rev, now = Date.now();
     const p = this._pic;
@@ -972,6 +1062,9 @@ class App {
       clearTimeout(this._saveTimer);
       this._unsaved = false;
       try { await this._persistInFlight; } catch { /* it failed: nothing to bring back */ }
+      // that save may have found the board changing under it and asked for another: not for a board being deleted
+      clearTimeout(this._saveTimer);
+      this._unsaved = false;
     }
     // the blank board that takes an open board's place goes where that board was: somebody working
     // in CSE221 who deletes a board and starts writing again is still working in CSE221
