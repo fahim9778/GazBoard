@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "Fotos adicionadas: {n}",
  "Could not start: {error}": "Não foi possível iniciar: {error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "Este computador não está em nenhuma rede. Conecte-o a um Wi-Fi primeiro.",
- "Other addresses: {list}": "Outros endereços: {list}",
  "Waiting for a photo…": "Aguardando uma foto…",
  "Picture from phone": "Imagem do celular",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "Escaneie isto com a câmera do celular e tire uma foto. Ela aparece na lousa.",
  "Your phone and this computer must be on the same Wi-Fi.": "O celular e este computador precisam estar no mesmo Wi-Fi.",
  "If Windows asks about network access, choose Allow.": "Se o Windows perguntar sobre acesso à rede, escolha Permitir.",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "Não abre no celular? O Wi-Fi da escola costuma isolar os aparelhos: ative o roteador Wi-Fi do celular e conecte este computador a ele.",
  "Recording a lesson needs the GazBoard app on a computer": "Para gravar uma aula você precisa do app GazBoard em um computador",
  "Record without sound?": "Gravar sem som?",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "O GazBoard não conseguiu usar um microfone ({why}). Você ainda pode gravar a lousa sem a sua voz.",
@@ -1353,5 +1351,12 @@
  "Stop recording": "Parar a gravação",
  "Record a lesson": "Gravar uma aula",
  "Recording stopped after {minutes} minutes": "Gravação parada após {minutes} minutos",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "O vídeo desta aula é grande demais para salvar no celular ({size} MB). Aulas mais curtas salvam normalmente."
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "O vídeo desta aula é grande demais para salvar no celular ({size} MB). Aulas mais curtas salvam normalmente.",
+ "Phone connected. Take a photo.": "Celular conectado. Tire uma foto.",
+ "Not opening? Try another address of this computer:": "Não abre? Tente outro endereço deste computador:",
+ "Phone just keeps loading?": "O celular fica só carregando?",
+ "Try the other address above, if there is one.": "Tente o outro endereço acima, se houver.",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "Nas configurações do Windows, deixe esta rede Wi-Fi como Privada e libere o GazBoard no firewall.",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "Pause qualquer VPN ou bloqueador de anúncios no celular (como o AdGuard).",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "O Wi-Fi da escola costuma isolar os aparelhos: ative o roteador Wi-Fi do celular e conecte este computador a ele."
 }

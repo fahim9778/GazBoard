@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "Hinzugefügte Fotos: {n}",
  "Could not start: {error}": "Start fehlgeschlagen: {error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "Dieser Computer ist mit keinem Netzwerk verbunden. Verbinde ihn zuerst mit dem WLAN.",
- "Other addresses: {list}": "Weitere Adressen: {list}",
  "Waiting for a photo…": "Warte auf ein Foto…",
  "Picture from phone": "Bild vom Handy",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "Scanne das mit der Handykamera und nimm dann ein Foto auf. Es erscheint auf dem Board.",
  "Your phone and this computer must be on the same Wi-Fi.": "Handy und Computer müssen im selben WLAN sein.",
  "If Windows asks about network access, choose Allow.": "Wenn Windows nach Netzwerkzugriff fragt, wähle Zulassen.",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "Öffnet sich nicht auf dem Handy? Schul-WLANs trennen Geräte oft voneinander: Schalte den Hotspot am Handy ein und verbinde diesen Computer damit.",
  "Recording a lesson needs the GazBoard app on a computer": "Zum Aufnehmen einer Stunde brauchst du die GazBoard-App auf einem Computer",
  "Record without sound?": "Ohne Ton aufnehmen?",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "GazBoard konnte kein Mikrofon verwenden ({why}). Du kannst das Board trotzdem ohne deine Stimme aufnehmen.",
@@ -1353,5 +1351,12 @@
  "Stop recording": "Aufnahme beenden",
  "Record a lesson": "Stunde aufnehmen",
  "Recording stopped after {minutes} minutes": "Aufnahme nach {minutes} Minuten beendet",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "Das Video dieser Stunde ist zu groß, um es auf einem Handy zu speichern ({size} MB). Kürzere Stunden lassen sich problemlos speichern."
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "Das Video dieser Stunde ist zu groß, um es auf einem Handy zu speichern ({size} MB). Kürzere Stunden lassen sich problemlos speichern.",
+ "Phone connected. Take a photo.": "Handy verbunden. Mach ein Foto.",
+ "Not opening? Try another address of this computer:": "Öffnet sich nicht? Probier eine andere Adresse dieses Computers:",
+ "Phone just keeps loading?": "Das Handy lädt und lädt?",
+ "Try the other address above, if there is one.": "Probier die andere Adresse oben, falls es eine gibt.",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "Stell dieses WLAN in den Windows-Einstellungen auf Privat und lass GazBoard durch die Firewall.",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "Pausiere VPN oder Werbeblocker auf dem Handy (zum Beispiel AdGuard).",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "Schul-WLANs trennen Geräte oft voneinander: Schalte den Hotspot am Handy ein und verbinde diesen Computer damit."
 }

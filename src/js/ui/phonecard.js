@@ -75,12 +75,41 @@ export class PhoneCard {
     if (this.listening || !phoneAvailable()) return;
     this.listening = true;
     window.board.phone.onPhoto((p) => this.arrived(p));
+    window.board.phone.onVisit?.(() => this.visited());
+  }
+
+  /** A phone opened the page: say so, and put away the "cannot reach" help. */
+  visited() {
+    if (!this.el) return;
+    this.reached = true;
+    clearTimeout(this.helpTimer);
+    if (this.helpEl) this.helpEl.hidden = true;
+    if (!this.count) this.setStatus(t('Phone connected. Take a photo.'), 'ok');
+  }
+
+  /** Show the code for one of this computer's addresses (the first is the best guess). */
+  showLink(i) {
+    const links = (this.session && this.session.links) || [];
+    const l = links[i];
+    if (!l) return;
+    this.pick = i;
+    this.qrBox.replaceChildren(qrSvg(l.qr));
+    this.urlEl.textContent = l.url;
+    this.otherEl.replaceChildren();
+    const others = links.map((x, k) => ({ x, k })).filter(({ x, k }) => k !== i && !x.selfAssigned);
+    if (!others.length) return;
+    this.otherEl.appendChild(h('span', { class: 'phone-other-label' }, t('Not opening? Try another address of this computer:')));
+    for (const { x, k } of others) {
+      const b = h('button', { type: 'button', class: 'phone-addr', 'data-phone-addr': String(k), title: x.name || '' }, x.address);
+      b.addEventListener('click', () => this.showLink(k));
+      this.otherEl.appendChild(b);
+    }
   }
 
   async arrived(p) {
     // a photo still on its way when the card was closed is not wanted any more
     if (!this.el || !p || !p.bytes) return;
-    const obj = await insertPhonePhoto(this.app, p.bytes, p.mime);
+    const obj = await insertPhonePhoto(this.app, p.bytes, p.mime, this.count);
     if (!obj) return;
     this.count++;
     this.setStatus(t('Photos added: {n}', { n: this.count }), 'ok');
@@ -111,12 +140,15 @@ export class PhoneCard {
       this.setStatus(t('This computer is not on a network. Connect it to Wi-Fi first.'), 'bad');
       return res;
     }
-    this.qrBox.appendChild(qrSvg(res.qr));
-    this.urlEl.textContent = res.url;
-    // a computer with wifi and a cable has two addresses; the code uses the best, the others are listed for typing
-    const others = (res.links || []).slice(1).filter((l) => !l.selfAssigned).map((l) => l.url);
-    this.otherEl.textContent = others.length ? t('Other addresses: {list}', { list: others.join('  ') }) : '';
+    // a computer with Wi-Fi and a cable, or WSL, has more than one address: the code shows the best guess, and one
+    // press swaps it for another
+    this.reached = false;
+    this.showLink(0);
     this.setStatus(t('Waiting for a photo…'));
+    // nobody has opened the page after a while: the network is probably in the way, so say how to fix it
+    clearTimeout(this.helpTimer);
+    if (this.helpEl) this.helpEl.hidden = true;
+    this.helpTimer = setTimeout(() => { if (this.el && !this.reached && this.helpEl) this.helpEl.hidden = false; }, 20000);
     this.app.surface?.invalidate?.();
     return res;
   }
@@ -137,11 +169,18 @@ export class PhoneCard {
       this.statusEl,
       this.urlEl,
       this.otherEl,
-      h('p', { class: 'phone-hint' }, t('Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.')));
+      (this.helpEl = h('div', { class: 'phone-help', 'data-phone-help': '1', hidden: true },
+        h('strong', {}, t('Phone just keeps loading?')),
+        h('ul', {},
+          h('li', {}, t('Try the other address above, if there is one.')),
+          /Windows/.test(navigator.userAgent || '') ? h('li', {}, t('In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.')) : null,
+          h('li', {}, t('Pause any VPN or ad blocker on the phone (such as AdGuard).')),
+          h('li', {}, t('School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.'))))));
     (document.getElementById('stage') || document.body).appendChild(this.el);
   }
 
   async close() {
+    clearTimeout(this.helpTimer);
     const el = this.el;
     this.el = null; this.session = null;
     if (el) el.remove();

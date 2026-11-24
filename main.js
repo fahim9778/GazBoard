@@ -1190,7 +1190,8 @@ function phoneReceiver() {
   const { createPhoneReceiver } = require('./sync/phone.js');
   phoneService = createPhoneReceiver({
     // the bytes go to the window as they are; it checks them again and builds the picture
-    onPhoto: ({ bytes, mime }) => send('phone:photo', { bytes: new Uint8Array(bytes), mime })
+    onPhoto: ({ bytes, mime }) => send('phone:photo', { bytes: new Uint8Array(bytes), mime }),
+    onVisit: (v) => send('phone:visit', v)
   });
   return phoneService;
 }

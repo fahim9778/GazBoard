@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "已加入照片：{n}",
  "Could not start: {error}": "無法啟動：{error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "這台電腦沒有連上網路。請先連上 Wi-Fi。",
- "Other addresses: {list}": "其他位址：{list}",
  "Waiting for a photo…": "正在等待照片…",
  "Picture from phone": "來自手機的圖片",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "用手機相機掃描這個 QR 碼，然後拍照。照片會出現在白板上。",
  "Your phone and this computer must be on the same Wi-Fi.": "手機和這台電腦必須連在同一個 Wi-Fi 上。",
  "If Windows asks about network access, choose Allow.": "如果 Windows 詢問網路存取權限，請選擇「允許」。",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "手機打不開？學校的 Wi-Fi 常常會把裝置彼此隔開：開啟手機熱點，讓這台電腦連上它。",
  "Recording a lesson needs the GazBoard app on a computer": "錄製課程需要在電腦上使用 GazBoard 應用程式",
  "Record without sound?": "不帶聲音錄製？",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "GazBoard 無法使用麥克風（{why}）。你仍然可以只錄製白板，不錄你的聲音。",
@@ -1353,5 +1351,12 @@
  "Stop recording": "停止錄製",
  "Record a lesson": "錄製課程",
  "Recording stopped after {minutes} minutes": "錄製滿 {minutes} 分鐘，已停止",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "這堂課的影片太大，無法儲存在手機上（{size} MB）。較短的課程可以正常儲存。"
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "這堂課的影片太大，無法儲存在手機上（{size} MB）。較短的課程可以正常儲存。",
+ "Phone connected. Take a photo.": "手機已連線。拍照吧。",
+ "Not opening? Try another address of this computer:": "打不開？試試這台電腦的另一個位址：",
+ "Phone just keeps loading?": "手機一直在載入？",
+ "Try the other address above, if there is one.": "如果上面有另一個位址，試試那個。",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "在 Windows 設定裡把這個 Wi-Fi 設為「私人網路」，並允許 GazBoard 通過防火牆。",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "暫時關閉手機上的 VPN 或廣告封鎖應用程式（例如 AdGuard）。",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "學校的 Wi-Fi 常常會把裝置彼此隔開：開啟手機熱點，讓這台電腦連上它。"
 }

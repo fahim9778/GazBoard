@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "Fotos añadidas: {n}",
  "Could not start: {error}": "No se pudo iniciar: {error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "Este ordenador no está conectado a ninguna red. Conéctalo primero a una Wi-Fi.",
- "Other addresses: {list}": "Otras direcciones: {list}",
  "Waiting for a photo…": "Esperando una foto…",
  "Picture from phone": "Imagen desde el móvil",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "Escanea esto con la cámara del móvil y haz una foto. Aparecerá en la pizarra.",
  "Your phone and this computer must be on the same Wi-Fi.": "El móvil y este ordenador tienen que estar en la misma Wi-Fi.",
  "If Windows asks about network access, choose Allow.": "Si Windows pregunta por el acceso a la red, elige Permitir.",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "¿No se abre en el móvil? La Wi-Fi de los colegios suele aislar los dispositivos: activa la zona Wi-Fi del móvil y conecta este ordenador a ella.",
  "Recording a lesson needs the GazBoard app on a computer": "Para grabar una clase necesitas la app de GazBoard en un ordenador",
  "Record without sound?": "¿Grabar sin sonido?",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "GazBoard no pudo usar un micrófono ({why}). Aun así puedes grabar la pizarra sin tu voz.",
@@ -1353,5 +1351,12 @@
  "Stop recording": "Detener la grabación",
  "Record a lesson": "Grabar una clase",
  "Recording stopped after {minutes} minutes": "Grabación detenida a los {minutes} minutos",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "El vídeo de esta clase es demasiado grande para guardarlo en un móvil ({size} MB). Las clases más cortas se guardan sin problema."
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "El vídeo de esta clase es demasiado grande para guardarlo en un móvil ({size} MB). Las clases más cortas se guardan sin problema.",
+ "Phone connected. Take a photo.": "Móvil conectado. Haz una foto.",
+ "Not opening? Try another address of this computer:": "¿No se abre? Prueba otra dirección de este ordenador:",
+ "Phone just keeps loading?": "¿El móvil se queda cargando?",
+ "Try the other address above, if there is one.": "Prueba la otra dirección de arriba, si la hay.",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "En la configuración de Windows, marca esta Wi-Fi como privada y deja pasar a GazBoard por el firewall.",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "Pausa cualquier VPN o bloqueador de anuncios del móvil (como AdGuard).",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "La Wi-Fi de los colegios suele aislar los dispositivos: activa la zona Wi-Fi del móvil y conecta este ordenador a ella."
 }

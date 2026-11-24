@@ -70,6 +70,33 @@ function qrRows(text) {
   return rows;
 }
 
+/*
+ * Which of this computer's addresses a phone can actually reach.
+ *
+ * A Windows PC with WSL or Hyper-V has a virtual network card (vEthernet, 172.x)
+ * that only the PC itself can see - and Windows often lists it first. Put that
+ * in the QR code and the phone just spins. So real Wi-Fi and Ethernet go first,
+ * the usual home and school ranges (192.168.x, 10.x) before 172.16-31.x, and
+ * anything that looks like a virtual, VPN or Bluetooth card goes last - kept,
+ * never hidden, since now and then it is the right one.
+ */
+const VIRTUAL = /(vEthernet|WSL|Hyper-?V|VirtualBox|VMware|vmnet|vboxnet|docker|br-|virbr|Loopback|Tailscale|ZeroTier|Hamachi|TAP|TUN|utun|VPN|WireGuard|Npcap|Bluetooth|awdl|llw|bridge)/i;
+const REAL = /(Wi-?Fi|WLAN|Wireless|wlan|wlp|^en\d|^eth|Ethernet|LAN)/i;
+function rank(a) {
+  let r = 0;
+  if (a.selfAssigned) r += 1000;
+  if (VIRTUAL.test(a.name || '')) r += 100;
+  else if (REAL.test(a.name || '')) r -= 10;
+  const ip = a.address || '';
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) r += 20;
+  else if (/^10\./.test(ip)) r += 5;
+  return r;
+}
+/** Best first; ties keep the order the computer gave. */
+function rankAddresses(list) {
+  return list.map((a, i) => ({ a, i, r: rank(a) })).sort((x, y) => x.r - y.r || x.i - y.i).map((x) => x.a);
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /**
@@ -158,7 +185,7 @@ function expiredHtml(strings, lang) {
  * @param {number}  [opts.port]     preferred port
  */
 function createPhoneReceiver(opts) {
-  const { onPhoto, host = '0.0.0.0', port: wantPort = PHONE_PORT } = opts;
+  const { onPhoto, onVisit = () => {}, host = '0.0.0.0', port: wantPort = PHONE_PORT } = opts;
   let server = null, port = 0, token = null, strings = {}, lang = 'en', dir = 'ltr', count = 0;
   const sockets = new Set();
 
@@ -187,6 +214,8 @@ function createPhoneReceiver(opts) {
     }
     if (!m[2]) {
       if (req.method !== 'GET') return reply(res, 405, 'text/plain', 'Method not allowed');
+      // a phone got here: the card can stop wondering whether the network is in the way
+      try { onVisit({ address: String(req.headers.host || '').replace(/:\d+$/, '') }); } catch { /* only a nicety */ }
       const nonce = crypto.randomBytes(16).toString('base64');
       return reply(res, 200, 'text/html; charset=utf-8', pageHtml(strings, lang, dir, nonce), {
         'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; img-src blob: data:; script-src 'nonce-${nonce}'; connect-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'`
@@ -219,11 +248,12 @@ function createPhoneReceiver(opts) {
     req.on('error', () => {});
   }
 
-  /** The address to put in the code: the best one this computer has, plus the rest in case that one is wrong. */
+  /** The address to put in the code: the one a phone can most likely reach, plus the rest in case it is wrong - each with its own code. */
   function links() {
-    const addrs = localAddresses();
-    return addrs.map((a) => ({ name: a.name, address: a.address, selfAssigned: !!a.selfAssigned,
-      url: `http://${a.address}:${port}/p/${token}` }));
+    return rankAddresses(localAddresses()).map((a) => {
+      const url = `http://${a.address}:${port}/p/${token}`;
+      return { name: a.name, address: a.address, selfAssigned: !!a.selfAssigned, url, qr: qrRows(url) };
+    });
   }
 
   /**
@@ -271,4 +301,4 @@ function createPhoneReceiver(opts) {
   return { start, stop, get running() { return !!server; }, get port() { return port; }, qrRows };
 }
 
-module.exports = { createPhoneReceiver, sniff, qrRows, PHONE_PORT, MAX_PHOTO_BYTES, MAX_PHOTOS };
+module.exports = { createPhoneReceiver, sniff, qrRows, rankAddresses, PHONE_PORT, MAX_PHOTO_BYTES, MAX_PHOTOS };

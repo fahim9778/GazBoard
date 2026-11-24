@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "الصور المضافة: {n}",
  "Could not start: {error}": "تعذّر البدء: {error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "هذا الحاسوب غير متصل بأي شبكة. اتصل بشبكة Wi-Fi أولًا.",
- "Other addresses: {list}": "عناوين أخرى: {list}",
  "Waiting for a photo…": "بانتظار صورة…",
  "Picture from phone": "صورة من الهاتف",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "امسح هذا الرمز بكاميرا هاتفك، ثم التقط صورة. ستظهر على اللوح.",
  "Your phone and this computer must be on the same Wi-Fi.": "يجب أن يكون هاتفك وهذا الحاسوب على شبكة Wi-Fi نفسها.",
  "If Windows asks about network access, choose Allow.": "إذا سأل Windows عن الوصول إلى الشبكة، فاختر Allow.",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "لا يفتح على الهاتف؟ شبكات Wi-Fi في المدارس كثيرًا ما تعزل الأجهزة عن بعضها: شغّل نقطة الاتصال في هاتفك ووصّل هذا الحاسوب بها.",
  "Recording a lesson needs the GazBoard app on a computer": "تسجيل درس يحتاج إلى تطبيق GazBoard على حاسوب",
  "Record without sound?": "تسجيل بدون صوت؟",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "تعذّر على GazBoard استخدام الميكروفون ({why}). لا يزال بإمكانك تسجيل اللوح بدون صوتك.",
@@ -1353,5 +1351,12 @@
  "Stop recording": "أوقف التسجيل",
  "Record a lesson": "سجّل درسًا",
  "Recording stopped after {minutes} minutes": "توقّف التسجيل بعد {minutes} دقيقة",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "فيديو هذا الدرس أكبر من أن يُحفظ على هاتف ({size} MB). الدروس الأقصر تُحفظ بلا مشكلة."
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "فيديو هذا الدرس أكبر من أن يُحفظ على هاتف ({size} MB). الدروس الأقصر تُحفظ بلا مشكلة.",
+ "Phone connected. Take a photo.": "تم اتصال الهاتف. التقط صورة.",
+ "Not opening? Try another address of this computer:": "لا يفتح؟ جرّب عنوانًا آخر لهذا الحاسوب:",
+ "Phone just keeps loading?": "الهاتف يظل يحمّل فقط؟",
+ "Try the other address above, if there is one.": "جرّب العنوان الآخر أعلاه، إن وُجد.",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "في إعدادات Windows، اجعل شبكة Wi-Fi هذه خاصة (Private)، واسمح لـ GazBoard عبر جدار الحماية.",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "أوقف مؤقتًا أي VPN أو مانع إعلانات على الهاتف (مثل AdGuard).",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "شبكات Wi-Fi في المدارس كثيرًا ما تعزل الأجهزة عن بعضها: شغّل نقطة الاتصال في هاتفك ووصّل هذا الحاسوب بها."
 }

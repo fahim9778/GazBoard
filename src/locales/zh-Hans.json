@@ -1320,13 +1320,11 @@
  "Photos added: {n}": "已添加照片：{n}",
  "Could not start: {error}": "无法启动：{error}",
  "This computer is not on a network. Connect it to Wi-Fi first.": "这台电脑没有连接网络。请先连上 Wi-Fi。",
- "Other addresses: {list}": "其他地址：{list}",
  "Waiting for a photo…": "正在等待照片…",
  "Picture from phone": "来自手机的图片",
  "Scan this with the camera on your phone, then take a photo. It appears on the board.": "用手机相机扫描这个二维码，然后拍照。照片会出现在白板上。",
  "Your phone and this computer must be on the same Wi-Fi.": "手机和这台电脑必须连在同一个 Wi-Fi 上。",
  "If Windows asks about network access, choose Allow.": "如果 Windows 询问网络访问权限，请选择“允许”。",
- "Phone cannot open it? School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "手机打不开？学校的 Wi-Fi 常常会把设备彼此隔开：打开手机热点，让这台电脑连上它。",
  "Recording a lesson needs the GazBoard app on a computer": "录制课程需要在电脑上使用 GazBoard 应用",
  "Record without sound?": "不带声音录制？",
  "GazBoard could not use a microphone ({why}). You can still record the board without your voice.": "GazBoard 无法使用麦克风（{why}）。你仍然可以只录制白板，不录你的声音。",
@@ -1353,5 +1351,12 @@
  "Stop recording": "停止录制",
  "Record a lesson": "录制课程",
  "Recording stopped after {minutes} minutes": "录制满 {minutes} 分钟，已停止",
- "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "这节课的视频太大，无法保存在手机上（{size} MB）。较短的课程可以正常保存。"
+ "This lesson video is too big to save on a phone ({size} MB). Shorter lessons save fine.": "这节课的视频太大，无法保存在手机上（{size} MB）。较短的课程可以正常保存。",
+ "Phone connected. Take a photo.": "手机已连接。拍照吧。",
+ "Not opening? Try another address of this computer:": "打不开？试试这台电脑的另一个地址：",
+ "Phone just keeps loading?": "手机一直在加载？",
+ "Try the other address above, if there is one.": "如果上面有另一个地址，试试那个。",
+ "In Windows Settings, set this Wi-Fi to Private, and let GazBoard through the firewall.": "在 Windows 设置里把这个 Wi-Fi 设为“专用网络”，并允许 GazBoard 通过防火墙。",
+ "Pause any VPN or ad blocker on the phone (such as AdGuard).": "暂时关闭手机上的 VPN 或广告拦截应用（例如 AdGuard）。",
+ "School Wi-Fi often keeps devices apart: turn on the hotspot on your phone and connect this computer to it.": "学校的 Wi-Fi 常常会把设备彼此隔开：打开手机热点，让这台电脑连上它。"
 }

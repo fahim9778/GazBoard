@@ -213,15 +213,107 @@ export async function insertImageFiles(app, files, at) {
  * of the view, clear of what is already there, and left selected so it can be
  * moved or resized straight away. The view stays where it is.
  */
-export async function insertPhonePhoto(app, bytes, mime) {
+/**
+ * Where a phone photo goes: { x, y, w, h, covered } in board units. Exported for the suite.
+ * `covered` is true when there was no free room in view and it sits on top of things.
+ */
+export function phoneSpot(app, nw, nh, nth = 0) {
+  const sf = app.surface, cam = sf.cam, z = cam.z || 1;
+  const card = typeof document !== 'undefined' ? document.querySelector('[data-phone-card]') : null;
+  const cardW = card ? card.getBoundingClientRect().width + 32 : 0;
+  const TRAY = 140;
+  const usableW = Math.max(200, sf.width - cardW), usableH = Math.max(200, sf.height - TRAY);
+  // the part of the board on screen that the photo may use, in board units
+  const area = { x: (12 - cam.x) / z, y: (20 - cam.y) / z, w: (usableW - 24) / z, h: (usableH - 20) / z };
+  const cx = area.x + area.w / 2, cy = area.y + area.h / 2;
+  const fit = Math.min((usableW * 0.62) / z / nw, (usableH * 0.72) / z / nh);
+  // what is already showing in that part of the board
+  const gap = 12 / z;
+  const taken = [];
+  for (const o of app.store.objects) {
+    if (!o || o.hidden || o.opacity === 0) continue;
+    const b = boundsOf(o);
+    if (!b || !Number.isFinite(b.x)) continue;
+    if (b.x > area.x + area.w || b.x + b.w < area.x || b.y > area.y + area.h || b.y + b.h < area.y) continue;
+    taken.push(b);
+  }
+  const clear = (x, y, w, h) => !taken.some((b) => x < b.x + b.w + gap && x + w + gap > b.x && y < b.y + b.h + gap && y + h + gap > b.y);
+  for (const share of [1, 0.8, 0.65, 0.5, 0.4, 0.3]) {
+    const W = nw * fit * share, H = nh * fit * share;
+    if (W > area.w || H > area.h) continue;
+    // every place it could sit inside the area, nearest the middle first
+    const spots = [];
+    const N = 12;
+    for (let i = 0; i <= N; i++) {
+      for (let j = 0; j <= N; j++) {
+        const x = area.x + ((area.w - W) * i) / N, y = area.y + ((area.h - H) * j) / N;
+        spots.push({ x, y, d: Math.hypot(x + W / 2 - cx, y + H / 2 - cy) });
+      }
+    }
+    spots.sort((p, q) => p.d - q.d);
+    for (const p of spots) if (clear(p.x, p.y, W, H)) return { x: p.x, y: p.y, w: W, h: H, covered: false };
+  }
+  // no room anywhere in view: on top, in the middle, a step along for each photo after the first
+  const W = nw * fit, H = nh * fit, step = ((nth % 6) * 28) / z;
+  return { x: cx - W / 2 + step, y: cy - H / 2 + step, w: W, h: H, covered: true };
+}
+
+export async function insertPhonePhoto(app, bytes, mime, nth = 0) {
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
   if (!buf.length || !looksLikeImage(buf, ext)) { reportRejected(app, [t('Photo from phone')]); return null; }
   const dataUrl = await bytesToDataUrl(buf, mimeFor(ext));
-  const obj = await makeImageObject(app, dataUrl, t('Photo from phone'), 0, null);
+  /*
+   * Where you are looking, without covering your writing.
+   *
+   * A photo snapped in the middle of a lesson is there to be talked about NOW,
+   * so it never goes out of view (the ordinary "nearest empty patch" rule can
+   * send it far away on a full board). Within the view - beside the phone card,
+   * above the pen tray - it takes the empty spot nearest the middle, big enough
+   * to talk about. If the view is busy it tries a little smaller; only when
+   * there is truly no room does it go on top, in the middle, selected so one
+   * drag moves it off the writing.
+   */
+  const { w: nw, h: nh } = await measure(dataUrl);
+  const spot = phoneSpot(app, nw, nh, nth);
+  const obj = fitOntoPaper(app, { id: uid('img'), type: 'image', x: spot.x, y: spot.y, w: spot.w, h: spot.h, rotation: 0, src: dataUrl, name: t('Photo from phone') });
   app.store.addMany([obj], 'insert image');
   app.setSelection([obj.id]);
+  // on paper, keeping it on the page can move it out of view: the board then glides over to it
+  revealSmoothly(app, boundsOf(obj));
   return obj;
+}
+
+/**
+ * Glide the board so `box` is in view - beside the phone card and above the pen
+ * tray - if it is not already. A short, eased slide rather than a jump, so the
+ * room can see where the picture is. Zooms out only when the box is bigger than
+ * the view. Resolves when the slide is over; false if nothing needed to move.
+ */
+export function revealSmoothly(app, box, ms = 450) {
+  const sf = app.surface, cam = sf.cam;
+  if (!box || !sf.width) return Promise.resolve(false);
+  const card = typeof document !== 'undefined' ? document.querySelector('[data-phone-card]') : null;
+  const cardW = card ? card.getBoundingClientRect().width + 32 : 0;
+  const usableW = Math.max(200, sf.width - cardW), usableH = Math.max(200, sf.height - 140);
+  const z0 = cam.z, pad = 16;
+  const sx = box.x * z0 + cam.x, sy = box.y * z0 + cam.y;
+  if (sx >= pad && sy >= pad && sx + box.w * z0 <= usableW - pad && sy + box.h * z0 <= usableH - pad) return Promise.resolve(false);
+  // the zoom stays, unless the picture would not fit at it
+  const z1 = Math.min(z0, (usableW - pad * 2) / box.w, (usableH - pad * 2) / box.h);
+  const x1 = usableW / 2 - (box.x + box.w / 2) * z1, y1 = usableH / 2 - (box.y + box.h / 2) * z1;
+  const x0 = cam.x, y0 = cam.y, t0 = performance.now();
+  const ease = (k) => 1 - Math.pow(1 - k, 3);
+  return new Promise((resolve) => {
+    const step = () => {
+      const k = Math.min(1, (performance.now() - t0) / ms), e = ease(k);
+      cam.z = z0 + (z1 - z0) * e; cam.x = x0 + (x1 - x0) * e; cam.y = y0 + (y1 - y0) * e;
+      sf.invalidate();
+      if (k < 1) requestAnimationFrame(step);
+      else { app.syncZoom?.(); resolve(true); }
+    };
+    requestAnimationFrame(step);
+  });
 }
 
 async function makeImageObject(app, dataUrl, name, index = 0, at) {

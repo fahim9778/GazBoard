@@ -239,7 +239,8 @@ contextBridge.exposeInMainWorld('board', {
   phone: {
     start: (opts) => ipcRenderer.invoke('phone:start', opts),
     stop: () => ipcRenderer.invoke('phone:stop'),
-    onPhoto: (fn) => ipcRenderer.on('phone:photo', (_e, p) => fn(p))
+    onPhoto: (fn) => ipcRenderer.on('phone:photo', (_e, p) => fn(p)),
+    onVisit: (fn) => ipcRenderer.on('phone:visit', (_e, v) => fn(v))
   },
   sync: {
     state: () => ipcRenderer.invoke('sync:state'),
