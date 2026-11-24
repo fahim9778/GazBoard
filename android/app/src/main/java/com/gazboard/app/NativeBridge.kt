@@ -34,7 +34,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
           if (converter != null) require(method in allowedConversion) { "Unavailable during conversion" }
           val argsFile = request.str("argsFile")
           val args = if (argsFile.isEmpty()) request["args"] ?: JsonNull
-            else parse(app.files.file(argsFile).readText())
+            else parse(app.files.readable(argsFile).readText())
           val result = dispatch(method, args)
           respond(json("id" to id), result)
         } catch (e: Exception) {
@@ -90,7 +90,7 @@ class NativeBridge(private val activity: MainActivity, private val web: WebView,
         "userData" to "On this Android device", "smoke" to false, "isWeb" to false, "isAndroid" to true,
         "pendingBoardFile" to activity.startupFilePending, "store" to activity.installStore(),
         "capabilities" to json("lan" to true, "nativeFiles" to true, "office" to listOf("docx", "pptx", "txt")))
-      "blob:begin" -> json("token" to f.begin(obj().long("size", -1)))
+      "blob:begin" -> json("token" to f.begin(obj().long("size", -1), obj().bool("saving")))
       "blob:append" -> f.append(obj().str("token"), obj().long("offset", -1), obj().str("data"))
       "blob:finish" -> f.finish(obj().str("token"))
       "blob:release" -> f.release(obj().str("token"))

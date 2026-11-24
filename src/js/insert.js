@@ -206,6 +206,24 @@ export async function insertImageFiles(app, files, at) {
   return objs;
 }
 
+/**
+ * A photo sent from a phone (Picture from phone, ui/phonecard.js). The bytes are
+ * checked again here - the receiver already did, but this side trusts nothing it
+ * did not look at itself - then placed like any other picture: near the middle
+ * of the view, clear of what is already there, and left selected so it can be
+ * moved or resized straight away. The view stays where it is.
+ */
+export async function insertPhonePhoto(app, bytes, mime) {
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  if (!buf.length || !looksLikeImage(buf, ext)) { reportRejected(app, [t('Photo from phone')]); return null; }
+  const dataUrl = await bytesToDataUrl(buf, mimeFor(ext));
+  const obj = await makeImageObject(app, dataUrl, t('Photo from phone'), 0, null);
+  app.store.addMany([obj], 'insert image');
+  app.setSelection([obj.id]);
+  return obj;
+}
+
 async function makeImageObject(app, dataUrl, name, index = 0, at) {
   const { w, h } = await measure(dataUrl);
   const maxW = 640;

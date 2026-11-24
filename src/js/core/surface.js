@@ -1295,10 +1295,9 @@ export class Surface {
    * coordinates so the dot stays on the word it is pointing at when the canvas
    * is panned or zoomed underneath it.
    */
-  drawLaser(ctx) {
+  drawLaser(ctx, now = performance.now()) {
     const pts = this.laser;
     if (!pts.length) return;
-    const now = performance.now();
     const cam = this.cam;
     const rgb = hexToRgb(this.laserColor || '#ff2d2d');
     const head = pts[pts.length - 1];

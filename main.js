@@ -1182,6 +1182,18 @@ function printHtmlToPdf(html, { widthIn, heightIn, landscape = false }) {
  *  Settings behaves exactly as it did before any of this existed.
  * ------------------------------------------------------------------ */
 let syncService = null;
+let phoneService = null;
+
+/** The picture-from-phone receiver, made the first time somebody opens its card. */
+function phoneReceiver() {
+  if (phoneService) return phoneService;
+  const { createPhoneReceiver } = require('./sync/phone.js');
+  phoneService = createPhoneReceiver({
+    // the bytes go to the window as they are; it checks them again and builds the picture
+    onPhoto: ({ bytes, mime }) => send('phone:photo', { bytes: new Uint8Array(bytes), mime })
+  });
+  return phoneService;
+}
 
 /**
  * Boards waiting on an answer from the window, by ticket.
@@ -1661,6 +1673,40 @@ function ipc() {
     } catch { return []; }
   });
 
+  /*
+   * Picture from phone (sync/phone.js). A small web server that only exists
+   * while its card is open on the board: the card's ✕ stops it, and so does
+   * quitting. Loaded on demand, so a machine that never uses it never binds.
+   */
+  ipcMain.handle('phone:start', async (_e, opts) => {
+    try { return { ok: true, ...(await phoneReceiver().start(opts || {})) }; }
+    catch (e) { return { ok: false, error: e.message || String(e) }; }
+  });
+  ipcMain.handle('phone:stop', async () => { if (phoneService) await phoneService.stop(); return true; });
+
+  /*
+   * Record a lesson: the microphone. macOS asks the person once and remembers -
+   * but only for an app that says what it wants the microphone for (the
+   * NSMicrophoneUsageDescription line in its Info.plist). An app without that
+   * line that touches the microphone is closed by macOS on the spot, so this
+   * checks first and says no rather than let that happen. Windows and Linux
+   * ask in their own settings; the window finds out when it tries.
+   */
+  ipcMain.handle('lesson:mic', async () => {
+    if (process.platform !== 'darwin') return true;
+    try {
+      if (app.isPackaged) {
+        const plist = fs.readFileSync(path.join(process.resourcesPath, '..', 'Info.plist'), 'utf8');
+        if (!plist.includes('NSMicrophoneUsageDescription')) return false;
+      }
+      const { systemPreferences } = require('electron');
+      const now = systemPreferences.getMediaAccessStatus('microphone');
+      if (now === 'granted') return true;
+      if (now === 'denied' || now === 'restricted') return false;
+      return await systemPreferences.askForMediaAccess('microphone');
+    } catch { return false; }
+  });
+
   ipcMain.handle('boards:last', () => getLastBoard());
   // idempotent, and safe to call any time: it only ever copies files that are missing
   ipcMain.handle('boards:migrate', () => migrateLegacyData());
@@ -1948,6 +1994,7 @@ app.on('will-quit', () => {
   if (updaterInstance) { try { updaterInstance.onQuit(); } catch { /* the old version stays */ } }
   declineAllPending();
   if (syncService) { try { syncService.stop(); } catch {} }
+  if (phoneService) { try { phoneService.stop(); } catch {} }
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

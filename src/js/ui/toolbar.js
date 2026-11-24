@@ -11,6 +11,8 @@ import { EMOJI_GROUPS, searchEmoji } from '../core/emoji.js';
 import { inkPaint, isDarkBoard, isDarkColor } from '../core/render.js';
 import { t } from '../i18n.js';
 import { rememberRecentPen } from './radial.js';
+import { phoneAvailable } from './phonecard.js';
+import { lessonAvailable } from '../lesson.js';
 
 const TOOL_ICON = {
   select: 'select', lasso: 'lasso', pen: 'pen', highlighter: 'highlighter',
@@ -362,6 +364,7 @@ function initPhoneToolbar(app, bar) {
       menuItem(app.ruler.visible ? t('Hide ruler') : t('Ruler'), 'ruler', () => app.command('ruler'), { on: app.ruler.visible }),
       h('div', { class: 'menu-sep' }),
       menuItem(t('Picture…'), 'image', () => app.command('insert.image')),
+      phoneAvailable() ? menuItem(t('Picture from phone…'), 'phone', () => app.command('insert.phone')) : null,
       menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
       menuItem(t('Table'), 'table', () => app.command('insert.table')),
       menuItem(t('Answer cover'), 'curtain', () => app.command('insert.curtain')),
@@ -869,6 +872,8 @@ function teachingItems(app) {
     menuItem(app.timer?.visible ? t('Close the class timer') : t('Class timer'), 'timer', () => app.command('timer.open')),
     menuItem(app.spotlight?.on ? t('Turn the spotlight off') : t('Spotlight'), 'laser', () => app.command('spotlight'), { key: isPhoneLayout() || document.documentElement?.dataset.platform === 'android' ? '' : 'Ctrl+Alt+S' }),
     menuItem(app.spinner?.visible ? t('Close the spinner wheel') : t('Spinner wheel'), 'spinner', () => app.command('spinner.open')),
+    lessonAvailable() ? menuItem(app.lessonRec?.recording ? t('Stop recording') : t('Record a lesson'), 'record', () => app.command('lesson.record'),
+      { key: isPhoneLayout() ? '' : 'Ctrl+Alt+R', disabled: !!app.lessonRec?.busy && !app.lessonRec?.recording }) : null,
     menuItem(t('Cover answers again'), 'curtain', () => app.command('curtain.coverAll'), { disabled: !lifted })
   ];
 }
@@ -876,6 +881,7 @@ function teachingItems(app) {
 export function openInsertPopover(app, anchor) {
   const body = h('div', { class: 'menu' },
     menuItem(t('Image…'), 'image', () => app.command('insert.image')),
+    phoneAvailable() ? menuItem(t('Picture from phone…'), 'phone', () => app.command('insert.phone')) : null,
     menuItem(t('Document (Word, PowerPoint, PDF)…'), 'doc', () => app.command('insert.document')),
     menuItem(t('Table'), 'table', () => app.command('insert.table')),
     menuItem(t('Maths'), 'maths', () => app.command('insert.math')),

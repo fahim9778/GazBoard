@@ -106,7 +106,8 @@
       "darkModeSupport": true,
       "extendInfo": {
         "NSHighResolutionCapable": true,
-        "LSMinimumSystemVersion": "11.0"
+        "LSMinimumSystemVersion": "11.0",
+        "NSMicrophoneUsageDescription": "GazBoard records your voice with the board when you record a lesson. The recording stays on this computer."
       }
     },
     "linux": {
@@ -182,6 +183,12 @@
           "type": "link",
           "path": "/Applications"
         }
+      ]
+    },
+    "appx": {
+      "capabilities": [
+        "runFullTrust",
+        "microphone"
       ]
     }
   },

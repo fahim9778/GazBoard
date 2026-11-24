@@ -64,6 +64,7 @@ export class Store {
     this.log = [];                 // append-only op log (for future sync)
     this._subs = new Set();
     this._opSubs = new Set();
+    this._appliedSubs = new Set();
     this._muted = 0;
     // Bumped on every mutation. The renderer uses it to tell whether a cached
     // frame is still good, which is cheaper and safer than comparing documents.
@@ -75,6 +76,14 @@ export class Store {
   /* ---------------- subscriptions ---------------- */
   subscribe(fn) { this._subs.add(fn); return () => this._subs.delete(fn); }
   onOp(fn) { this._opSubs.add(fn); return () => this._opSubs.delete(fn); }
+  /**
+   * Every op as it is applied to the board - edits, undo, redo and changes from
+   * another device alike - unlike onOp, which only hears new edits. The lesson
+   * recorder listens here, so a video shows an undo exactly as the room saw it.
+   * Nobody listening costs one size check per change.
+   */
+  onApplied(fn) { this._appliedSubs.add(fn); return () => this._appliedSubs.delete(fn); }
+  _told(ops) { if (this._appliedSubs.size) for (const op of ops) for (const f of this._appliedSubs) f(op); }
   emit(reason = 'change') { if (this._muted) return; for (const f of this._subs) f(reason, this.doc); }
 
   /* ---------------- reading ---------------- */
@@ -147,6 +156,7 @@ export class Store {
     if (this.frozen) { this.onFrozen?.(label); return; }
     const inverse = [];
     for (const op of ops) { inverse.unshift(this._invert(op)); this._apply(op); }
+    this._told(ops);
     this.undoStack.push({ label, ops, inverse });
     if (this.undoStack.length > this.maxUndo) this.undoStack.shift();
     this.redoStack.length = 0;
@@ -204,13 +214,14 @@ export class Store {
   }
 
   /** Apply ops from a remote peer - no undo entry, no rebroadcast. */
-  applyRemote(ops) { for (const op of ops) this._apply(op); this.emit('remote'); }
+  applyRemote(ops) { for (const op of ops) this._apply(op); this._told(ops); this.emit('remote'); }
 
   undo() {
     if (this.frozen) { this.onFrozen?.('undo'); return false; }
     const tx = this.undoStack.pop();
     if (!tx) return false;
     for (const op of tx.inverse) this._apply(op);
+    this._told(tx.inverse);
     this.redoStack.push(tx);
     this.emit('undo');
     return true;
@@ -221,6 +232,7 @@ export class Store {
     const tx = this.redoStack.pop();
     if (!tx) return false;
     for (const op of tx.ops) this._apply(op);
+    this._told(tx.ops);
     this.undoStack.push(tx);
     this.emit('redo');
     return true;

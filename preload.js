@@ -230,6 +230,17 @@ contextBridge.exposeInMainWorld('board', {
    * LAN sync. Every call is inert until sync.start() has been made, so a build
    * whose owner never turns it on opens no socket and announces nothing.
    */
+  /*
+   * Picture from phone: start() opens for photos and returns the address and its
+   * QR code; stop() closes again. Each photo arrives through onPhoto as bytes.
+   */
+  /** Record a lesson: on a Mac, ask for the microphone the way macOS wants. True everywhere else. */
+  askMicrophone: () => ipcRenderer.invoke('lesson:mic'),
+  phone: {
+    start: (opts) => ipcRenderer.invoke('phone:start', opts),
+    stop: () => ipcRenderer.invoke('phone:stop'),
+    onPhoto: (fn) => ipcRenderer.on('phone:photo', (_e, p) => fn(p))
+  },
   sync: {
     state: () => ipcRenderer.invoke('sync:state'),
     start: () => ipcRenderer.invoke('sync:start'),

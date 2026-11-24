@@ -1,6 +1,7 @@
 // Right-click menu and the floating selection toolbar.
 
 import { inkReaderAvailable, readableInk } from '../handwriting.js';
+import { phoneAvailable } from './phonecard.js';
 import { h, openPopover, closePopover } from './popover.js';
 import { icon } from './icons.js';
 import { t } from '../i18n.js';
@@ -96,6 +97,7 @@ export function showContextMenu(app, e, fromSelectionBar = false) {
     menu.appendChild(item(t('Sticky note here'), 'note', () => app.addNoteAt(wp)));
     menu.appendChild(item(t('Text here'), 'text', () => app.addTextAt(wp)));
     menu.appendChild(item(t('Insert image…'), 'image', () => app.command('insert.image')));
+    if (phoneAvailable()) menu.appendChild(item(t('Picture from phone…'), 'phone', () => app.command('insert.phone')));
     menu.appendChild(item(t('Insert maths'), 'maths', () => app.command('insert.math')));
     menu.appendChild(item(t('Insert graph'), 'graph', () => app.command('insert.graph')));
     menu.appendChild(item(t('Insert document…'), 'doc', () => app.command('insert.document')));

@@ -77,8 +77,9 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       catch (e) { clearTimeout(timer); pending.delete(id); reject(e); }
     });
   }
-  async function upload(bytes) {
-    const { token } = await raw('blob:begin', { size: bytes.byteLength });
+  /** Hand bytes to the app in pieces. `saving`: a file going straight out to where the person chose (up to 1 GB). */
+  async function upload(bytes, saving = false) {
+    const { token } = await raw('blob:begin', saving ? { size: bytes.byteLength, saving: true } : { size: bytes.byteLength });
     try {
       for (let offset = 0; offset < bytes.byteLength; offset += CHUNK_BYTES) {
         const chunk = bytes.subarray(offset, offset + CHUNK_BYTES);
@@ -110,7 +111,7 @@ export function createAndroidAdapter(native = window.GazBoardNative) {
       const bytes = typeof data === 'string' ? new TextEncoder().encode(data)
         : data instanceof ArrayBuffer ? new Uint8Array(data)
         : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-      const token = await upload(bytes);
+      const token = await upload(bytes, true);
       try { return await call('fs:writeFile', { filePath, token }); }
       finally { raw('blob:release', { token }).catch(() => {}); }
     },

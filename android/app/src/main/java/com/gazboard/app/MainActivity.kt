@@ -66,6 +66,13 @@ class MainActivity : ComponentActivity() {
   private var conversion: DocumentConverter? = null
   private val dropGrants = mutableListOf<DragAndDropPermissions>()
   private var folderPicker: CompletableFuture<Uri?>? = null
+  /** The page's request for the microphone, held while Android asks the person. */
+  private var pendingMic: PermissionRequest? = null
+  private val micLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+    val request = pendingMic ?: return@registerForActivityResult
+    pendingMic = null
+    if (granted) request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) else request.deny()
+  }
   private val folderLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     val waiting = folderPicker
     folderPicker = null
@@ -175,7 +182,25 @@ class MainActivity : ComponentActivity() {
       overScrollMode = android.view.View.OVER_SCROLL_NEVER
       WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
       webChromeClient = object : WebChromeClient() {
-        override fun onPermissionRequest(request: PermissionRequest) { request.deny() }
+        /*
+         * The page may have the microphone - for Record a lesson - and nothing
+         * else: never the camera, never for any page but GazBoard's own. Android
+         * asks the person the first time (and remembers the answer); a "no"
+         * there is a "no" here, and the page offers to record without sound.
+         */
+        override fun onPermissionRequest(request: PermissionRequest) {
+          val onlyMic = request.resources.isNotEmpty() && request.resources.all { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE }
+          if (!onlyMic || request.origin.toString().trimEnd('/') != ORIGIN) { request.deny(); return }
+          if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)); return
+          }
+          pendingMic?.deny()
+          pendingMic = request
+          micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+        override fun onPermissionRequestCanceled(request: PermissionRequest) {
+          if (pendingMic === request) pendingMic = null
+        }
       }
       webViewClient = object : WebViewClient() {
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {

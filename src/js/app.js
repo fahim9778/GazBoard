@@ -39,6 +39,8 @@ import { SpinnerWheel } from './ui/spinner.js';
 import { PageStrip } from './ui/pagestrip.js';
 import { createPanels } from './ui/panels.js';
 import { showContextMenu, updateSelectionBar } from './ui/contextmenu.js';
+import { PhoneCard } from './ui/phonecard.js';
+import { LessonRecorder } from './lesson.js';
 import { RadialMenu } from './ui/radial.js';
 import { closePopover, popoverOpen, openPopover, h } from './ui/popover.js';
 import { icon } from './ui/icons.js';
@@ -294,6 +296,10 @@ class App {
       names: this.settings.spinnerNames, box: this.settings.spinnerBox, removeWinner: this.settings.spinnerRemove,
       onSave: (st) => { Object.assign(this.settings, { spinnerNames: st.names, spinnerBox: st.box, spinnerRemove: st.removeWinner }); this.saveSettings(); }
     });
+    // Picture from phone: a card with a QR code; desktop only (see ui/phonecard.js)
+    this.phoneCard = new PhoneCard(this);
+    // Record a lesson: voice and board together, made into a video afterwards (see lesson.js)
+    this.lessonRec = new LessonRecorder(this);
     this.wireGlobalEvents();
     this.initDismissal();
     this.wireStore();
@@ -2529,6 +2535,8 @@ class App {
       case 'view.background': this.panels.background(); break;
 
       case 'insert.image': pickAndInsertImage(this); break;
+      case 'insert.phone': return this.phoneCard.open();
+      case 'lesson.record': return this.lessonRec.busy && !this.lessonRec.recording ? null : this.lessonRec.toggle();
       case 'insert.math': this.beginMathEdit(null); break;
       case 'insert.graph': return this.insertGraph();
       case 'insert.document': pickAndInsertDocument(this); break;
@@ -4758,6 +4766,7 @@ class App {
     if (mod && e.altKey && !e.shiftKey && e.code === 'KeyV') { e.preventDefault(); this.toggleViewMode(); return; }
     // The spotlight: Ctrl+Alt+S, or Cmd+Option+S. [ and ] size it while it is on.
     if (mod && e.altKey && !e.shiftKey && e.code === 'KeyS') { e.preventDefault(); this.command('spotlight'); return; }
+    if (mod && e.altKey && !e.shiftKey && e.code === 'KeyR') { e.preventDefault(); this.command('lesson.record'); return; }
     if (this.spotlight?.on && !mod && (e.key === '[' || e.key === ']')) { e.preventDefault(); this.spotlight.resize(e.key === ']' ? 1.15 : 1 / 1.15); return; }
 
     // F5 presents, as it does in every slide program; Shift+F5 too.

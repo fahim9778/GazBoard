@@ -21278,6 +21278,333 @@ module.exports.run = async (win, app) => {
       && !/\bnull\b/.test(storageSettings.text),
     JSON.stringify(storageSettings));
 
+  /*
+   * Picture from phone.
+   *
+   * The card opens a tiny web server and shows a QR code for it. A phone's
+   * browser loads the page, sends a photo back, and the photo lands on the
+   * board near the middle of the view. Only this session's code works, only
+   * pictures are taken, and closing the card shuts the door for good. The
+   * suite plays the phone over loopback, exactly as a phone would talk to it.
+   */
+  {
+    const httpP = require('node:http');
+    const vm = require('node:vm');
+    const ask = (port, method, pathName, body, headers = {}) => new Promise((resolve) => {
+      // a fresh connection each time, as separate phone requests would be
+      const req = httpP.request({ host: '127.0.0.1', port, path: pathName, method, headers, timeout: 8000, agent: false }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', (e) => resolve({ status: 0, error: e.code || e.message }));
+      req.on('timeout', () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
+      if (body) req.write(body);
+      req.end();
+    });
+    // a real 2x2 PNG, the smallest honest picture there is
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DAwMDAxMDAwMDAAAANBAEB1Zr9VQAAAABJRU5ErkJggg==', 'base64');
+
+    const opened = await js(`
+      const a = window.app;
+      a.panels.close?.();
+      const { openInsertPopover } = await import('app://board/js/ui/toolbar.js');
+      const anchor = document.querySelector('[data-pop]') || document.body;
+      openInsertPopover(a, anchor);
+      const offered = [...document.querySelectorAll('.menu .menu-item, .menu button')].some((b) => /Picture from phone/.test(b.textContent));
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      a.surface.cam.x = a.surface.width / 2; a.surface.cam.y = a.surface.height / 2; a.surface.cam.z = 1;
+      const had = a.store.objects.length;
+      const res = await a.command('insert.phone');
+      const card = document.querySelector('[data-phone-card]');
+      return { offered, had, ok: res && res.ok, port: res && res.port, token: res && res.token, url: res && res.url,
+        qrRows: res && res.qr ? res.qr.length : 0, square: !!(res && res.qr && res.qr.every((r) => r.length === res.qr.length)),
+        svg: !!card?.querySelector('svg.phone-qr path'), status: card?.querySelector('.phone-status')?.textContent,
+        shownUrl: card?.querySelector('[data-phone-url]')?.textContent, error: res && res.error };
+    `);
+    check('Picture from phone is offered in the Insert menu on the desktop app',
+      opened.offered === true, `offered: ${opened.offered}`);
+    check('opening it starts the receiver and shows a QR code for this session',
+      opened.ok && opened.port > 0 && /^[0-9a-f]{32}$/.test(opened.token || '') && opened.svg && opened.qrRows >= 21 && opened.square
+        && opened.url && opened.shownUrl === opened.url && opened.url.endsWith('/p/' + opened.token),
+      JSON.stringify(opened));
+
+    const P = opened.port, T = opened.token;
+    const page = await ask(P, 'GET', `/p/${T}`);
+    let scriptOk = false, scriptErr = '';
+    const m = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(page.body || '');
+    try { if (m) { new vm.Script(m[1]); scriptOk = true; } } catch (e) { scriptErr = e.message; }
+    check('the phone page opens with its two buttons, locked down, and its script is sound',
+      page.status === 200 && /Take a photo/.test(page.body) && /Choose a picture/.test(page.body)
+        && /capture="environment"/.test(page.body) && /script-src 'nonce-/.test((page.headers || {})['content-security-policy'] || '')
+        && (page.headers || {})['cache-control'] === 'no-store' && scriptOk,
+      `status ${page.status}, csp ${page.headers && page.headers['content-security-policy']}, script ${scriptOk ? 'compiles' : 'broken: ' + scriptErr}`);
+
+    const wrong = await ask(P, 'GET', `/p/${'0'.repeat(32)}`);
+    const wrongPost = await ask(P, 'POST', `/p/${'0'.repeat(32)}/photo`, png, { 'content-type': 'image/png' });
+    const elsewhere = await ask(P, 'GET', '/');
+    check('a wrong code opens nothing and cannot send anything',
+      wrong.status === 404 && /expired/.test(wrong.body) && wrongPost.status === 404 && elsewhere.status === 404,
+      `page ${wrong.status}, send ${wrongPost.status}, root ${elsewhere.status}`);
+
+    const notPic = await ask(P, 'POST', `/p/${T}/photo`, Buffer.from('<svg onload=alert(1)>'), { 'content-type': 'image/png' });
+    const huge = await ask(P, 'POST', `/p/${T}/photo`, Buffer.alloc(1024), { 'content-type': 'image/jpeg', 'content-length': String(30 * 1024 * 1024) });
+    const sent = await ask(P, 'POST', `/p/${T}/photo`, png, { 'content-type': 'image/png' });
+    const landed = await js(`
+      const a = window.app;
+      for (let i = 0; i < 60 && a.store.objects.length <= ${opened.had}; i++) await new Promise((r) => setTimeout(r, 50));
+      const o = a.store.objects[a.store.objects.length - 1];
+      const v = a.surface.cam.viewport(a.surface.width, a.surface.height);
+      const cx = o ? o.x + o.w / 2 : NaN, cy = o ? o.y + o.h / 2 : NaN;
+      return { added: a.store.objects.length - ${opened.had}, type: o && o.type, name: o && o.name, png: !!(o && /^data:image\\/png/.test(o.src)),
+        inView: cx > v.x && cx < v.x + v.w && cy > v.y && cy < v.y + v.h, selected: !!(o && a.surface.selection.has(o.id)),
+        status: document.querySelector('[data-phone-card] .phone-status')?.textContent };
+    `);
+    check('something that is not a picture is turned away, and so is anything over the size limit',
+      notPic.status === 415 && (huge.status === 413 || huge.status === 0),
+      `not a picture: ${notPic.status}, 30 MB: ${huge.status || huge.error}`);
+    check('a photo from the phone lands on the board in view, selected, and the card counts it',
+      sent.status === 200 && landed.added === 1 && landed.type === 'image' && landed.png && landed.inView && landed.selected
+        && /1/.test(landed.status || ''),
+      `send ${sent.status}; ${JSON.stringify(landed)}`);
+
+    // closing the card closes the door: the server is gone, and a new session's code is a new code
+    const closed = await js(`await window.app.phoneCard.close(); return !document.querySelector('[data-phone-card]');`);
+    const afterClose = await ask(P, 'GET', `/p/${T}`);
+    const again = await js(`const r = await window.app.command('insert.phone'); return { port: r.port, token: r.token };`);
+    const oldCode = await ask(again.port, 'POST', `/p/${T}/photo`, png, { 'content-type': 'image/png' });
+    const objsBefore = await js(`await new Promise((r) => setTimeout(r, 200)); return window.app.store.objects.length;`);
+    await js(`await window.app.phoneCard.close();`);
+    check('closing the card stops the receiver, and an old code never works again',
+      closed && afterClose.status === 0 && again.token !== T && oldCode.status === 404 && objsBefore === opened.had + 1,
+      `card gone ${closed}, after close ${afterClose.status || afterClose.error}, new code ${again.token !== T}, old code ${oldCode.status}, objects ${opened.had + 1} expected, ${objsBefore} found`);
+    await js(`window.app.store.undo(); window.app.setSelection([]);`);
+  }
+
+  /*
+   * Record a lesson.
+   *
+   * Voice and board together, made into one video afterwards. The suite plays
+   * the teacher: a steady tone stands in for the voice, a pen writes two lines,
+   * the view pans, one line is undone, the recording is paused and resumed.
+   * Then the video is opened the way a player would open it and checked: the
+   * right length, sharp, the sound there, the ink there, the undone line gone.
+   */
+  {
+    const offered = await js(`
+      const a = window.app;
+      const { openMorePopover } = await import('app://board/js/ui/toolbar.js');
+      openMorePopover(a, document.querySelector('[data-pop]') || document.body);
+      const items = [...document.querySelectorAll('.menu .menu-item, .menu button')].map((b) => b.textContent);
+      (await import('app://board/js/ui/popover.js')).closePopover();
+      return { record: items.some((x) => /Record a lesson/.test(x)), key: items.some((x) => /Record a lesson.*Ctrl\\+Alt\\+R/.test(x)) };
+    `);
+    check('Record a lesson is in the More menu, with its shortcut', offered.record && offered.key, JSON.stringify(offered));
+
+    const rec = await js(`
+      const a = window.app, it = a.interaction, sf = a.surface;
+      a.newBoard(true);
+      sf.cam.x = 0; sf.cam.y = 0; sf.cam.z = 1;
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const ac = new AudioContext();
+      const osc = ac.createOscillator(); osc.frequency.value = 440;
+      const dest = ac.createMediaStreamDestination(); osc.connect(dest); osc.start();
+      const wall0 = performance.now();
+      const started = await a.lessonRec.start({ stream: dest.stream });
+      const bar = !!document.querySelector('[data-lesson-bar]');
+      const rect = sf.canvas.getBoundingClientRect();
+      const mk = (x, y, b) => ({ pointerId: 1, pointerType: 'pen', button: 0, buttons: b, clientX: rect.left + x, clientY: rect.top + y, shiftKey: false, altKey: false, pressure: 0.6 });
+      a.setTool('pen');
+      // times on the lesson's own clock: starting up (finding an encoder, opening the sound) takes longer on some machines
+      const L = () => a.lessonRec.now();
+      await wait(250);
+      // a thick level line across the middle, written over 600 ms
+      const lineStart = L();
+      it.onDown(mk(240, 300, 1));
+      for (let i = 1; i <= 30; i++) { it.onMove(mk(240 + i * 16, 300, 1)); await wait(20); }
+      it.onUp(mk(720, 300, 0));
+      const lineEnd = L();
+      await wait(300);
+      // a second line lower down, which is then undone
+      it.onDown(mk(240, 460, 1));
+      for (let i = 1; i <= 20; i++) { it.onMove(mk(240 + i * 16, 460, 1)); await wait(20); }
+      it.onUp(mk(560, 460, 0));
+      await wait(250);
+      const before = a.store.objects.length;
+      a.command('undo');
+      const afterUndo = a.store.objects.length, undoAt = L();
+      await wait(250);
+      // a pause that must not be in the video
+      a.lessonRec.pause(); await wait(700); a.lessonRec.resume();
+      await wait(250);
+      const wall = performance.now() - wall0, lessonLen = L();
+      const fmt = a.lessonRec.format;
+      const lesson = a.lessonRec.lesson;
+      const notes = { events: lesson.events.length, drawn: lesson.events.filter((e) => e.draw).length, cams: lesson.cams.length };
+      const res = await a.lessonRec.stop({ save: false });
+      osc.stop(); ac.close();
+      const blob = new Blob([res.bytes], { type: res.ext === 'mp4' ? 'video/mp4' : 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const v = document.createElement('video');
+      v.muted = true; v.src = url;
+      await new Promise((r, j) => { v.onloadedmetadata = r; v.onerror = () => j(new Error('the video would not open')); setTimeout(r, 5000); });
+      /*
+       * One picture of the video, as a player shows it at that moment. A seek can report done before the picture
+       * has reached the page (some Windows decoders do), and an empty canvas reads as solid black - which would
+       * look like ink everywhere. So it waits for the picture itself, checks it is real (the top of the board is
+       * white paper), and tries again if not; what it found is kept for the diagnostics.
+       */
+      const grab = async (time) => {
+        let g = null, info = null;
+        for (let tries = 1; tries <= 6; tries++) {
+          await new Promise((r) => { v.onseeked = () => r(); v.currentTime = time; setTimeout(r, 3000); });
+          await new Promise((r) => { if (v.requestVideoFrameCallback) { v.requestVideoFrameCallback(() => r()); setTimeout(r, 500); } else setTimeout(r, 150); });
+          const c = document.createElement('canvas'); c.width = v.videoWidth; c.height = v.videoHeight;
+          g = c.getContext('2d'); g.drawImage(v, 0, 0);
+          const px = g.getImageData(0, 0, c.width, Math.min(c.height, 40)).data;
+          let opaque = 0, light = 0;
+          for (let i = 3; i < px.length; i += 4) { if (px[i] === 255) opaque++; if (px[i - 3] > 200) light++; }
+          const blank = !(opaque > 0 && light > (px.length / 4) * 0.5);
+          info = { at: +time.toFixed(3), tries, shown: +v.currentTime.toFixed(3), ready: v.readyState, blank };
+          if (!blank) break;
+          await wait(150);
+        }
+        g.info = info;
+        return g;
+      };
+      const s = fmt.scale;
+      // the first line's row in the video, and a column through it
+      const row = Math.round(300 * s), col = Math.round(480 * s);
+      // the very last picture: its own start time, as the encoder stamped it
+      const endG = await grab(Math.max(0, Math.min(v.duration - 0.05, (res.report && res.report.lastTs ? res.report.lastTs / 1000 : v.duration - 0.1))));
+      const column = [...endG.getImageData(col, row - 30, 1, 60).data].filter((_, i) => i % 4 === 0);
+      const darkCore = column.filter((x) => x < 90).length;
+      const soft = column.filter((x) => x >= 90 && x < 200).length;
+      const undone = [...endG.getImageData(Math.round(400 * s), Math.round(460 * s) - 20, 1, 40).data].filter((x, i) => i % 4 === 0 && x < 120).length;
+      const startG = await grab(0.05);
+      const empty = [...startG.getImageData(col, row - 30, 1, 60).data].filter((x, i) => i % 4 === 0 && x < 120).length;
+      // half way through writing the first line: some of it, not all of it
+      const midG = await grab((lineStart + lineEnd) / 2000);
+      const midRow = [...midG.getImageData(Math.round(240 * s), row, Math.round(480 * s), 1).data].filter((x, i) => i % 4 === 0 && x < 120).length;
+      URL.revokeObjectURL(url);
+      const pictures = { end: endG.canvas.toDataURL('image/png'), mid: midG.canvas.toDataURL('image/png') };
+      let sound = null;
+      try {
+        const buf = await new OfflineAudioContext(1, 48000, 48000).decodeAudioData(res.bytes.slice().buffer);
+        const d = buf.getChannelData(0);
+        let sum = 0; for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+        sound = { seconds: +buf.duration.toFixed(2), rms: +Math.sqrt(sum / d.length).toFixed(3) };
+      } catch (e) { sound = { error: e.message || String(e) }; }
+      return { started, bar, ext: res.ext, W: res.width, H: res.height, frames: res.frames, videoW: v.videoWidth, duration: +v.duration.toFixed(2),
+        wall: +(wall / 1000).toFixed(2), lessonLen: +(lessonLen / 1000).toFixed(2), audio: fmt.audio, notes, darkCore, soft, undone, empty, midRow, lineW: Math.round(480 * s),
+        line: [Math.round(lineStart), Math.round(lineEnd)], undo: { before, afterUndo, at: Math.round(undoAt) }, report: res.report,
+        barGone: !document.querySelector('[data-lesson-bar]'), state: a.lessonRec.state, sound,
+        grabs: { end: endG.info, start: startG.info, mid: midG.info }, pictures };
+    `);
+    // the pictures the checks looked at, so a failure can be seen rather than guessed at
+    for (const [name, url] of Object.entries(rec.pictures || {})) {
+      try { await fs.writeFile(path.join(OUT, `lesson-${name}.png`), Buffer.from(url.split(',')[1], 'base64')); } catch { /* a missing picture is not a failure */ }
+    }
+    delete rec.pictures;
+    check('recording starts, shows its bar, and keeps notes of the ink, the view and the undo',
+      rec.started && rec.bar && rec.notes.drawn >= 2 && rec.notes.events >= 3 && rec.notes.cams >= 1,
+      JSON.stringify({ started: rec.started, bar: rec.bar, notes: rec.notes }));
+    check('the lesson video is sharp: drawn at 2560 or 1920 across, whatever the window size',
+      Math.max(rec.W, rec.H) >= 1920 && rec.videoW === rec.W,
+      `${rec.W}x${rec.H} ${rec.ext}, the player reads it as ${rec.videoW} wide`);
+    // the lesson, without its 0.7 s pause, plus the half second the video holds on the finished board
+    check('the video is as long as the lesson, with the pause left out',
+      Math.abs(rec.duration - (rec.lessonLen + 0.5)) < 0.3 && rec.lessonLen < rec.wall - 0.6,
+      `video ${rec.duration}s; the lesson clock says ${rec.lessonLen}s of recording (the 0.7s pause left out; ${rec.wall}s on the wall clock, start-up included), plus 0.5s held at the end - wanted about ${(rec.lessonLen + 0.5).toFixed(2)}s; encoder ${JSON.stringify(rec.report)}`);
+    check('the voice is in the video, the length of the lesson',
+      !rec.audio || (rec.sound && rec.sound.rms > 0.05 && Math.abs(rec.sound.seconds - rec.lessonLen) < 0.3),
+      `sound made as ${rec.audio}: ${JSON.stringify(rec.sound)}`);
+    check('the ink is in the video, crisp: a solid core and hardly any blur around it',
+      !rec.grabs.end.blank && rec.darkCore >= 4 && rec.darkCore <= 20 && rec.soft <= 6,
+      `across the line: ${rec.darkCore} dark pixels, ${rec.soft} in-between (wanted 4-20 dark, at most 6 in-between); picture ${JSON.stringify(rec.grabs.end)}, saved as test/out/lesson-end.png`);
+    check('the line appears as it was written: nothing at the start, part of it half way through',
+      !rec.grabs.start.blank && !rec.grabs.mid.blank && rec.empty === 0 && rec.midRow > 20 && rec.midRow < rec.lineW - 20,
+      `pictures ${JSON.stringify({ start: rec.grabs.start, mid: rec.grabs.mid })} (mid saved as test/out/lesson-mid.png); at the start ${rec.empty} dark pixels; half way (${((rec.line[0] + rec.line[1]) / 2000).toFixed(2)}s, line written ${rec.line[0]}-${rec.line[1]} ms), ${rec.midRow} of the line's ${rec.lineW} px are drawn; encoder ${JSON.stringify(rec.report)}`);
+    check('the line that was undone is gone by the end, as it was on the board',
+      !rec.grabs.end.blank && rec.undone === 0, `${rec.undone} dark pixels where it was; picture ${JSON.stringify(rec.grabs.end)}, saved as test/out/lesson-end.png; the board went from ${rec.undo.before} to ${rec.undo.afterUndo} objects at ${rec.undo.at} ms; video ${rec.duration}s, last picture at ${rec.report && rec.report.lastTs} ms; encoder ${JSON.stringify(rec.report)}`);
+    check('the encoder handed pictures back (how many it kept, and in what order, is shown for bug reports)',
+      !!rec.report && rec.report.kept > 0 && rec.report.kept <= rec.report.sent,
+      `encoder ${JSON.stringify(rec.report)} - a machine whose encoder leaves pictures out or reorders them still gets a correct video (each picture keeps its own time), this only says which kind it is`);
+    check('stopping puts the bar away and leaves the recorder ready for the next lesson',
+      rec.barGone && rec.state === 'idle', `bar gone ${rec.barGone}, state ${rec.state}`);
+
+    // no lag: taking notes is a few numbers twenty times a second, even on a crowded board
+    const light = await js(`
+      const a = window.app;
+      a.newBoard(true);
+      const objs = [];
+      for (let i = 0; i < 3000; i++) { const x = (i % 60) * 20, y = Math.floor(i / 60) * 14; const pts = []; for (let k = 0; k < 12; k++) pts.push({ x: x + k * 1.5, y: y + Math.sin(k) * 4, p: 0.5 }); objs.push({ id: 'lz' + i, type: 'stroke', tool: 'pen', color: '#201f1e', width: 3, effect: 'none', points: pts, bbox: { x, y: y - 4, w: 18, h: 8 }, rotation: 0 }); }
+      a.store.addMany(objs, 'test');
+      await a.lessonRec.start({ silent: true });
+      const ticks = [];
+      for (let i = 0; i < 300; i++) { const t0 = performance.now(); a.lessonRec.sample(); ticks.push(performance.now() - t0); }
+      ticks.sort((x, y) => x - y);
+      // the video waits while the pen is busy
+      a.lessonRec.teardown();
+      const lesson = { ...a.lessonRec.lesson, duration: 1500, format: a.lessonRec.format, voice: null };
+      a.lessonRec.lesson = null; a.lessonRec.state = 'idle';
+      const { makeLessonVideo } = await import('app://board/js/lesson.js');
+      let busy = true, progressWhileBusy = 0;
+      setTimeout(() => { busy = false; }, 400);
+      let p = 0;
+      const out = await makeLessonVideo(lesson, { yieldTo: () => busy, onProgress: (x) => { p = x; if (busy) progressWhileBusy = Math.max(progressWhileBusy, x); } });
+      a.newBoard(true);
+      return { median: +ticks[150].toFixed(3), worst: +ticks[299].toFixed(3), progressWhileBusy, frames: out.frames };
+    `);
+    check('taking notes while recording costs next to nothing, even on a board of 3000 strokes',
+      light.median < 0.5 && light.worst < 3, `a note takes ${light.median} ms (worst ${light.worst} ms), twenty times a second`);
+    check('making the video steps aside while the pen is in use, and finishes after',
+      light.progressWhileBusy === 0 && light.frames >= 45, `progress while the pen was busy: ${light.progressWhileBusy}; frames made after: ${light.frames}`);
+
+    // the MP4 with AAC sound - what Windows and Mac make - put together from real AAC and H.264 and played back
+    const aac = await js(`
+      const { muxMp4AV } = await import('app://board/js/videomux.js');
+      const h = new Uint8Array(await window.board.readFile(${JSON.stringify(path.join(FIX, 'lesson-picture.h264'))}));
+      const a = new Uint8Array(await window.board.readFile(${JSON.stringify(path.join(FIX, 'lesson-voice.aac'))}));
+      const nals = []; let i = 0, start = -1;
+      while (i < h.length - 3) {
+        const sc4 = h[i] === 0 && h[i + 1] === 0 && h[i + 2] === 0 && h[i + 3] === 1, sc3 = h[i] === 0 && h[i + 1] === 0 && h[i + 2] === 1;
+        if (sc4 || sc3) { if (start >= 0) nals.push(h.subarray(start, i)); i += sc4 ? 4 : 3; start = i; } else i++;
+      }
+      nals.push(h.subarray(start));
+      let sps, pps; const frames = [];
+      for (const n of nals) {
+        const t = n[0] & 31;
+        if (t === 7) sps = n; else if (t === 8) pps = n;
+        else if (t === 1 || t === 5) { const d = new Uint8Array(4 + n.length); new DataView(d.buffer).setUint32(0, n.length); d.set(n, 4); frames.push({ data: d, key: t === 5 }); }
+      }
+      const avcC = new Uint8Array([1, sps[1], sps[2], sps[3], 0xff, 0xe1, sps.length >> 8, sps.length & 255, ...sps, 1, pps.length >> 8, pps.length & 255, ...pps]);
+      const chunks = []; let o = 0, asc = null;
+      while (o + 7 < a.length) {
+        const prot = a[o + 1] & 1, prof = (a[o + 2] >> 6) + 1, sri = (a[o + 2] >> 2) & 15, ch = ((a[o + 2] & 1) << 2) | (a[o + 3] >> 6);
+        const len = ((a[o + 3] & 3) << 11) | (a[o + 4] << 3) | (a[o + 5] >> 5);
+        asc = asc || new Uint8Array([(prof << 3) | (sri >> 1), ((sri & 1) << 7) | (ch << 3)]);
+        chunks.push({ data: a.slice(o + (prot ? 7 : 9), o + len), duration: 1024 });
+        o += len;
+      }
+      const mp4 = muxMp4AV({ frames, avcC, width: 160, height: 120, fps: 30 }, { codec: 'aac', chunks, description: asc, sampleRate: 48000, channels: 1, bitrate: 64000 });
+      let sound = null;
+      try {
+        const buf = await new OfflineAudioContext(1, 48000, 48000).decodeAudioData(mp4.slice().buffer);
+        const d = buf.getChannelData(0); let sum = 0; for (let k = 0; k < d.length; k++) sum += d[k] * d[k];
+        sound = { seconds: +buf.duration.toFixed(2), rms: +Math.sqrt(sum / d.length).toFixed(3) };
+      } catch (e) { sound = { error: e.message || String(e) }; }
+      const url = URL.createObjectURL(new Blob([mp4], { type: 'video/mp4' }));
+      const v = document.createElement('video'); v.muted = true; v.src = url;
+      await new Promise((r) => { v.onloadedmetadata = r; v.onerror = r; setTimeout(r, 4000); });
+      URL.revokeObjectURL(url);
+      return { frames: frames.length, chunks: chunks.length, sound, w: v.videoWidth, dur: +(v.duration || 0).toFixed(2) };
+    `);
+    check('an MP4 with AAC sound (what Windows and Mac make) opens and plays its sound',
+      aac.w === 160 && aac.dur > 0.3 && aac.sound && aac.sound.rms > 0.05 && Math.abs(aac.sound.seconds - 0.5) < 0.15,
+      JSON.stringify(aac));
+  }
+
   /* ---- errors ---- */
   const errs = await js(`return window.__errors || [];`);
   check('no uncaught renderer errors', errs.length === 0, errs.slice(0, 3).join(' | '));

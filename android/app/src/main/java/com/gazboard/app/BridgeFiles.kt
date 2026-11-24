@@ -21,6 +21,12 @@ import kotlinx.serialization.json.encodeToStream
 class BridgeFiles(private val context: Context) {
   companion object {
     const val MAX_BYTES = 128 * 1024 * 1024
+    /**
+     * A file the page is SAVING - a lesson video, a replay - may be bigger: it goes
+     * straight from this temporary file to the place the person chose, a piece at
+     * a time, and is never read into memory or treated as anything the app opens.
+     */
+    const val MAX_SAVE_BYTES = 1024L * 1024 * 1024
 
     /**
      * Some Android document providers de-duplicate a custom extension as
@@ -36,17 +42,20 @@ class BridgeFiles(private val context: Context) {
     }
   }
   private val root = File(context.cacheDir, "bridge").apply { mkdirs() }
-  private data class Blob(val file: File, val expected: Long, var complete: Boolean = false)
+  private data class Blob(val file: File, val expected: Long, var complete: Boolean = false, val forSaving: Boolean = false)
   data class Grant(val uri: Uri, val name: String, val writable: Boolean)
   private val blobs = ConcurrentHashMap<String, Blob>()
   private val grants = ConcurrentHashMap<String, Grant>()
   init { root.listFiles()?.forEach { it.delete() } }
 
-  @Synchronized fun begin(size: Long): String {
-    require(size in 0..MAX_BYTES.toLong() && blobs.size < 32) { "Temporary file limit reached; finish this import first" }
-    require(blobs.values.sumOf { it.expected } + size <= MAX_BYTES.toLong() * 2) { "Temporary files are too large" }
+  @Synchronized fun begin(size: Long, forSaving: Boolean = false): String {
+    val cap = if (forSaving) MAX_SAVE_BYTES else MAX_BYTES.toLong()
+    require(size in 0..cap && blobs.size < 32) { "Temporary file limit reached; finish this import first" }
+    // files being saved stream out to their place and are never held in memory, so they do not count here
+    require(blobs.values.filter { !it.forSaving }.sumOf { it.expected } + (if (forSaving) 0 else size) <= MAX_BYTES.toLong() * 2) { "Temporary files are too large" }
+    if (forSaving) require(root.usableSpace > size + 64L * 1024 * 1024) { "Not enough free space on this phone to save it" }
     val token = Protocol.deviceId()
-    blobs[token] = Blob(File(root, token).apply { createNewFile() }, size)
+    blobs[token] = Blob(File(root, token).apply { createNewFile() }, size, forSaving = forSaving)
     return token
   }
   @Synchronized fun append(token: String, offset: Long, data: String): Boolean {
@@ -64,6 +73,8 @@ class BridgeFiles(private val context: Context) {
     return true
   }
   fun file(token: String): File = blobs[token]?.takeIf { it.complete }?.file ?: error("File is no longer available")
+  /** A temporary file the app is about to READ (a request, a board): never one of the big ones being saved. */
+  fun readable(token: String): File = blobs[token]?.takeIf { it.complete && !it.forSaving }?.file ?: error("File is no longer available")
   fun release(token: String): Boolean { blobs.remove(token)?.file?.delete(); return true }
   fun put(bytes: ByteArray): String {
     val token = begin(bytes.size.toLong())

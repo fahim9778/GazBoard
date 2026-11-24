@@ -7,7 +7,11 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- Record a lesson: your voice with the board. Asked for the first time somebody records, never before. -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <!-- a tablet with no microphone still installs GazBoard; it records the board without sound -->
+  <uses-feature android:name="android.hardware.microphone" android:required="false" />
   <application android:name=".GazBoardApplication" android:label="GazBoard"
     android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:theme="@style/AppTheme"
     android:allowBackup="false" android:usesCleartextTraffic="false"

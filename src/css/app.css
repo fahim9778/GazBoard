@@ -1764,3 +1764,52 @@ body.presenting #pagestrip { display: none; }
 /* Settings search stays at the top while the list scrolls under it */
 .settings-search { position: sticky; top: -14px; z-index: 2; margin: -14px -14px 12px; padding: 14px 14px 10px; background: var(--surface); }
 .panel .section[hidden], .panel .section > [hidden], .settings-none[hidden] { display: none !important; }
+
+/* ---------------- picture from phone ---------------- *
+   A card in the top-right corner of the board, under the title bar: clear of the
+   pen tray, the zoom bar and the middle of the view, where the photos land. The
+   QR code itself is always black on white - the one thing a dark theme must not
+   invert, or phone cameras stop reading it. */
+.phone-card {
+  position: absolute; top: 14px; right: 16px; z-index: 27; width: 248px;
+  max-height: calc(100% - 120px); overflow-y: auto;
+  background: var(--surface); color: var(--text); border: 1px solid var(--stroke);
+  border-radius: 12px; box-shadow: var(--shadow-2); padding: 10px 14px 12px;
+  font-size: 12.5px; line-height: 1.4; text-align: center;
+}
+.phone-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; text-align: start; }
+.phone-head strong { font-size: 14px; }
+.phone-close { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; color: var(--text-2); }
+.phone-close:hover { background: var(--surface-2); }
+.phone-qr-box { min-height: 184px; display: grid; place-items: center; }
+.phone-qr { display: block; border-radius: 6px; }
+.phone-how { margin: 8px 0 4px; }
+.phone-hint { margin: 6px 0 0; color: var(--text-2); font-size: 11.5px; }
+.phone-status { margin: 8px 0 2px; font-weight: 600; color: var(--text-2); }
+.phone-status.ok { color: #107c10; }
+.phone-status.bad { color: var(--danger); font-weight: 500; }
+:root[data-theme="dark"] .phone-status.ok { color: #6ccb5f; }
+.phone-url, .phone-other { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--text-2);
+  word-break: break-all; user-select: text; -webkit-user-select: text; }
+.phone-other:empty { display: none; }
+
+/* ---------------- record a lesson ---------------- *
+   A small pill at the top of the board while recording. It is never in the
+   video - the video is the board alone - so it can sit where the teacher sees it. */
+.lesson-bar {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 29;
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--stroke);
+  border-radius: 999px; box-shadow: var(--shadow-2); font-size: 13px; white-space: nowrap;
+}
+.lesson-dot { width: 10px; height: 10px; border-radius: 50%; background: #d13438; animation: lesson-pulse 1.4s ease-in-out infinite; }
+.lesson-bar.paused .lesson-dot { animation: none; background: var(--text-2); }
+@keyframes lesson-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .lesson-dot { animation: none; } }
+.lesson-label { font-weight: 600; }
+.lesson-time { font-variant-numeric: tabular-nums; min-width: 3.2em; color: var(--text-2); }
+.lesson-btn { height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--stroke); background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.lesson-btn:hover { border-color: var(--stroke-2); }
+.lesson-stop { background: #d13438; border-color: #d13438; color: #fff; }
+.lesson-stop:hover { background: #b02a2e; border-color: #b02a2e; }
+.lesson-square { width: 9px; height: 9px; border-radius: 2px; background: currentColor; }
