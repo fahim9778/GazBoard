@@ -498,7 +498,9 @@ export class LessonRecorder {
       while (!path) {
         path = await ask({
           title: many ? t('Save part {n} of {total}', { n: k + 1, total: parts.length }) : t('Save the lesson video'),
-          defaultPath: name,
+          // on a computer: where the last lesson went, or the Videos folder the first time (see dialog:save in main.js)
+          defaultPath: beside && this.app.settings?.lessonFolder ? this.app.settings.lessonFolder + name : name,
+          ...(beside ? { startIn: 'videos' } : {}),
           filters: [{ name: res.ext.toUpperCase(), extensions: [res.ext] }]
         });
         if (path) { await write(path, res.bytes); break; }
@@ -507,6 +509,11 @@ export class LessonRecorder {
       }
       saved.push(path);
       lesson.savedParts = k + 1;
+      // the next lesson's Save box opens here
+      if (beside && folderOf(path) && this.app.settings && this.app.settings.lessonFolder !== folderOf(path)) {
+        this.app.settings.lessonFolder = folderOf(path);
+        try { this.app.saveSettings?.(); } catch { /* only a convenience */ }
+      }
       res = null;   // this part's video is written: let it go before the next is made
     }
     this.last = null;

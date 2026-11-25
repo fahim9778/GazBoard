@@ -80,6 +80,8 @@ export const DEFAULT_SETTINGS = {
   eraserSize: 30, eraserMode: 'partial', eraseShapes: false,
   // the pencil's scratch while it draws: on, so the pencil is heard to be a pencil; Settings or its own menu turn it off
   pencilSound: true,
+  // where the last lesson video was saved: the next one's Save box opens there (lesson.js)
+  lessonFolder: '',
   pdfPaper: 'a4', pdfOrientation: '', pdfMargin: 'narrow', pdfMode: 'fit', pdfQuality: 2,
   noteColor: '#ffd94a', noteSize: 200, noteFont: 'hand',
   emojiChar: '\u2705', emojiSize: 96, emojiRecent: [], recentBoards: [],

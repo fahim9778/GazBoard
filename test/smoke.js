@@ -21747,13 +21747,18 @@ module.exports.run = async (win, app) => {
       // saved: the first asks, the rest go beside it by themselves
       const asked = [];
       const dir = ${JSON.stringify(partsDir + path.sep)};
-      const saved = await a.lessonRec.saveLast({ saveDialog: async (o) => { asked.push(o.defaultPath); return dir + o.defaultPath; } });
+      const folderBefore = a.settings.lessonFolder;
+      a.settings.lessonFolder = '';
+      const opts = [];
+      const saved = await a.lessonRec.saveLast({ saveDialog: async (o) => { opts.push({ defaultPath: o.defaultPath, startIn: o.startIn }); asked.push(o.defaultPath); return dir + String(o.defaultPath).split(/[\\/]/).pop(); } });
+      const remembered = a.settings.lessonFolder;
+      a.settings.lessonFolder = folderBefore;
       const files = [];
       for (const p of (Array.isArray(saved) ? saved : [saved])) {
         let size = 0; try { size = (await window.board.readFile(p)).byteLength; } catch { size = -1; }
         files.push({ name: String(p).split(/[\\\\/]/).pop(), size });
       }
-      return { split, names, asked, files, lastCleared: a.lessonRec.last === null, fmtExt: a.lessonRec.format && a.lessonRec.format.video.ext };
+      return { split, names, asked, opts, remembered, dir, files, lastCleared: a.lessonRec.last === null, fmtExt: a.lessonRec.format && a.lessonRec.format.video.ext };
     `);
     const s = lp.split;
     check('a lesson past the part length carries on recording, and the bar says it is in part 2',
@@ -21776,6 +21781,10 @@ module.exports.run = async (win, app) => {
         && lp.files.every((f, i) => new RegExp('^Chapter 4 \\d{4}-\\d\\d-\\d\\d \\d\\d-\\d\\d-\\d\\d part ' + (i + 1) + '\\.' + lp.fmtExt + '$').test(f.name))
         && new Set(lp.files.map((f) => f.name)).size === lp.files.length && lp.lastCleared,
       JSON.stringify({ asked: lp.asked, files: lp.files }));
+
+    check('the Save box for a lesson opens in Videos the first time, and in the folder last used after that',
+      lp.opts.length === 1 && lp.opts[0].startIn === 'videos' && !/[\\/]/.test(lp.opts[0].defaultPath) && lp.remembered === lp.dir,
+      JSON.stringify({ opts: lp.opts, remembered: lp.remembered, dir: lp.dir }));
 
     // part 2, opened as a player opens it: it begins with line 1 on the board and ends with both
     const two = lp.files[1] ? path.join(partsDir, lp.files[1].name) : null;

@@ -1366,7 +1366,25 @@ function ipc() {
   });
 
   ipcMain.handle('dialog:save', async (_e, opts) => {
-    const r = await dialog.showSaveDialog(mainWindow, opts || {});
+    const o = { ...(opts || {}) };
+    /*
+     * startIn 'videos': a lesson video. The box opens in the folder the last one was saved to (the page
+     * passes it along as part of defaultPath) or, the first time - or when that folder has gone - in the
+     * system's Videos folder, rather than wherever the system happens to start.
+     */
+    if (o.startIn === 'videos') {
+      const want = typeof o.defaultPath === 'string' ? o.defaultPath : '';
+      const dir = path.isAbsolute(want) ? path.dirname(want) : '';
+      let ok = false;
+      if (dir) { try { ok = fs.statSync(dir).isDirectory(); } catch { ok = false; } }
+      if (!ok) {
+        let videos = '';
+        try { videos = app.getPath('videos'); } catch { videos = ''; }
+        if (videos) o.defaultPath = path.join(videos, path.basename(want || 'lesson'));
+      }
+    }
+    delete o.startIn;
+    const r = await dialog.showSaveDialog(mainWindow, o);
     return r.canceled ? null : r.filePath;
   });
 
